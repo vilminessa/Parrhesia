@@ -174,6 +174,23 @@
                      LostFocus="OnNodeNameCommit"
                      KeyDown="OnNodeNameKeyDown" />
 
+            <TextBlock Text="Каналы"
+                       FontSize="11"
+                       Foreground="{DynamicResource Brush.TextFaint}"
+                       Margin="0,12,0,4" />
+            <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+              <ToggleButton x:Name="ChannelMonoButton"
+                            Content="Моно"
+                            Checked="OnChannelCountChanged"
+                            Unchecked="OnChannelCountUnchecked" />
+              <ToggleButton x:Name="ChannelStereoButton"
+                            Content="Стерео"
+                            Margin="8,0,0,0"
+                            Checked="OnChannelCountChanged"
+                            Unchecked="OnChannelCountUnchecked" />
+            </StackPanel>
+            <StackPanel x:Name="ChannelNamesHost" Margin="0,0,0,4" />
+
             <TextBlock Text="Устройство"
                        FontSize="11"
                        Foreground="{DynamicResource Brush.TextFaint}"

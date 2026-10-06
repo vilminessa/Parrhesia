@@ -970,6 +970,11 @@ public partial class GraphView : UserControl
 
             SyncDeviceChoices(node);
 
+            // Каналы: количество (моно/стерео) + имена.
+            ChannelMonoButton.IsChecked = node.ChannelCount == 1;
+            ChannelStereoButton.IsChecked = node.ChannelCount == 2;
+            RebuildChannelNameBoxes(node);
+
             var db = Decibels.ToDb(node.Gain);
             NodeGainSlider.Value = float.IsNegativeInfinity(db) || db < Decibels.MinDb
                 ? Decibels.MinDb
@@ -997,6 +1002,14 @@ public partial class GraphView : UserControl
             var from = _graph.FindNode(route.FromId)?.Name ?? "?";
             var to = _graph.FindNode(route.ToId)?.Name ?? "?";
             RouteEndpoints.Text = $"«{from}» → «{to}»";
+
+            // Чекбоксы — только для пар, влезающих в счётчики каналов узлов.
+            var fromCount = _graph.FindNode(route.FromId)?.ChannelCount ?? 2;
+            var toCount = _graph.FindNode(route.ToId)?.ChannelCount ?? 2;
+            ChLeftLeft.Visibility = 0 < fromCount && 0 < toCount ? Visibility.Visible : Visibility.Collapsed;
+            ChLeftRight.Visibility = 0 < fromCount && 1 < toCount ? Visibility.Visible : Visibility.Collapsed;
+            ChRightLeft.Visibility = 1 < fromCount && 0 < toCount ? Visibility.Visible : Visibility.Collapsed;
+            ChRightRight.Visibility = 1 < fromCount && 1 < toCount ? Visibility.Visible : Visibility.Collapsed;
 
             ChLeftLeft.IsChecked = route.Map.Has(ChannelMap.Left, ChannelMap.Left);
             ChLeftRight.IsChecked = route.Map.Has(ChannelMap.Left, ChannelMap.Right);
@@ -1101,6 +1114,109 @@ public partial class GraphView : UserControl
     }
 
     private void OnNodeNameCommit(object sender, RoutedEventArgs e) => CommitNodeName();
+
+    // ===== Каналы узла =====
+
+    private void OnChannelCountChanged(object sender, RoutedEventArgs e)
+    {
+        if (_syncing || _selectedNode is not { } element)
+        {
+            return;
+        }
+
+        _syncing = true;
+        try
+        {
+            // Ровно одно состояние: снимаем галку с противоположного.
+            if (ReferenceEquals(sender, ChannelStereoButton))
+            {
+                ChannelMonoButton.IsChecked = false;
+            }
+            else
+            {
+                ChannelStereoButton.IsChecked = false;
+            }
+        }
+        finally
+        {
+            _syncing = false;
+        }
+
+        var count = ChannelStereoButton.IsChecked == true ? 2 : 1;
+        if (_graph.FindNode(element.Node.Id) is { } node && node.ChannelCount != count)
+        {
+            _graph.SetNodeChannels(node.Id, count);
+        }
+    }
+
+    private void OnChannelCountUnchecked(object sender, RoutedEventArgs e)
+    {
+        if (_syncing || !IsLoaded)
+        {
+            return;
+        }
+
+        // Нельзя выключить оба варианта — возвращаем галку.
+        if (sender is ToggleButton button)
+        {
+            button.IsChecked = true;
+        }
+    }
+
+    private void RebuildChannelNameBoxes(AudioNode node)
+    {
+        ChannelNamesHost.Children.Clear();
+        for (var channel = 0; channel < node.ChannelCount; channel++)
+        {
+            var index = channel;
+            var box = new TextBox
+            {
+                Text = node.ChannelNames[channel],
+                Margin = new Thickness(0, 0, 0, 6),
+            };
+            box.LostFocus += (_, _) => CommitChannelName(node.Id, index, box);
+            box.KeyDown += (_, args) =>
+            {
+                if (args.Key != Key.Enter)
+                {
+                    return;
+                }
+
+                CommitChannelName(node.Id, index, box);
+                Keyboard.ClearFocus();
+                args.Handled = true;
+            };
+
+            ChannelNamesHost.Children.Add(new TextBlock
+            {
+                Text = $"Канал {channel + 1}",
+                FontSize = 11,
+                Foreground = (System.Windows.Media.Brush)FindResource("Brush.TextFaint"),
+                Margin = new Thickness(0, 0, 0, 2),
+            });
+            ChannelNamesHost.Children.Add(box);
+        }
+    }
+
+    private void CommitChannelName(Guid nodeId, int channel, TextBox box)
+    {
+        if (_syncing)
+        {
+            return;
+        }
+
+        var name = box.Text.Trim();
+        if (name.Length == 0)
+        {
+            box.Text = _graph.FindNode(nodeId)?.ChannelNames[channel] ?? (channel + 1).ToString();
+            return;
+        }
+
+        if (_graph.FindNode(nodeId) is { } node && node.ChannelNames[channel] != name)
+        {
+            _graph.SetNodeChannelName(nodeId, channel, name);
+        }
+    }
 
     private void OnNodeNameKeyDown(object sender, KeyEventArgs e)
     {
@@ -1380,6 +1496,8 @@ public partial class GraphView : UserControl
 
             var element = new NodeElement(node);
             element.SetViewMode(_expandedView);
+            element.ToggleBypassRequested += n => _graph.SetNodeBypass(n.Id, !n.Bypassed);
+            element.ToggleMuteRequested += n => _graph.SetNodeMute(n.Id, !n.Mute);
             element.SizeChanged += (_, _) => _cableLayer.InvalidateVisual();
 
             double x;

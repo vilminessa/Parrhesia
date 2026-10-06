@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Effects;
 using System.Windows.Shapes;
@@ -46,6 +47,15 @@ internal sealed class NodeElement : Border
     /// <summary>Мини-метр уровня узла (заполняется снаружи через render-тикер).</summary>
     public LedMeterControl Meter { get; }
 
+    /// <summary>Клик по бейджу «B» в шапке узла.</summary>
+    public event Action<AudioNode>? ToggleBypassRequested;
+
+    /// <summary>Клик по бейджу «M» в шапке узла.</summary>
+    public event Action<AudioNode>? ToggleMuteRequested;
+
+    private readonly Border _bypassBadge;
+    private readonly Border _muteBadge;
+
     public NodeElement(AudioNode node)
     {
         Node = node;
@@ -75,6 +85,9 @@ internal sealed class NodeElement : Border
             VerticalAlignment = VerticalAlignment.Center,
         };
 
+        _bypassBadge = BuildBadge("B", () => ToggleBypassRequested?.Invoke(Node));
+        _muteBadge = BuildBadge("M", () => ToggleMuteRequested?.Invoke(Node));
+
         var kindLabel = new TextBlock
         {
             Foreground = ResolveBrush("Brush.TextFaint", "#FF5C6472"),
@@ -87,8 +100,12 @@ internal sealed class NodeElement : Border
         var header = new DockPanel { LastChildFill = true };
         DockPanel.SetDock(kindDot, Dock.Left);
         DockPanel.SetDock(kindLabel, Dock.Right);
+        DockPanel.SetDock(_bypassBadge, Dock.Right);
+        DockPanel.SetDock(_muteBadge, Dock.Right);
         header.Children.Add(kindDot);
         header.Children.Add(kindLabel);
+        header.Children.Add(_bypassBadge);
+        header.Children.Add(_muteBadge);
         header.Children.Add(_title);
 
         Meter = new LedMeterControl
@@ -263,11 +280,66 @@ internal sealed class NodeElement : Border
     {
         _title.Text = Node.Name;
         _title.Opacity = Node.Mute ? 0.45 : 1.0;
+        UpdateBadges();
 
         if (Node.ChannelCount != _builtChannelCount || Expanded != _builtExpanded)
         {
             RebuildPortColumns();
         }
+    }
+
+    /// <summary>Состояния бейджей: B — обход (циан), M — мьют (красный).</summary>
+    private void UpdateBadges()
+    {
+        ApplyBadgeState(_bypassBadge, Node.Bypassed, "Brush.Cyan", "#FF35D0C8");
+        ApplyBadgeState(_muteBadge, Node.Mute, "Brush.Danger", "#FFFF5A52");
+    }
+
+    private static void ApplyBadgeState(Border badge, bool active, string activeBrushKey, string fallback)
+    {
+        badge.Background = active ? ResolveBrush(activeBrushKey, fallback) : Brushes.Transparent;
+        badge.BorderBrush = active
+            ? ResolveBrush(activeBrushKey, fallback)
+            : ResolveBrush("Brush.Stroke", "#FF262B33");
+        if (badge.Child is TextBlock label)
+        {
+            label.Foreground = active
+                ? ResolveBrush("Brush.Deep", "#FF0B0D10")
+                : ResolveBrush("Brush.TextFaint", "#FF5C6472");
+        }
+    }
+
+    private Border BuildBadge(string label, Action onClick)
+    {
+        var badge = new Border
+        {
+            Width = 16,
+            Height = 15,
+            CornerRadius = new CornerRadius(3),
+            BorderThickness = new Thickness(1),
+            BorderBrush = ResolveBrush("Brush.Stroke", "#FF262B33"),
+            Background = Brushes.Transparent,
+            Margin = new Thickness(4, 0, 0, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+            Cursor = Cursors.Hand,
+            Child = new TextBlock
+            {
+                Text = label,
+                FontSize = 9,
+                FontWeight = FontWeights.SemiBold,
+                Foreground = ResolveBrush("Brush.TextFaint", "#FF5C6472"),
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+            },
+        };
+
+        ToolTipService.SetToolTip(badge, label == "B" ? "Обход (Bypass)" : "Mute");
+        badge.MouseLeftButtonDown += (_, args) =>
+        {
+            args.Handled = true;
+            onClick();
+        };
+        return badge;
     }
 
     private static DropShadowEffect CreateSelectionEffect()
