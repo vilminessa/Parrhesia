@@ -23,4 +23,7 @@ public enum RouteError
 
     /// <summary>Соединение замкнуло бы цикл.</summary>
     Cycle,
+
+    /// <summary>Канал выходит за число каналов узла.</summary>
+    ChannelOutOfRange,
 }

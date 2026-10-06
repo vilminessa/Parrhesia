@@ -29,7 +29,7 @@ public class GraphSerializerTests
         Assert.True(sink.Solo);
 
         var stereo = Assert.Single(restored.Routes, r => r.Enabled);
-        Assert.Equal(ChannelMap.Direct, stereo.Map);
+        Assert.Equal(ChannelMap.Diagonal(2, 2), stereo.Map);
         Assert.Equal(0.5f, stereo.Gain, 3);
 
         var cross = Assert.Single(restored.Routes, r => !r.Enabled);
@@ -42,9 +42,36 @@ public class GraphSerializerTests
     {
         var json = GraphSerializer.Serialize(BuildSampleGraph());
 
-        Assert.Contains("\"version\": 1", json);
+        Assert.Contains("\"version\": 2", json);
         Assert.Contains("\"Source\"", json);
         Assert.Contains("\"default:capture\"", json);
+        Assert.Contains("\"channelCount\": 2", json);
+        Assert.Contains("Микрофон", json); // кириллица пишется как есть
+    }
+
+    [Fact]
+    public void LegacyV1Json_RouteMapIsMigratedToNewLayout()
+    {
+        // v1: map — биты раскладки 2×2 (бит = from*2 + to);9 = L→L + R→R.
+        const string json = """
+        {
+          "version": 1,
+          "nodes": [
+            { "id": "11111111-1111-1111-1111-111111111111", "name": "Вход", "kind": "Source" },
+            { "id": "22222222-2222-2222-2222-222222222222", "name": "Выход", "kind": "Sink" }
+          ],
+          "routes": [
+            { "from": "11111111-1111-1111-1111-111111111111", "to": "22222222-2222-2222-2222-222222222222", "map": 9 }
+          ]
+        }
+        """;
+
+        var graph = GraphSerializer.Deserialize(json);
+
+        var route = Assert.Single(graph.Routes);
+        Assert.Equal(ChannelMap.Diagonal(2, 2), route.Map);
+        Assert.Equal(2, graph.Nodes[0].ChannelCount);
+        Assert.False(graph.Nodes[0].Bypassed);
     }
 
     [Fact]
@@ -52,7 +79,7 @@ public class GraphSerializerTests
     {
         const string json = """
         {
-          "version": 1,
+          "version": 2,
           "futureField": { "x": 1 },
           "nodes": [
             { "id": "11111111-1111-1111-1111-111111111111", "name": "Вход", "kind": "Source", "extra": 42 }
@@ -82,9 +109,9 @@ public class GraphSerializerTests
     {
         const string json = """
         {
-          "version": 1,
+          "version": 2,
           "nodes": [ { "id": "11111111-1111-1111-1111-111111111111", "name": "Вход", "kind": "Source" } ],
-          "routes": [ { "from": "11111111-1111-1111-1111-111111111111", "to": "22222222-2222-2222-2222-222222222222", "map": 9 } ]
+          "routes": [ { "from": "11111111-1111-1111-1111-111111111111", "to": "22222222-2222-2222-2222-222222222222", "map": 513 } ]
         }
         """;
 
@@ -97,7 +124,7 @@ public class GraphSerializerTests
     {
         const string json = """
         {
-          "version": 1,
+          "version": 2,
           "nodes": [
             { "id": "11111111-1111-1111-1111-111111111111", "name": "Вход", "kind": "Source" },
             { "id": "22222222-2222-2222-2222-222222222222", "name": "Выход", "kind": "Sink" }
@@ -115,7 +142,7 @@ public class GraphSerializerTests
     {
         const string json = """
         {
-          "version": 1,
+          "version": 2,
           "nodes": [
             { "id": "11111111-1111-1111-1111-111111111111", "name": "A", "kind": "Source" },
             { "id": "11111111-1111-1111-1111-111111111111", "name": "B", "kind": "Bus" }
@@ -132,16 +159,16 @@ public class GraphSerializerTests
     {
         const string json = """
         {
-          "version": 1,
+          "version": 2,
           "nodes": [
             { "id": "11111111-1111-1111-1111-111111111111", "name": "A", "kind": "Bus" },
             { "id": "22222222-2222-2222-2222-222222222222", "name": "B", "kind": "Bus" },
             { "id": "33333333-3333-3333-3333-333333333333", "name": "C", "kind": "Bus" }
           ],
           "routes": [
-            { "from": "11111111-1111-1111-1111-111111111111", "to": "22222222-2222-2222-2222-222222222222", "map": 9 },
-            { "from": "22222222-2222-2222-2222-222222222222", "to": "33333333-3333-3333-3333-333333333333", "map": 9 },
-            { "from": "33333333-3333-3333-3333-333333333333", "to": "11111111-1111-1111-1111-111111111111", "map": 9 }
+            { "from": "11111111-1111-1111-1111-111111111111", "to": "22222222-2222-2222-2222-222222222222", "map": 513 },
+            { "from": "22222222-2222-2222-2222-222222222222", "to": "33333333-3333-3333-3333-333333333333", "map": 513 },
+            { "from": "33333333-3333-3333-3333-333333333333", "to": "11111111-1111-1111-1111-111111111111", "map": 513 }
           ]
         }
         """;

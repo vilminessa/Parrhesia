@@ -11,7 +11,9 @@ namespace Parrhesia.Core.Serialization;
 /// </summary>
 public static class GraphSerializer
 {
-    public const int CurrentVersion = 1;
+    /// <summary>v2: карты каналов в раскладке 8×8, поля channelCount/channelNames/bypassed.
+    /// v1 читается с миграцией (старая раскладка карты 2×2).</summary>
+    public const int CurrentVersion = 2;
 
     private static readonly JsonSerializerOptions Options = new()
     {
@@ -40,6 +42,9 @@ public static class GraphSerializer
                 Gain = n.Gain,
                 Mute = n.Mute,
                 Solo = n.Solo,
+                Bypassed = n.Bypassed,
+                ChannelCount = n.ChannelCount,
+                ChannelNames = n.ChannelNames,
                 Device = n.DeviceId,
                 X = n.X,
                 Y = n.Y,
@@ -90,13 +95,14 @@ public static class GraphSerializer
             return false;
         }
 
-        if (document.Version != CurrentVersion)
+        if (document.Version is < 1 or > CurrentVersion)
         {
-            error = $"Неподдерживаемая версия пресета {document.Version} (ожидается {CurrentVersion}).";
+            error = $"Неподдерживаемая версия пресета {document.Version} (ожидается 1..{CurrentVersion}).";
             return false;
         }
 
         var built = new AudioGraph();
+        var legacyMapLayout = document.Version == 1;
         var nodeDocuments = document.Nodes ?? [];
         if (nodeDocuments.Count == 0 && (document.Routes?.Count ?? 0) > 0)
         {
@@ -123,6 +129,9 @@ public static class GraphSerializer
             node.Gain = nodeDocument.Gain;
             node.Mute = nodeDocument.Mute;
             node.Solo = nodeDocument.Solo;
+            node.Bypassed = nodeDocument.Bypassed;
+            node.ChannelCount = nodeDocument.ChannelCount;
+            node.ChannelNames = nodeDocument.ChannelNames!;
             node.DeviceId = nodeDocument.Device;
             node.X = nodeDocument.X;
             node.Y = nodeDocument.Y;
@@ -137,6 +146,10 @@ public static class GraphSerializer
                 return false;
             }
 
+            var map = legacyMapLayout
+                ? ChannelMap.FromLegacyBits(routeDocument.Map)
+                : new ChannelMap(routeDocument.Map);
+
             var addError = built.AddRoute(routeDocument.From, routeDocument.To, out var route);
             if (addError != RouteError.None || route is null)
             {
@@ -146,7 +159,17 @@ public static class GraphSerializer
 
             route.Gain = routeDocument.Gain;
             route.Enabled = routeDocument.Enabled;
-            route.Map = new ChannelMap(routeDocument.Map);
+            route.Map = map;
+            // Карта могла содержать пары, которых больше нет у узлов (ручная правка файла).
+            var fromCount = built.FindNode(routeDocument.From)!.ChannelCount;
+            var toCount = built.FindNode(routeDocument.To)!.ChannelCount;
+            route.Map = route.Map.Restrict(fromCount, toCount);
+            if (route.Map.IsEmpty)
+            {
+                error = $"Маршрут {routeDocument.From:N} → {routeDocument.To:N}: пустая карта каналов.";
+                built.RemoveRoute(routeDocument.From, routeDocument.To);
+                return false;
+            }
         }
 
         graph = built;
@@ -168,6 +191,16 @@ public static class GraphSerializer
         if (!Enum.IsDefined(document.Kind))
         {
             return $"Узел «{document.Name}»: неизвестный тип {document.Kind}.";
+        }
+
+        if (document.ChannelCount is < 1 or > AudioNode.MaxChannels)
+        {
+            return $"Узел «{document.Name}»: недопустимое число каналов {document.ChannelCount}.";
+        }
+
+        if (document.ChannelNames is null || document.ChannelNames.Length != document.ChannelCount)
+        {
+            return $"Узел «{document.Name}»: имен каналов должно быть {document.ChannelCount}.";
         }
 
         if (!float.IsFinite(document.Gain) || document.Gain < 0f)
@@ -197,9 +230,9 @@ public static class GraphSerializer
             return $"Маршрут {document.From:N} → {document.To:N} ссылается на неизвестный узел.";
         }
 
-        if (document.Map == 0 || (document.Map & ~0x0F) != 0)
+        if (document.Map == 0)
         {
-            return $"Маршрут «{from.Name}» → «{to.Name}»: недопустимая карта каналов 0x{document.Map:X2}.";
+            return $"Маршрут «{from.Name}» → «{to.Name}»: пустая карта каналов.";
         }
 
         if (!float.IsFinite(document.Gain) || document.Gain < 0f)
@@ -238,6 +271,12 @@ public static class GraphSerializer
 
         public bool Solo { get; set; }
 
+        public bool Bypassed { get; set; }
+
+        public int ChannelCount { get; set; } = 2;
+
+        public string[] ChannelNames { get; set; } = ["1", "2"];
+
         public string? Device { get; set; }
 
         public double? X { get; set; }
@@ -255,6 +294,7 @@ public static class GraphSerializer
 
         public bool Enabled { get; set; } = true;
 
-        public byte Map { get; set; } = ChannelMap.Direct.Bits;
+        /// <summary>Битовая карта каналов; раскладка зависит от версии документа.</summary>
+        public ulong Map { get; set; }
     }
 }

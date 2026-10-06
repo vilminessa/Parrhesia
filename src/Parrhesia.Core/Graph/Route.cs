@@ -1,12 +1,13 @@
 namespace Parrhesia.Core.Graph;
 
-/// <summary>Маршрут: направленное соединение «выход → вход» с гейном.</summary>
+/// <summary>Маршрут: направленное соединение «выход → вход» с картой каналов и гейном.</summary>
 public sealed class Route
 {
-    internal Route(Guid fromId, Guid toId)
+    internal Route(Guid fromId, Guid toId, ChannelMap map)
     {
         FromId = fromId;
         ToId = toId;
+        Map = map;
     }
 
     public Guid FromId { get; }
@@ -18,8 +19,8 @@ public sealed class Route
 
     public bool Enabled { get; internal set; } = true;
 
-    /// <summary>Какие пары каналов соединены. По умолчанию стерео-пара L→L, R→R.</summary>
-    public ChannelMap Map { get; internal set; } = ChannelMap.Direct;
+    /// <summary>Какие пары каналов соединены.</summary>
+    public ChannelMap Map { get; internal set; }
 
     public override string ToString() => $"{FromId:N} -> {ToId:N} [{Map}] (gain {Gain:0.###})";
 }

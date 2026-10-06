@@ -3,6 +3,13 @@ namespace Parrhesia.Core.Graph;
 /// <summary>Узел графа: источник, шина или назначение.</summary>
 public sealed class AudioNode
 {
+    /// <summary>
+    /// Допустимое число каналов узла в этой версии (формат движка двухканальный).
+    /// Структура карт каналов рассчитана на <see cref="ChannelMap.MaxChannels"/> —
+    /// диапазон поднимется, когда движок вырастет.
+    /// </summary>
+    public const int MaxChannels = 2;
+
     internal AudioNode(Guid id, string name, NodeKind kind)
     {
         Id = id;
@@ -22,6 +29,18 @@ public sealed class AudioNode
     public bool Mute { get; internal set; }
 
     public bool Solo { get; internal set; }
+
+    /// <summary>
+    /// Обход узла: сигнал идёт сквозь на единичном уровне — гейн, mute и
+    /// solo игнорируются (нода ведёт себя как отсутствующая).
+    /// </summary>
+    public bool Bypassed { get; internal set; }
+
+    /// <summary>Число каналов узла (1 = моно, 2 = стерео).</summary>
+    public int ChannelCount { get; internal set; } = 2;
+
+    /// <summary>Имена каналов; длина всегда == <see cref="ChannelCount"/>.</summary>
+    public string[] ChannelNames { get; internal set; } = ["1", "2"];
 
     /// <summary>
     /// Привязка к аудио-устройству (формат: "default:capture", "default:render",

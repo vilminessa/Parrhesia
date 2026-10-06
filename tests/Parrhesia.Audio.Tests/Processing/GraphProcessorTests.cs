@@ -208,7 +208,7 @@ public class GraphProcessorTests
         // Кросс создаётся парами каналов: L→R, затем R→L.
         graph.AddRoute(source.Id, 0, sink.Id, 1, out var route);
         graph.AddRoute(source.Id, 1, sink.Id, 0, out _);
-        Assert.Equal(0b0110, route!.Map.Bits);
+        Assert.Equal(ChannelMap.Pair(0, 1).With(1, 0, enabled: true).Bits, route!.Map.Bits);
 
         using var processor = new GraphProcessor(graph);
         processor.SetInput(source.Id, new StereoInput(left: 0.75f, right: 0.25f));

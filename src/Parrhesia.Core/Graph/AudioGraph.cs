@@ -105,7 +105,8 @@ public sealed class AudioGraph
         return RouteError.None;
     }
 
-    /// <summary>Добавляет маршрут. Возвращает <see cref="RouteError.None"/> при успехе.</summary>
+    /// <summary>Добавляет маршрут. Возвращает <see cref="RouteError.None"/> при успехе.
+    /// Карта по умолчанию — диагональ по числу каналов узлов.</summary>
     public RouteError AddRoute(Guid fromId, Guid toId, out Route? route)
     {
         route = null;
@@ -115,20 +116,28 @@ public sealed class AudioGraph
             return error;
         }
 
-        route = new Route(fromId, toId);
+        var map = ChannelMap.Diagonal(
+            FindNode(fromId)!.ChannelCount,
+            FindNode(toId)!.ChannelCount);
+        route = new Route(fromId, toId, map);
         _routes.Add(route);
         Raise(GraphChangeKind.RouteAdded, route: route);
         return RouteError.None;
     }
 
     /// <summary>
-    /// Добавляет маршрут с конкретной парой каналов (0 = L, 1 = R).
-    /// Если маршрут уже есть — пара добавляется в его карту (идемпотентно).
+    /// Добавляет маршрут с конкретной парой каналов. Если маршрут уже есть —
+    /// пара добавляется в его карту (идемпотентно). Пара проверяется против
+    /// числа каналов обоих узлов.
     /// </summary>
     public RouteError AddRoute(Guid fromId, int fromChannel, Guid toId, int toChannel, out Route? route)
     {
-        // Валидация каналов раньше любых проверок: плохой индекс — ошибка программиста.
-        _ = ChannelMap.Pair(fromChannel, toChannel);
+        route = null;
+        var pairError = ValidateChannelPair(fromId, fromChannel, toId, toChannel);
+        if (pairError != RouteError.None)
+        {
+            return pairError;
+        }
 
         var existing = FindRoute(fromId, toId);
         if (existing is not null)
@@ -151,9 +160,30 @@ public sealed class AudioGraph
             return error;
         }
 
-        route = new Route(fromId, toId) { Map = ChannelMap.Pair(fromChannel, toChannel) };
+        route = new Route(fromId, toId, ChannelMap.Pair(fromChannel, toChannel));
         _routes.Add(route);
         Raise(GraphChangeKind.RouteAdded, route: route);
+        return RouteError.None;
+    }
+
+    /// <summary>Валидация пары каналов против ёмкости карты и числа каналов узлов.</summary>
+    private RouteError ValidateChannelPair(Guid fromId, int fromChannel, Guid toId, int toChannel)
+    {
+        // Выход за физический предел карты — ошибка программиста.
+        _ = ChannelMap.Pair(fromChannel, toChannel);
+
+        var from = FindNode(fromId);
+        var to = FindNode(toId);
+        if (from is null || to is null)
+        {
+            return RouteError.NodeNotFound;
+        }
+
+        if (fromChannel >= from.ChannelCount || toChannel >= to.ChannelCount)
+        {
+            return RouteError.ChannelOutOfRange;
+        }
+
         return RouteError.None;
     }
 
@@ -165,6 +195,12 @@ public sealed class AudioGraph
     {
         var route = FindRoute(fromId, toId) ??
             throw new ArgumentException("Маршрут не найден.", nameof(toId));
+
+        var pairError = ValidateChannelPair(fromId, fromChannel, toId, toChannel);
+        if (pairError != RouteError.None)
+        {
+            throw new ArgumentException($"Недопустимая пара каналов: {pairError}.", nameof(toChannel));
+        }
 
         var updated = route.Map.With(fromChannel, toChannel, enabled);
         if (updated == route.Map)
@@ -191,6 +227,11 @@ public sealed class AudioGraph
     {
         var route = FindRoute(fromId, toId) ??
             throw new ArgumentException("Маршрут не найден.", nameof(toId));
+
+        // Страховка: пары вне числа каналов узлов отбрасываются.
+        var fromCount = FindNode(fromId)?.ChannelCount ?? 0;
+        var toCount = FindNode(toId)?.ChannelCount ?? 0;
+        map = map.Restrict(fromCount, toCount);
 
         if (map == route.Map)
         {
@@ -284,6 +325,132 @@ public sealed class AudioGraph
 
     public void SetNodeSolo(Guid id, bool solo) => SetNodeFlag(id, solo, static (n, v) => n.Solo = v, n => n.Solo);
 
+    public void SetNodeBypass(Guid id, bool bypassed) =>
+        SetNodeFlag(id, bypassed, static (n, v) => n.Bypassed = v, n => n.Bypassed);
+
+    /// <summary>
+    /// Меняет число каналов узла (1..<see cref="AudioNode.MaxChannels"/>) и,
+    /// опционально, имена каналов. Карты затронутых маршрутов обрезаются,
+    /// опустевшие маршруты удаляются.
+    /// </summary>
+    public void SetNodeChannels(Guid id, int count, IReadOnlyList<string>? names = null)
+    {
+        if (count is < 1 or > AudioNode.MaxChannels)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(count),
+                count,
+                $"Число каналов: 1..{AudioNode.MaxChannels}.");
+        }
+
+        if (names is not null && names.Count != count)
+        {
+            throw new ArgumentException($"Должно быть имен каналов: {count}.", nameof(names));
+        }
+
+        var node = FindNode(id) ??
+            throw new ArgumentException($"Узел {id:N} не найден.", nameof(id));
+
+        node.ChannelCount = count;
+        node.ChannelNames = BuildChannelNames(names, count, node.ChannelNames);
+
+        // Обрезка карт маршрутов этого узла под новые счётчики.
+        List<(Route Route, ChannelMap Map)>? resized = null;
+        List<Route>? removed = null;
+        foreach (var route in _routes)
+        {
+            if (route.FromId != id && route.ToId != id)
+            {
+                continue;
+            }
+
+            var fromCount = route.FromId == id ? count : FindNode(route.FromId)?.ChannelCount ?? 0;
+            var toCount = route.ToId == id ? count : FindNode(route.ToId)?.ChannelCount ?? 0;
+            var restricted = route.Map.Restrict(fromCount, toCount);
+            if (restricted == route.Map)
+            {
+                continue;
+            }
+
+            if (restricted.IsEmpty)
+            {
+                (removed ??= []).Add(route);
+            }
+            else
+            {
+                (resized ??= []).Add((route, restricted));
+            }
+        }
+
+        if (resized is not null)
+        {
+            foreach (var (route, map) in resized)
+            {
+                route.Map = map;
+                Raise(GraphChangeKind.RouteChanged, route: route);
+            }
+        }
+
+        if (removed is not null)
+        {
+            foreach (var route in removed)
+            {
+                _routes.Remove(route);
+                Raise(GraphChangeKind.RouteRemoved, route: route);
+            }
+        }
+
+        Raise(GraphChangeKind.NodeChanged, node: node);
+    }
+
+    /// <summary>Переименовывает канал узла (индексация с нуля).</summary>
+    public void SetNodeChannelName(Guid id, int channel, string name)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+
+        var node = FindNode(id) ??
+            throw new ArgumentException($"Узел {id:N} не найден.", nameof(id));
+        if (channel < 0 || channel >= node.ChannelCount)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(channel),
+                channel,
+                $"У канала {node.Name} каналов: {node.ChannelCount}.");
+        }
+
+        if (node.ChannelNames[channel] == name)
+        {
+            return;
+        }
+
+        var copy = (string[])node.ChannelNames.Clone();
+        copy[channel] = name;
+        node.ChannelNames = copy;
+        Raise(GraphChangeKind.NodeChanged, node: node);
+    }
+
+    private static string[] BuildChannelNames(IReadOnlyList<string>? provided, int count, string[] existing)
+    {
+        if (provided is not null)
+        {
+            var exact = new string[count];
+            for (var i = 0; i < count; i++)
+            {
+                exact[i] = provided[i];
+            }
+
+            return exact;
+        }
+
+        var result = new string[count];
+        for (var i = 0; i < count; i++)
+        {
+            result[i] = i < existing.Length ? existing[i] : (i + 1).ToString();
+        }
+
+        return result;
+    }
+
     /// <summary>Привязывает узел к устройству (null — отвязывает).</summary>
     public void SetNodeDevice(Guid id, string? deviceId)
     {
@@ -339,6 +506,9 @@ public sealed class AudioGraph
                 Gain = node.Gain,
                 Mute = node.Mute,
                 Solo = node.Solo,
+                Bypassed = node.Bypassed,
+                ChannelCount = node.ChannelCount,
+                ChannelNames = (string[])node.ChannelNames.Clone(),
                 DeviceId = node.DeviceId,
                 X = node.X,
                 Y = node.Y,
@@ -347,11 +517,10 @@ public sealed class AudioGraph
 
         foreach (var route in source._routes)
         {
-            _routes.Add(new Route(route.FromId, route.ToId)
+            _routes.Add(new Route(route.FromId, route.ToId, route.Map)
             {
                 Gain = route.Gain,
                 Enabled = route.Enabled,
-                Map = route.Map,
             });
         }
 

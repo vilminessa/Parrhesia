@@ -13,6 +13,9 @@ namespace Parrhesia.Audio.Processing;
 /// </summary>
 public sealed class GraphProcessor : IDisposable
 {
+    /// <summary>Стерео-диагональ для быстрого пути (сплошное сложение буферов).</summary>
+    private static readonly ChannelMap StraightStereo = ChannelMap.Diagonal(2, 2);
+
     private readonly AudioGraph _graph;
     private readonly int _channels;
     private readonly Dictionary<Guid, ISampleInput> _inputs = [];
@@ -142,7 +145,7 @@ public sealed class GraphProcessor : IDisposable
             }
 
             var source = from.AsSpan(0, samples);
-            if (edge.Map.Bits == ChannelMap.Direct.Bits)
+            if (edge.Map.Bits == StraightStereo.Bits)
             {
                 // Стерео-пара по прямой — данные лежат в буфере сплошняком.
                 Accumulate(span, source, edge.Gain);

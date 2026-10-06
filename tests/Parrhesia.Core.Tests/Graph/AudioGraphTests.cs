@@ -130,7 +130,7 @@ public class AudioGraphTests
 
         graph.AddRoute(source.Id, bus.Id, out var route);
 
-        Assert.Equal(ChannelMap.Direct, route!.Map);
+        Assert.Equal(ChannelMap.Diagonal(2, 2), route!.Map);
     }
 
     [Fact]
@@ -191,7 +191,8 @@ public class AudioGraphTests
         var source = graph.AddNode("Вход", NodeKind.Source);
         var sink = graph.AddNode("Выход", NodeKind.Sink);
 
-        Assert.Throws<ArgumentOutOfRangeException>(() => graph.AddRoute(source.Id, 2, sink.Id, 0, out _));
+        Assert.Throws<ArgumentOutOfRangeException>(() => graph.AddRoute(source.Id, 8, sink.Id, 0, out _));
+        Assert.Throws<ArgumentOutOfRangeException>(() => ChannelMap.Pair(0, 8));
     }
 
     [Fact]
@@ -315,7 +316,7 @@ public class AudioGraphTests
         // Прямое переключение на кросс: промежуточного пустого состояния нет.
         graph.SetRouteMap(source.Id, sink.Id, ChannelMap.Pair(0, 1).With(1, 0, true));
 
-        Assert.Equal(0b0110, route!.Map.Bits);
+        Assert.Equal(ChannelMap.Pair(0, 1).With(1, 0, enabled: true).Bits, route!.Map.Bits);
         Assert.Equal(new[] { GraphChangeKind.RouteChanged }, kinds);
         Assert.Single(graph.Routes);
     }
@@ -331,12 +332,124 @@ public class AudioGraphTests
         var kinds = new List<GraphChangeKind>();
         graph.Changed += (_, e) => kinds.Add(e.Kind);
 
-        graph.SetRouteMap(source.Id, sink.Id, ChannelMap.Direct); // как есть — без события
+        graph.SetRouteMap(source.Id, sink.Id, ChannelMap.Diagonal(2, 2)); // как есть — без события
         Assert.Empty(kinds);
 
         graph.SetRouteMap(source.Id, sink.Id, new ChannelMap(0));
         Assert.Equal(new[] { GraphChangeKind.RouteRemoved }, kinds);
         Assert.Empty(graph.Routes);
+    }
+
+    [Fact]
+    public void AddRoute_ChannelOutOfRange_ReturnsError()
+    {
+        var graph = new AudioGraph();
+        var mono = graph.AddNode("Моно", NodeKind.Source);
+        var sink = graph.AddNode("Выход", NodeKind.Sink);
+        graph.SetNodeChannels(mono.Id, 1);
+
+        Assert.Equal(RouteError.ChannelOutOfRange, graph.AddRoute(mono.Id, 1, sink.Id, 1, out _));
+        Assert.Equal(RouteError.None, graph.AddRoute(mono.Id, 0, sink.Id, 1, out _));
+    }
+
+    [Fact]
+    public void SetNodeChannels_MonoToStereo_ExtendsNamesAndKeepsRoutes()
+    {
+        var graph = new AudioGraph();
+        var source = graph.AddNode("Вход", NodeKind.Source);
+        var sink = graph.AddNode("Выход", NodeKind.Sink);
+        graph.AddRoute(source.Id, sink.Id, out var route);
+
+        graph.SetNodeChannels(source.Id, 1, ["Микрофон"]);
+
+        Assert.Equal(1, graph.FindNode(source.Id)!.ChannelCount);
+        Assert.Equal(new[] { "Микрофон" }, graph.FindNode(source.Id)!.ChannelNames);
+        // Стерео-карта обрезана до моно: остаётся только 1→1.
+        Assert.Equal(ChannelMap.Pair(0, 0), route!.Map);
+
+        graph.SetNodeChannels(source.Id, 2);
+
+        Assert.Equal(new[] { "Микрофон", "2" }, graph.FindNode(source.Id)!.ChannelNames);
+        Assert.Equal(ChannelMap.Pair(0, 0), route!.Map);
+    }
+
+    [Fact]
+    public void SetNodeChannels_RemovesRoutesThatBecameEmpty()
+    {
+        var graph = new AudioGraph();
+        var source = graph.AddNode("Вход", NodeKind.Source);
+        var sink = graph.AddNode("Выход", NodeKind.Sink);
+
+        // Связь только по второму каналу.
+        graph.AddRoute(source.Id, 1, sink.Id, 1, out _);
+        Assert.Single(graph.Routes);
+
+        graph.SetNodeChannels(source.Id, 1);
+
+        Assert.Empty(graph.Routes);
+    }
+
+    [Fact]
+    public void SetNodeChannels_RejectsBadCountAndNameLength()
+    {
+        var graph = new AudioGraph();
+        var node = graph.AddNode("Вход", NodeKind.Source);
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => graph.SetNodeChannels(node.Id, 0));
+        Assert.Throws<ArgumentOutOfRangeException>(() => graph.SetNodeChannels(node.Id, 3));
+        Assert.Throws<ArgumentException>(() => graph.SetNodeChannels(node.Id, 1, ["a", "b"]));
+    }
+
+    [Fact]
+    public void SetNodeChannelName_RenamesAndRaisesChanged()
+    {
+        var graph = new AudioGraph();
+        var node = graph.AddNode("Вход", NodeKind.Source);
+
+        GraphChange? change = null;
+        graph.Changed += (_, e) => change = e;
+        graph.SetNodeChannelName(node.Id, 1, "Правый");
+
+        Assert.Equal(new[] { "1", "Правый" }, node.ChannelNames);
+        Assert.Equal(GraphChangeKind.NodeChanged, change?.Kind);
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => graph.SetNodeChannelName(node.Id, 5, "x"));
+        Assert.Throws<ArgumentException>(() => graph.SetNodeChannelName(node.Id, 0, "  "));
+    }
+
+    [Fact]
+    public void SetNodeBypass_TogglesAndRaisesChanged()
+    {
+        var graph = new AudioGraph();
+        var node = graph.AddNode("Шина", NodeKind.Bus);
+        GraphChange? change = null;
+        graph.Changed += (_, e) => change = e;
+
+        graph.SetNodeBypass(node.Id, true);
+
+        Assert.True(node.Bypassed);
+        Assert.Equal(GraphChangeKind.NodeChanged, change?.Kind);
+
+        graph.SetNodeBypass(node.Id, false);
+        Assert.False(node.Bypassed);
+    }
+
+    [Fact]
+    public void SetRouteMap_SanitizesPairsOutsideChannelCounts()
+    {
+        var graph = new AudioGraph();
+        var source = graph.AddNode("Вход", NodeKind.Source);
+        var sink = graph.AddNode("Выход", NodeKind.Sink);
+        graph.AddRoute(source.Id, sink.Id, out var route);
+
+        // Пытаемся навесить пару в несуществующий второй канал... у 2-канального она валидна,
+        // поэтому сначала делаем назначение моно.
+        graph.SetNodeChannels(sink.Id, 1);
+        graph.SetRouteMap(source.Id, sink.Id, ChannelMap.Pair(1, 1));
+
+        // (1,1) отброшен парой Restrict(2,1)... остаётся пусто → маршрут удалён.
+        Assert.Empty(graph.Routes);
+        _ = route;
     }
 
     [Fact]
