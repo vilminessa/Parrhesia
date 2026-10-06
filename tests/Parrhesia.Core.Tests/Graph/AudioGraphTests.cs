@@ -179,7 +179,8 @@ public class AudioGraphTests
 
         Assert.False(graph.IsEffectivelyMuted(graph.FindNode(a.Id)!));
         Assert.True(graph.IsEffectivelyMuted(graph.FindNode(b.Id)!));
-        Assert.True(graph.IsEffectivelyMuted(graph.FindNode(bus.Id)!));
+        Assert.False(graph.IsEffectivelyMuted(graph.FindNode(bus.Id)!),
+            "Соло не должно глушить шины и назначения");
 
         graph.SetNodeSolo(a.Id, false);
 

@@ -5,6 +5,7 @@
     <Project Path="src/Parrhesia.Core/Parrhesia.Core.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/Parrhesia.Audio.Tests/Parrhesia.Audio.Tests.csproj" />
     <Project Path="tests/Parrhesia.Core.Tests/Parrhesia.Core.Tests.csproj" />
   </Folder>
 </Solution>

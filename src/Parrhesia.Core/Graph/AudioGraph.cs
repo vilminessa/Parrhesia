@@ -212,12 +212,25 @@ public sealed class AudioGraph
     }
 
     /// <summary>
-    /// Узел фактически нем: выключен сам, или включён чей-то соло и это не он.
+    /// Узел фактически нем: выключен сам, либо (только для источников)
+    /// включён чей-то соло и это не он. Шины и назначения соло не глушат —
+    /// иначе солёный источник не дошёл бы до выхода.
     /// </summary>
     public bool IsEffectivelyMuted(AudioNode node)
     {
         ArgumentNullException.ThrowIfNull(node);
-        return node.Mute || (HasSolo && !node.Solo);
+
+        if (node.Mute)
+        {
+            return true;
+        }
+
+        if (node.Kind != NodeKind.Source)
+        {
+            return false;
+        }
+
+        return HasSolo && !node.Solo;
     }
 
     public void SetRouteGain(Guid fromId, Guid toId, float gain)
