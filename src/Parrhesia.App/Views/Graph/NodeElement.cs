@@ -24,8 +24,11 @@ internal sealed class NodeElement : Border
     public const double NodeWidth = 168;
     public const double PortVisualRadius = 5;
 
-    /// <summary>Смещение центров каналов L/R от центра узла (порты стоят столбиком).</summary>
+    /// <summary>Смещение центров каналов от центра узла (порты стоят столбиком).</summary>
     public const double PortChannelOffset = 9.0;
+
+    /// <summary>Маркер «бандл-порт» (один порт на сторону в однонодовом режиме).</summary>
+    public const int BundleChannel = -1;
 
     private static readonly DropShadowEffect SelectedEffect = CreateSelectionEffect();
 
@@ -33,6 +36,12 @@ internal sealed class NodeElement : Border
     private readonly TextBlock _title;
     private readonly Border[] _inPorts = new Border[2];
     private readonly Border[] _outPorts = new Border[2];
+    private readonly Grid _grid;
+
+    private StackPanel? _inColumn;
+    private StackPanel? _outColumn;
+    private bool _builtExpanded;
+    private int _builtChannelCount;
 
     /// <summary>Мини-метр уровня узла (заполняется снаружи через render-тикер).</summary>
     public LedMeterControl Meter { get; }
@@ -111,15 +120,8 @@ internal sealed class NodeElement : Border
 
         var grid = new Grid();
         grid.Children.Add(body);
-        if (node.HasInput)
-        {
-            grid.Children.Add(BuildPortColumn(_inPorts, isInput: true));
-        }
-
-        if (node.HasOutput)
-        {
-            grid.Children.Add(BuildPortColumn(_outPorts, isInput: false));
-        }
+        _grid = grid;
+        RebuildPortColumns();
 
         _root = new Border
         {
@@ -138,6 +140,9 @@ internal sealed class NodeElement : Border
 
     public AudioNode Node { get; }
 
+    /// <summary>Мастеринг-режим: порт на каждый канал с подписью. false — один бандл-порт на сторону.</summary>
+    public bool Expanded { get; private set; }
+
     public double Left { get; private set; }
 
     public double Top { get; private set; }
@@ -146,8 +151,61 @@ internal sealed class NodeElement : Border
 
     public Point OutputPortCenter(int channel) => new(Left + ActualWidth, ChannelCenterY(channel));
 
-    private double ChannelCenterY(int channel) =>
-        Top + (ActualHeight / 2) + (channel == ChannelMap.Left ? -PortChannelOffset : PortChannelOffset);
+    private double ChannelCenterY(int channel)
+    {
+        var centerY = Top + (ActualHeight / 2);
+        if (channel == BundleChannel || Node.ChannelCount <= 1)
+        {
+            return centerY;
+        }
+
+        var clamped = Math.Clamp(channel, 0, Node.ChannelCount - 1);
+        var offset = (clamped - ((Node.ChannelCount - 1) / 2.0)) * (PortChannelOffset * 2);
+        return centerY + offset;
+    }
+
+    /// <summary>Переключение режима отображения портов (однонодовый/мастеринг).</summary>
+    public void SetViewMode(bool expanded)
+    {
+        if (Expanded == expanded)
+        {
+            return;
+        }
+
+        Expanded = expanded;
+        RebuildPortColumns();
+    }
+
+    /// <summary>Пересобирает порт-колонки под режим и число каналов узла.</summary>
+    private void RebuildPortColumns()
+    {
+        if (_inColumn is not null)
+        {
+            _grid.Children.Remove(_inColumn);
+            _inColumn = null;
+        }
+
+        if (_outColumn is not null)
+        {
+            _grid.Children.Remove(_outColumn);
+            _outColumn = null;
+        }
+
+        if (Node.HasInput)
+        {
+            _inColumn = BuildPortColumn(_inPorts, isInput: true);
+            _grid.Children.Add(_inColumn);
+        }
+
+        if (Node.HasOutput)
+        {
+            _outColumn = BuildPortColumn(_outPorts, isInput: false);
+            _grid.Children.Add(_outColumn);
+        }
+
+        _builtExpanded = Expanded;
+        _builtChannelCount = Node.ChannelCount;
+    }
 
     public void SetPosition(double x, double y)
     {
@@ -165,7 +223,16 @@ internal sealed class NodeElement : Border
 
     public void SetPortHighlight(bool outputPort, int channel, PortHighlight highlight)
     {
-        var port = outputPort ? _outPorts[channel] : _inPorts[channel];
+        var ports = outputPort ? _outPorts : _inPorts;
+        var column = outputPort ? _outColumn : _inColumn;
+        if (column is null)
+        {
+            return; // у этого типа узла нет такой стороны
+        }
+
+        // В бандл-режиме (и для моно) любой канал указывает на единственный порт.
+        var index = !Expanded || channel < 0 ? 0 : Math.Clamp(channel, 0, ports.Length - 1);
+        var port = ports[index];
         switch (highlight)
         {
             case PortHighlight.None:
@@ -196,6 +263,11 @@ internal sealed class NodeElement : Border
     {
         _title.Text = Node.Name;
         _title.Opacity = Node.Mute ? 0.45 : 1.0;
+
+        if (Node.ChannelCount != _builtChannelCount || Expanded != _builtExpanded)
+        {
+            RebuildPortColumns();
+        }
     }
 
     private static DropShadowEffect CreateSelectionEffect()
@@ -211,14 +283,11 @@ internal sealed class NodeElement : Border
         return effect;
     }
 
-    private static StackPanel BuildPortColumn(Border[] ports, bool isInput)
+    /// <summary>Колонка портов под текущий режим: бандл (один порт) или по порту на канал.</summary>
+    private StackPanel BuildPortColumn(Border[] ports, bool isInput)
     {
-        var channelName = isInput ? "Вход" : "Выход";
-        for (var channel = ChannelMap.Left; channel <= ChannelMap.Right; channel++)
-        {
-            var port = ports[channel];
-            port.ToolTip = $"{channelName} {(channel == ChannelMap.Left ? "L" : "R")}";
-        }
+        var channelCount = Expanded ? Math.Max(1, Node.ChannelCount) : 1;
+        var sideName = isInput ? "Вход" : "Выход";
 
         var column = new StackPanel
         {
@@ -229,8 +298,19 @@ internal sealed class NodeElement : Border
                 ? new Thickness(-PortVisualRadius, 0, 0, 0)
                 : new Thickness(0, 0, -PortVisualRadius, 0),
         };
-        column.Children.Add(ports[ChannelMap.Left]);
-        column.Children.Add(ports[ChannelMap.Right]);
+
+        for (var channel = 0; channel < channelCount; channel++)
+        {
+            var port = ports[channel];
+            port.ToolTip = Expanded
+                ? $"{sideName} {Node.ChannelNames[channel]} (канал {channel + 1})"
+                : $"{sideName}: все каналы ({Node.ChannelCount})";
+            port.Margin = channel < channelCount - 1
+                ? new Thickness(0, 0, 0, 8)
+                : new Thickness(0);
+            column.Children.Add(port);
+        }
+
         return column;
     }
 
@@ -246,10 +326,7 @@ internal sealed class NodeElement : Border
             BorderBrush = ResolveBrush("Brush.StrokeStrong", "#FF39404B"),
             HorizontalAlignment = HorizontalAlignment.Center,
             VerticalAlignment = VerticalAlignment.Center,
-            // Верхний столбика — L, у него зазор до нижнего (R).
-            Margin = channel == ChannelMap.Left
-                ? new Thickness(0, 0, 0, 8)
-                : new Thickness(0),
+            Margin = new Thickness(0),
         };
     }
 

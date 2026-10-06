@@ -10,6 +10,43 @@
 
   <!--region Кнопки -->
 
+  <!-- Переключатель режимов (однонодовый/мастеринг) -->
+  <Style TargetType="{x:Type ToggleButton}">
+    <Setter Property="Foreground" Value="{DynamicResource Brush.TextDim}" />
+    <Setter Property="Background" Value="{DynamicResource Brush.Elevated}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource Brush.Stroke}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="Padding" Value="14,7" />
+    <Setter Property="Focusable" Value="True" />
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="{x:Type ToggleButton}">
+          <Border x:Name="Bd"
+                  Background="{TemplateBinding Background}"
+                  BorderBrush="{TemplateBinding BorderBrush}"
+                  BorderThickness="{TemplateBinding BorderThickness}"
+                  CornerRadius="6"
+                  Padding="{TemplateBinding Padding}">
+            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+          </Border>
+          <ControlTemplate.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+              <Setter TargetName="Bd" Property="Background" Value="{DynamicResource Brush.Hover}" />
+            </Trigger>
+            <Trigger Property="IsChecked" Value="True">
+              <Setter TargetName="Bd" Property="Background" Value="{DynamicResource Brush.Panel}" />
+              <Setter Property="Foreground" Value="{DynamicResource Brush.Accent}" />
+              <Setter Property="BorderBrush" Value="{DynamicResource Brush.Accent}" />
+            </Trigger>
+            <Trigger Property="IsEnabled" Value="False">
+              <Setter Property="Opacity" Value="0.45" />
+            </Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
   <Style TargetType="{x:Type Button}">
     <Setter Property="Foreground" Value="{DynamicResource Brush.Text}" />
     <Setter Property="Background" Value="{DynamicResource Brush.Elevated}" />

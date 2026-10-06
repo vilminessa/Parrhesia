@@ -5,10 +5,9 @@ using Parrhesia.Core.Graph;
 namespace Parrhesia.App.Views.Graph;
 
 /// <summary>
-/// Слой отрисовки кабелей (координаты мира): маршрут рисуется одной жилой
-/// на каждую соединённую пару каналов (стерео = две параллельные жилы,
-/// кросс = пересечение к конкретным портам). Hit-test — по расстоянию
-/// до любой жилы маршрута. Один проход OnRender.
+/// Слой отрисовки кабелей (координаты мира).
+/// Мастеринг-режим: жила на каждую пару каналов. Однонодовый: одна
+/// линия-бандл на маршрут. Hit-test возвращает жилу (маршрут + пару).
 /// </summary>
 internal sealed class CableLayer : FrameworkElement
 {
@@ -18,16 +17,25 @@ internal sealed class CableLayer : FrameworkElement
     private static readonly Brush SelectedBrush = ResolveBrush("Brush.Accent", "#FFFFB020");
     private static readonly Brush DisabledBrush = ResolveBrush("Brush.TextFaint", "#FF5C6472");
     private static readonly Brush TempBrush = ResolveBrush("Brush.Cyan", "#FF35D0C8");
-    private static readonly Pen InvalidTempPen = CreatePen(ResolveBrush("Brush.Danger", "#FFFF5A52"));
+    private static readonly Pen InvalidTempPen = CreateDashPen(ResolveBrush("Brush.Danger", "#FFFF5A52"));
 
     public CableLayer()
     {
         IsHitTestVisible = false;
     }
 
+    /// <summary>Выделенная жила: маршрут + пара каналов (каналы null — весь кабель/бандл).</summary>
+    public sealed record WireHit(Route Route, int? FromChannel, int? ToChannel);
+
     public IReadOnlyList<Route>? Routes { get; set; }
 
     public Route? SelectedRoute { get; set; }
+
+    /// <summary>Выделенная пара каналов внутри <see cref="SelectedRoute"/> (мастеринг-режим).</summary>
+    public (int FromChannel, int ToChannel)? SelectedPair { get; set; }
+
+    /// <summary>Мастеринг-режим: жила на каждую пару. false — одна линия на маршрут.</summary>
+    public bool Expanded { get; set; }
 
     /// <summary>Конец временного кабеля у порта-источника, координаты мира.</summary>
     public Point? TempFrom { get; set; }
@@ -44,40 +52,45 @@ internal sealed class CableLayer : FrameworkElement
 
     public Func<Guid, int, Point?>? GetInputPoint { get; set; }
 
-    /// <summary>Кабель под точкой (координаты мира) или null.</summary>
-    public Route? HitTest(Point worldPoint)
+    /// <summary>Жила под точкой (координаты мира) или null.</summary>
+    public WireHit? HitTest(Point worldPoint)
     {
         if (Routes is null || GetOutputPoint is null || GetInputPoint is null)
         {
             return null;
         }
 
-        var radius = 6 * InverseScale;
-        var radiusSq = radius * radius;
-        Route? best = null;
-        var bestDistance = radiusSq;
+        var radiusSq = Math.Pow(6 * InverseScale, 2);
+
+        if (!Expanded)
+        {
+            foreach (var route in Routes)
+            {
+                var from = GetOutputPoint(route.FromId, NodeElement.BundleChannel);
+                var to = GetInputPoint(route.ToId, NodeElement.BundleChannel);
+                if (from is { } f && to is { } t && CurveHits(f, t, worldPoint, radiusSq))
+                {
+                    return new WireHit(route, null, null);
+                }
+            }
+
+            return null;
+        }
 
         foreach (var route in Routes)
         {
-            foreach (var (from, to) in Strands(route))
+            foreach (var (fromChannel, toChannel) in route.Map.Pairs())
             {
-                var (c1, c2) = ControlPoints(from, to);
-                for (var i = 0; i <= HitTestSamples; i++)
+                var from = GetOutputPoint(route.FromId, fromChannel);
+                var to = GetInputPoint(route.ToId, toChannel);
+                if (from is { } f && to is { } t && CurveHits(f, t, worldPoint, radiusSq))
                 {
-                    var p = Bezier(from, c1, c2, to, i / (double)HitTestSamples);
-                    var dx = p.X - worldPoint.X;
-                    var dy = p.Y - worldPoint.Y;
-                    var distance = dx * dx + dy * dy;
-                    if (distance < bestDistance)
-                    {
-                        bestDistance = distance;
-                        best = route;
-                    }
+                    return new WireHit(route, fromChannel, toChannel);
                 }
             }
         }
 
-        return best;
+        return null;
     }
 
     protected override void OnRender(DrawingContext dc)
@@ -96,7 +109,17 @@ internal sealed class CableLayer : FrameworkElement
 
             if (SelectedRoute is not null)
             {
-                DrawRoute(dc, SelectedRoute, SelectedBrush, 2.5);
+                if (SelectedPair is { } pair && Expanded)
+                {
+                    // Выделена одна жила: остальные обычным цветом, она — акцентом.
+                    var background = SelectedRoute.Enabled ? CableBrush : DisabledBrush;
+                    DrawRoute(dc, SelectedRoute, background, 1.75, skipPair: pair);
+                    DrawWire(dc, SelectedRoute, pair.FromChannel, pair.ToChannel, SelectedBrush, 2.5);
+                }
+                else
+                {
+                    DrawRoute(dc, SelectedRoute, SelectedBrush, 2.5);
+                }
             }
         }
 
@@ -115,11 +138,23 @@ internal sealed class CableLayer : FrameworkElement
         }
     }
 
-    /// <summary>Жилы маршрута: одна на соединённую пару каналов.</summary>
-    private IEnumerable<(Point From, Point To)> Strands(Route route)
+    /// <summary>Жилы маршрута: в бандл-режиме — одна линия, иначе по паре каналов.</summary>
+    private IEnumerable<(Point From, Point To, int FromChannel, int ToChannel)> Strands(Route route)
     {
         if (GetOutputPoint is null || GetInputPoint is null)
         {
+            yield break;
+        }
+
+        if (!Expanded)
+        {
+            var from = GetOutputPoint(route.FromId, NodeElement.BundleChannel);
+            var to = GetInputPoint(route.ToId, NodeElement.BundleChannel);
+            if (from is { } f && to is { } t)
+            {
+                yield return (f, t, 0, 0);
+            }
+
             yield break;
         }
 
@@ -129,12 +164,40 @@ internal sealed class CableLayer : FrameworkElement
             var to = GetInputPoint(route.ToId, toChannel);
             if (from is { } f && to is { } t)
             {
-                yield return (f, t);
+                yield return (f, t, fromChannel, toChannel);
             }
         }
     }
 
-    private static Pen CreatePen(Brush brush)
+    private static bool CurveHits(Point from, Point to, Point worldPoint, double radiusSq)
+    {
+        var (c1, c2) = ControlPoints(from, to);
+        for (var i = 0; i <= HitTestSamples; i++)
+        {
+            var p = Bezier(from, c1, c2, to, i / (double)HitTestSamples);
+            var dx = p.X - worldPoint.X;
+            var dy = p.Y - worldPoint.Y;
+            if ((dx * dx) + (dy * dy) < radiusSq)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static Pen CreateStrokePen(Brush brush, double thickness)
+    {
+        var pen = new Pen(brush, thickness)
+        {
+            StartLineCap = PenLineCap.Round,
+            EndLineCap = PenLineCap.Round,
+        };
+        pen.Freeze();
+        return pen;
+    }
+
+    private static Pen CreateDashPen(Brush brush)
     {
         var pen = new Pen(brush, 1.75)
         {
@@ -146,40 +209,54 @@ internal sealed class CableLayer : FrameworkElement
         return pen;
     }
 
-    private static Pen TempPen()
-    {
-        var pen = new Pen(TempBrush, 1.75)
-        {
-            DashStyle = new DashStyle(new[] { 4.0, 3.0 }, 0),
-            StartLineCap = PenLineCap.Round,
-            EndLineCap = PenLineCap.Round,
-        };
-        pen.Freeze();
-        return pen;
-    }
+    private static Pen TempPen() => CreateDashPen(TempBrush);
 
-    private void DrawRoute(DrawingContext dc, Route route, Brush brush, double thickness)
+    private void DrawRoute(
+        DrawingContext dc,
+        Route route,
+        Brush brush,
+        double thickness,
+        (int FromChannel, int ToChannel)? skipPair = null)
     {
-        var pen = new Pen(brush, thickness)
+        var pen = CreateStrokePen(brush, thickness);
+        foreach (var (from, to, fromChannel, toChannel) in Strands(route))
         {
-            StartLineCap = PenLineCap.Round,
-            EndLineCap = PenLineCap.Round,
-        };
-        pen.Freeze();
-
-        foreach (var (from, to) in Strands(route))
-        {
-            var (c1, c2) = ControlPoints(from, to);
-            var geometry = new StreamGeometry();
-            using (var context = geometry.Open())
+            if (skipPair is { } skip && skip.FromChannel == fromChannel && skip.ToChannel == toChannel)
             {
-                context.BeginFigure(from, isFilled: false, isClosed: false);
-                context.BezierTo(c1, c2, to, isStroked: true, isSmoothJoin: false);
+                continue;
             }
 
-            geometry.Freeze();
-            dc.DrawGeometry(null, pen, geometry);
+            DrawCurve(dc, pen, from, to);
         }
+    }
+
+    private void DrawWire(DrawingContext dc, Route route, int fromChannel, int toChannel, Brush brush, double thickness)
+    {
+        if (GetOutputPoint is null || GetInputPoint is null)
+        {
+            return;
+        }
+
+        var from = GetOutputPoint(route.FromId, fromChannel);
+        var to = GetInputPoint(route.ToId, toChannel);
+        if (from is { } f && to is { } t)
+        {
+            DrawCurve(dc, CreateStrokePen(brush, thickness), f, t);
+        }
+    }
+
+    private static void DrawCurve(DrawingContext dc, Pen pen, Point from, Point to)
+    {
+        var (c1, c2) = ControlPoints(from, to);
+        var geometry = new StreamGeometry();
+        using (var context = geometry.Open())
+        {
+            context.BeginFigure(from, isFilled: false, isClosed: false);
+            context.BezierTo(c1, c2, to, isStroked: true, isSmoothJoin: false);
+        }
+
+        geometry.Freeze();
+        dc.DrawGeometry(null, pen, geometry);
     }
 
     private static (Point C1, Point C2) ControlPoints(Point from, Point to)

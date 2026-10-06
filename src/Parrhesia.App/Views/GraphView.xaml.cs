@@ -50,7 +50,16 @@ public partial class GraphView : UserControl
     /// <summary>Глушит обработчики инспектора при программном обновлении полей.</summary>
     private bool _syncing;
 
+    /// <summary>Глушит переключатели режима при программной установке.</summary>
+    private bool _syncingMode;
+
     private Guid _deviceNodeId = Guid.Empty;
+
+    /// <summary>Мастеринг-режим отображения портов (иначе бандл).</summary>
+    private bool _expandedView;
+
+    /// <summary>Выделенная пара каналов выделенного кабеля (мастеринг-режим).</summary>
+    private (int FromChannel, int ToChannel)? _selectedPair;
 
     private sealed record PortHit(NodeElement Element, bool Output, int Channel);
 
@@ -129,9 +138,9 @@ public partial class GraphView : UserControl
             return;
         }
 
-        if (_cableLayer.HitTest(world) is { } route)
+        if (_cableLayer.HitTest(world) is { } hit)
         {
-            SelectRoute(route);
+            SelectRoute(hit.Route, PairOf(hit));
             e.Handled = true;
             return;
         }
@@ -240,7 +249,18 @@ public partial class GraphView : UserControl
         {
             if (_selectedRoute is { } route)
             {
-                _graph.RemoveRoute(route.FromId, route.ToId);
+                if (_selectedPair is { } pair && _cableLayer.Expanded)
+                {
+                    // Мастеринг: удаляем только выделенную пару каналов.
+                    _graph.SetRouteMap(
+                        route.FromId,
+                        route.ToId,
+                        route.Map.With(pair.FromChannel, pair.ToChannel, enabled: false));
+                }
+                else
+                {
+                    _graph.RemoveRoute(route.FromId, route.ToId);
+                }
             }
             else if (_selectedNode is { } node)
             {
@@ -286,7 +306,19 @@ public partial class GraphView : UserControl
         }
 
         // Тянем из выхода → подключаем к конкретному входу, и наоборот.
-        if (drag.FromOutput)
+        if (drag.Channel == NodeElement.BundleChannel)
+        {
+            // Бандл-порт: соединяем все каналы по диагонали 1:1.
+            if (drag.FromOutput)
+            {
+                _graph.AddRoute(drag.NodeId, target.Element.Node.Id, out _);
+            }
+            else
+            {
+                _graph.AddRoute(target.Element.Node.Id, drag.NodeId, out _);
+            }
+        }
+        else if (drag.FromOutput)
         {
             _graph.AddRoute(drag.NodeId, drag.Channel, target.Element.Node.Id, target.Channel, out _);
         }
@@ -361,19 +393,23 @@ public partial class GraphView : UserControl
         if (_selectedRoute is not null)
         {
             _selectedRoute = null;
+            _selectedPair = null;
             _cableLayer.SelectedRoute = null;
+            _cableLayer.SelectedPair = null;
             _cableLayer.InvalidateVisual();
         }
 
         RefreshInspector();
     }
 
-    private void SelectRoute(Route? route)
+    private void SelectRoute(Route? route, (int FromChannel, int ToChannel)? pair = null)
     {
         _selectedNode?.SetSelected(false);
         _selectedNode = null;
         _selectedRoute = route;
+        _selectedPair = route is not null && _expandedView ? pair : null;
         _cableLayer.SelectedRoute = route;
+        _cableLayer.SelectedPair = _selectedPair;
         _cableLayer.InvalidateVisual();
         RefreshInspector();
     }
@@ -390,10 +426,10 @@ public partial class GraphView : UserControl
             SelectNode(node);
             ShowNodeContextMenu();
         }
-        else if (_cableLayer.HitTest(world) is { } route)
+        else if (_cableLayer.HitTest(world) is { } hit)
         {
-            SelectRoute(route);
-            ShowRouteContextMenu(route);
+            SelectRoute(hit.Route, PairOf(hit));
+            ShowRouteContextMenu(hit.Route);
         }
         else
         {
@@ -403,6 +439,9 @@ public partial class GraphView : UserControl
 
         e.Handled = true;
     }
+
+    private static (int FromChannel, int ToChannel)? PairOf(CableLayer.WireHit hit) =>
+        hit.FromChannel is { } from && hit.ToChannel is { } to ? (from, to) : null;
 
     private void ShowNodeContextMenu()
     {
@@ -512,12 +551,91 @@ public partial class GraphView : UserControl
 
     private void OnGraphViewLoaded(object sender, RoutedEventArgs e)
     {
+        _expandedView = AppServices.Settings.IsExpandedView;
+        _syncingMode = true;
+        try
+        {
+            SingleModeButton.IsChecked = !_expandedView;
+            MasteringModeButton.IsChecked = _expandedView;
+        }
+        finally
+        {
+            _syncingMode = false;
+        }
+
+        ApplyViewMode();
         RenderTicker.Subscribe(OnRenderTick);
     }
 
     private void OnGraphViewUnloaded(object sender, RoutedEventArgs e)
     {
         RenderTicker.Unsubscribe(OnRenderTick);
+    }
+
+    // ===== Режимы отображения =====
+
+    private void OnViewModeChanged(object sender, RoutedEventArgs e)
+    {
+        if (!IsLoaded || _syncingMode)
+        {
+            return;
+        }
+
+        _syncingMode = true;
+        try
+        {
+            var mastering = MasteringModeButton.IsChecked == true;
+            // Режим ровно один: снимаем галку с противоположного (без рекурсии).
+            if (mastering)
+            {
+                SingleModeButton.IsChecked = false;
+            }
+            else
+            {
+                MasteringModeButton.IsChecked = false;
+            }
+
+            _expandedView = mastering;
+            AppServices.Settings.GraphViewMode = mastering ? "mastering" : "single";
+            AppServices.Settings.Save();
+            ApplyViewMode();
+        }
+        finally
+        {
+            _syncingMode = false;
+        }
+    }
+
+    private void OnViewModeUnchecked(object sender, RoutedEventArgs e)
+    {
+        if (_syncingMode || !IsLoaded)
+        {
+            return;
+        }
+
+        // Нельзя выключить оба режима — возвращаем галку.
+        if (sender is ToggleButton button)
+        {
+            button.IsChecked = true;
+        }
+    }
+
+    private void ApplyViewMode()
+    {
+        _cableLayer.Expanded = _expandedView;
+        foreach (var element in _elements.Values)
+        {
+            element.SetViewMode(_expandedView);
+        }
+
+        if (!_expandedView)
+        {
+            _selectedPair = null;
+            _cableLayer.SelectedPair = null;
+        }
+
+        _cableLayer.InvalidateVisual();
+        RefreshInspector();
     }
 
     // ===== Мини-метры на узлах =====
@@ -859,7 +977,7 @@ public partial class GraphView : UserControl
 
     // ===== Хит-тесты =====
 
-    /// <summary>Ближайший порт в радиусе (каналы стоят столбиком — ближайший выигрывает).</summary>
+    /// <summary>Ближайший порт в радиусе. В бандл-режиме — по одному порту на сторону.</summary>
     private PortHit? FindPort(Point world)
     {
         var radius = PortHitRadius * _cableLayer.InverseScale;
@@ -878,9 +996,31 @@ public partial class GraphView : UserControl
 
         foreach (var element in _elements.Values)
         {
-            for (var channel = ChannelMap.Left; channel <= ChannelMap.Right; channel++)
+            if (!_expandedView)
             {
-                // Порты рисуются только со стороны, которую поддерживает тип узла.
+                if (element.Node.HasInput)
+                {
+                    Consider(
+                        element.InputPortCenter(NodeElement.BundleChannel),
+                        element,
+                        output: false,
+                        NodeElement.BundleChannel);
+                }
+
+                if (element.Node.HasOutput)
+                {
+                    Consider(
+                        element.OutputPortCenter(NodeElement.BundleChannel),
+                        element,
+                        output: true,
+                        NodeElement.BundleChannel);
+                }
+
+                continue;
+            }
+
+            for (var channel = 0; channel < element.Node.ChannelCount; channel++)
+            {
                 if (element.Node.HasInput)
                 {
                     Consider(element.InputPortCenter(channel), element, output: false, channel);
@@ -942,7 +1082,9 @@ public partial class GraphView : UserControl
         if (_selectedRoute is { } route && !_graph.Routes.Contains(route))
         {
             _selectedRoute = null;
+            _selectedPair = null;
             _cableLayer.SelectedRoute = null;
+            _cableLayer.SelectedPair = null;
         }
 
         if (_selectedNode is { } node && _graph.FindNode(node.Node.Id) is null)
@@ -978,6 +1120,7 @@ public partial class GraphView : UserControl
             }
 
             var element = new NodeElement(node);
+            element.SetViewMode(_expandedView);
             element.SizeChanged += (_, _) => _cableLayer.InvalidateVisual();
 
             double x;

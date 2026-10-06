@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Windows.Threading;
+using Parrhesia.App.Settings;
 using Parrhesia.Audio.Devices;
 using Parrhesia.Audio.Engine;
 using Parrhesia.Core.Graph;
@@ -24,11 +25,14 @@ public static class AppServices
 
     public static ProfileService Profiles { get; private set; } = null!;
 
+    public static AppSettings Settings { get; private set; } = null!;
+
     public static void Initialize()
     {
         Devices = new WasapiDeviceService();
         Graph = new AudioGraph();
         Profiles = new ProfileService(Graph);
+        Settings = AppSettings.Load();
 
         if (Profiles.Count == 0)
         {
