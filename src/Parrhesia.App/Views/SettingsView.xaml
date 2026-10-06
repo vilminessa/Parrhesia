@@ -12,59 +12,28 @@
             CornerRadius="8"
             Padding="18,16">
       <StackPanel>
-        <TextBlock Text="Пресеты"
+        <TextBlock Text="Профили"
                    FontWeight="SemiBold"
                    FontSize="15"
                    Foreground="{DynamicResource Brush.Text}"
                    Margin="0,0,0,6" />
-        <TextBlock Text="Пресет — полная копия схемы: узлы, устройства, гейны, каналы и раскладка."
+        <TextBlock Text="Профиль — полная копия схемы (как сцена в OBS). Переключение — по вкладкам в шапке окна; правки активного сохраняются автоматически."
                    FontSize="12"
                    TextWrapping="Wrap"
                    Foreground="{DynamicResource Brush.TextDim}"
                    Margin="0,0,0,14" />
 
-        <Grid Margin="0,0,0,10">
-          <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="*" />
-            <ColumnDefinition Width="Auto" />
-          </Grid.ColumnDefinitions>
-          <TextBox x:Name="NameBox"
-                   ToolTip="Имя пресета для сохранения"
-                   KeyDown="OnNameKeyDown" />
-          <Button Grid.Column="1"
-                  Content="Сохранить"
-                  Margin="8,0,0,0"
-                  Click="OnSaveClick" />
-        </Grid>
-
-        <ListBox x:Name="PresetList"
-                 Height="200"
+        <ListBox x:Name="ProfileList"
+                 Height="220"
                  Background="{DynamicResource Brush.Elevated}"
                  BorderBrush="{DynamicResource Brush.Stroke}"
                  BorderThickness="1"
-                 Foreground="{DynamicResource Brush.Text}"
-                 SelectionChanged="OnSelectionChanged"
-                 MouseDoubleClick="OnLoadDoubleClick" />
+                 Foreground="{DynamicResource Brush.Text}" />
 
-        <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
-          <Button x:Name="LoadButton"
-                  Content="Загрузить"
-                  Click="OnLoadClick"
-                  IsEnabled="False" />
-          <Button x:Name="DeleteButton"
-                  Content="Удалить"
-                  Margin="8,0,0,0"
-                  Click="OnDeleteClick"
-                  IsEnabled="False" />
+        <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+          <Button Content="Открыть папку профилей"
+                  Click="OnOpenFolderClick" />
         </StackPanel>
-
-        <CheckBox x:Name="AutoLoadBox"
-                  Content="Загружать этот пресет при старте"
-                  Foreground="{DynamicResource Brush.Text}"
-                  Margin="0,16,0,0"
-                  IsEnabled="False"
-                  Checked="OnAutoLoadChanged"
-                  Unchecked="OnAutoLoadChanged" />
       </StackPanel>
     </Border>
   </Grid>

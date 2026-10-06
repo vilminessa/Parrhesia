@@ -11,57 +11,14 @@
              Loaded="OnGraphViewLoaded"
              Unloaded="OnGraphViewUnloaded">
   <Grid>
-    <Grid.RowDefinitions>
-      <RowDefinition Height="Auto" />
-      <RowDefinition Height="*" />
-    </Grid.RowDefinitions>
     <Grid.ColumnDefinitions>
       <ColumnDefinition Width="Auto" />
       <ColumnDefinition Width="*" />
       <ColumnDefinition Width="Auto" />
     </Grid.ColumnDefinitions>
 
-    <!-- Тулбар пресетов -->
-    <Border Grid.Row="0"
-            Grid.ColumnSpan="3"
-            Margin="14,14,14,0"
-            Background="{DynamicResource Brush.Panel}"
-            BorderBrush="{DynamicResource Brush.Stroke}"
-            BorderThickness="1"
-            CornerRadius="8"
-            Padding="12,8">
-      <Grid>
-        <Grid.ColumnDefinitions>
-          <ColumnDefinition Width="Auto" />
-          <ColumnDefinition Width="Auto" />
-          <ColumnDefinition Width="*" />
-          <ColumnDefinition Width="Auto" />
-          <ColumnDefinition Width="Auto" />
-        </Grid.ColumnDefinitions>
-
-        <TextBlock Text="Пресет"
-                   FontSize="12"
-                   Foreground="{DynamicResource Brush.TextFaint}"
-                   VerticalAlignment="Center"
-                   Margin="0,0,10,0" />
-        <ComboBox x:Name="PresetBox"
-                  Grid.Column="1"
-                  MinWidth="220"
-                  VerticalAlignment="Center"
-                  SelectionChanged="OnPresetSelected" />
-        <Button Grid.Column="3"
-                Content="Сохранить как…"
-                Click="OnSavePreset" />
-        <Button Grid.Column="4"
-                Content="Удалить"
-                Margin="8,0,0,0"
-                Click="OnDeletePreset" />
-      </Grid>
-    </Border>
-
     <!-- Инструментарий: добавление узлов -->
-    <Border Grid.Row="1"
-            Grid.Column="0"
+    <Border Grid.Column="0"
             Width="200"
             Margin="14"
             Background="{DynamicResource Brush.Panel}"
@@ -133,7 +90,6 @@
     </Border>
 
     <Grid x:Name="Viewport"
-          Grid.Row="1"
           Grid.Column="1"
           ClipToBounds="True"
           Background="{DynamicResource Brush.Deep}">
@@ -155,7 +111,6 @@
 
     <!-- Инспектор выделенного объекта -->
     <Border x:Name="InspectorPanel"
-            Grid.Row="1"
             Grid.Column="2"
             Width="276"
             Margin="0,14,14,14"

@@ -1,40 +1,58 @@
 using System.Diagnostics;
-using Parrhesia.App.Presets;
+using System.Windows.Threading;
 using Parrhesia.Audio.Devices;
 using Parrhesia.Audio.Engine;
 using Parrhesia.Core.Graph;
+using Parrhesia.Core.Profiles;
 
 namespace Parrhesia.App;
 
 /// <summary>
 /// Корневые сервисы приложения: создаются один раз в OnStartup,
-/// живут до выхода. Граф маршрутизации общий для движка и интерфейса.
+/// живут до выхода. Граф маршрутизации общий для движка и интерфейса —
+/// это состояние активного профиля.
 /// </summary>
 public static class AppServices
 {
+    private static DispatcherTimer? _autosaveTimer;
+
     public static AudioGraph Graph { get; private set; } = null!;
 
     public static IDeviceService Devices { get; private set; } = null!;
 
     public static IAudioEngine Engine { get; private set; } = null!;
 
-    public static PresetService Presets { get; private set; } = null!;
-
-    public static AppSettings Settings { get; private set; } = null!;
+    public static ProfileService Profiles { get; private set; } = null!;
 
     public static void Initialize()
     {
         Devices = new WasapiDeviceService();
-        Graph = CreateSessionGraph();
-        Engine = new WasapiAudioEngine(Graph, Devices);
-        Settings = AppSettings.Load();
-        Presets = new PresetService(Graph);
+        Graph = new AudioGraph();
+        Profiles = new ProfileService(Graph);
 
-        // Автозагрузка: при ошибке файла остаётся схема по умолчанию.
-        if (Settings.AutoLoadPreset is { } presetName)
+        if (Profiles.Count == 0)
         {
-            Presets.TryLoad(presetName, out _);
+            // Первый запуск: стартовая схема становится профилем «Основной».
+            BuildSessionGraph(Graph);
+            Profiles.CreateFromLive("Основной");
         }
+
+        if (!Profiles.ActivateInitial(out var error))
+        {
+            Trace.WriteLine("[Parrhesia] Профили: " + error);
+        }
+
+        Engine = new WasapiAudioEngine(Graph, Devices);
+
+        // Дебаунс-автосейв: правки активного профиля пишутся на диск
+        // через 1.5 с покоя (позиции при перетаскивании не бомбят записью).
+        _autosaveTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1500) };
+        _autosaveTimer.Tick += (_, _) =>
+        {
+            _autosaveTimer.Stop();
+            Profiles.SaveActive();
+        };
+        Graph.Changed += OnGraphChanged;
     }
 
     public static void StartEngine()
@@ -51,19 +69,25 @@ public static class AppServices
 
     public static void Shutdown()
     {
+        Graph.Changed -= OnGraphChanged;
+        _autosaveTimer?.Stop();
+        Profiles?.SaveActive();
         Engine?.Dispose();
         Devices?.Dispose();
     }
 
-    /// <summary>
-    /// Стартовая схема: микрофон → основная шина → наушники (устройство по умолчанию).
-    /// Остальные источники без привязок — их можно подключить, когда появятся
-    /// устройства/виртуальные endpoint'ы (Ф4).
-    /// </summary>
-    private static AudioGraph CreateSessionGraph()
+    private static void OnGraphChanged(object? sender, GraphChange e)
     {
-        var graph = new AudioGraph();
+        _autosaveTimer?.Stop();
+        _autosaveTimer?.Start();
+    }
 
+    /// <summary>
+    /// Стартовая схема первого запуска: микрофон → основная шина → наушники.
+    /// Остальные источники без привязок — виртуальные endpoint'ы появятся в Ф4.
+    /// </summary>
+    private static void BuildSessionGraph(AudioGraph graph)
+    {
         var mic = graph.AddNode("Микрофон", NodeKind.Source);
         var capture = graph.AddNode("Захват устройств", NodeKind.Source);
         var browser = graph.AddNode("Браузер", NodeKind.Source);
@@ -82,7 +106,5 @@ public static class AppServices
         graph.AddRoute(main.Id, headphones.Id, out _);
         graph.AddRoute(main.Id, stream.Id, out _);
         graph.AddRoute(stream.Id, discord.Id, out _);
-
-        return graph;
     }
 }

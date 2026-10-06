@@ -84,6 +84,9 @@ public sealed class ProfileService
         }
     }
 
+    /// <summary>Папка хранения профилей (для «открыть папку» и диагностики).</summary>
+    public string DirectoryPath => _directory;
+
     /// <summary>Список изменился: создание, закрытие, переименование.</summary>
     public event EventHandler? ProfilesChanged;
 
