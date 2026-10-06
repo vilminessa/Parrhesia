@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using Parrhesia.Core.Graph;
 
 namespace Parrhesia.App.Controls;
 
@@ -25,6 +26,18 @@ public sealed class LedMeterControl : FrameworkElement
     {
         SnapsToDevicePixels = true;
         Focusable = false;
+    }
+
+    /// <summary>Линейный пик (|x|) → шкала метра 0..1 (диапазон −60..0 дБ).</summary>
+    public static float NormalizePeak(float linear)
+    {
+        var db = Decibels.ToDb(linear);
+        if (float.IsNegativeInfinity(db) || db <= Decibels.MinDb)
+        {
+            return 0f;
+        }
+
+        return Math.Clamp((db - Decibels.MinDb) / -Decibels.MinDb, 0f, 1f);
     }
 
     /// <summary>Вертикальный (по умолчанию) или горизонтальный бар.</summary>

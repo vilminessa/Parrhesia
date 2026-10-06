@@ -99,8 +99,7 @@
     <!-- Навигация -->
     <TabControl x:Name="Tabs" Grid.Row="2" Margin="0,1,0,0">
       <TabItem Header="Микшер">
-        <views:PlaceholderView Title="Микшер"
-                               Description="Канальные полосы, фейдеры и метры — раздел в разработке." />
+        <views:MixerView />
       </TabItem>
       <TabItem Header="Схема">
         <views:GraphView />
