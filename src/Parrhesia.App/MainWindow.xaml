@@ -105,8 +105,7 @@
         <views:DevicesView />
       </TabItem>
       <TabItem Header="Настройки">
-        <views:PlaceholderView Title="Настройки"
-                               Description="Буферы, задержки и профили — раздел в разработке." />
+        <views:SettingsView />
       </TabItem>
       <TabItem Header="Диагностика">
         <views:DiagnosticsView />

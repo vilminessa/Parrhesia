@@ -1,0 +1,71 @@
+<UserControl x:Class="Parrhesia.App.Views.SettingsView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Loaded="OnLoaded"
+             Unloaded="OnUnloaded">
+  <Grid Margin="20">
+    <Border MaxWidth="720"
+            VerticalAlignment="Top"
+            Background="{DynamicResource Brush.Panel}"
+            BorderBrush="{DynamicResource Brush.Stroke}"
+            BorderThickness="1"
+            CornerRadius="8"
+            Padding="18,16">
+      <StackPanel>
+        <TextBlock Text="Пресеты"
+                   FontWeight="SemiBold"
+                   FontSize="15"
+                   Foreground="{DynamicResource Brush.Text}"
+                   Margin="0,0,0,6" />
+        <TextBlock Text="Пресет — полная копия схемы: узлы, устройства, гейны, каналы и раскладка."
+                   FontSize="12"
+                   TextWrapping="Wrap"
+                   Foreground="{DynamicResource Brush.TextDim}"
+                   Margin="0,0,0,14" />
+
+        <Grid Margin="0,0,0,10">
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*" />
+            <ColumnDefinition Width="Auto" />
+          </Grid.ColumnDefinitions>
+          <TextBox x:Name="NameBox"
+                   ToolTip="Имя пресета для сохранения"
+                   KeyDown="OnNameKeyDown" />
+          <Button Grid.Column="1"
+                  Content="Сохранить"
+                  Margin="8,0,0,0"
+                  Click="OnSaveClick" />
+        </Grid>
+
+        <ListBox x:Name="PresetList"
+                 Height="200"
+                 Background="{DynamicResource Brush.Elevated}"
+                 BorderBrush="{DynamicResource Brush.Stroke}"
+                 BorderThickness="1"
+                 Foreground="{DynamicResource Brush.Text}"
+                 SelectionChanged="OnSelectionChanged"
+                 MouseDoubleClick="OnLoadDoubleClick" />
+
+        <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+          <Button x:Name="LoadButton"
+                  Content="Загрузить"
+                  Click="OnLoadClick"
+                  IsEnabled="False" />
+          <Button x:Name="DeleteButton"
+                  Content="Удалить"
+                  Margin="8,0,0,0"
+                  Click="OnDeleteClick"
+                  IsEnabled="False" />
+        </StackPanel>
+
+        <CheckBox x:Name="AutoLoadBox"
+                  Content="Загружать этот пресет при старте"
+                  Foreground="{DynamicResource Brush.Text}"
+                  Margin="0,16,0,0"
+                  IsEnabled="False"
+                  Checked="OnAutoLoadChanged"
+                  Unchecked="OnAutoLoadChanged" />
+      </StackPanel>
+    </Border>
+  </Grid>
+</UserControl>

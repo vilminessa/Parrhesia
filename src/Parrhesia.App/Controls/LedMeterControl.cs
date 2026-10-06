@@ -1,4 +1,5 @@
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Media;
 
 namespace Parrhesia.App.Controls;
@@ -18,11 +19,28 @@ public sealed class LedMeterControl : FrameworkElement
 
     private float _value;
     private float _peak;
+    private Orientation _orientation = Orientation.Vertical;
 
     public LedMeterControl()
     {
         SnapsToDevicePixels = true;
         Focusable = false;
+    }
+
+    /// <summary>Вертикальный (по умолчанию) или горизонтальный бар.</summary>
+    public Orientation Orientation
+    {
+        get => _orientation;
+        set
+        {
+            if (_orientation == value)
+            {
+                return;
+            }
+
+            _orientation = value;
+            InvalidateVisual();
+        }
     }
 
     /// <summary>Текущий уровень, 0..1.</summary>
@@ -71,16 +89,43 @@ public sealed class LedMeterControl : FrameworkElement
         dc.DrawRoundedRectangle(MeterPalette.Off, null, new Rect(0, 0, width, height), 3, 3);
 
         var totalGap = SegmentGap * (SegmentCount - 1);
+        var lit = (int)MathF.Round(_value * SegmentCount);
+        var peakIndex = _peak <= 0f
+            ? -1
+            : Math.Clamp((int)MathF.Round(_peak * SegmentCount), 1, SegmentCount);
+
+        if (Orientation == Orientation.Horizontal)
+        {
+            var segmentWidth = (width - totalGap) / SegmentCount;
+            if (segmentWidth <= 0)
+            {
+                return;
+            }
+
+            var x = 0.0;
+            for (var i = 1; i <= SegmentCount; i++)
+            {
+                var rect = new Rect(x, 0, segmentWidth, height);
+                if (i == peakIndex)
+                {
+                    dc.DrawRectangle(MeterPalette.Peak, null, rect);
+                }
+                else if (i <= lit)
+                {
+                    dc.DrawRectangle(ColorForSegment(i), null, rect);
+                }
+
+                x += segmentWidth + SegmentGap;
+            }
+
+            return;
+        }
+
         var segmentHeight = (height - totalGap) / SegmentCount;
         if (segmentHeight <= 0)
         {
             return;
         }
-
-        var lit = (int)MathF.Round(_value * SegmentCount);
-        var peakIndex = _peak <= 0f
-            ? -1
-            : Math.Clamp((int)MathF.Round(_peak * SegmentCount), 1, SegmentCount);
 
         var y = height;
         for (var i = 1; i <= SegmentCount; i++)

@@ -3,6 +3,7 @@ using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Media.Effects;
 using System.Windows.Shapes;
+using Parrhesia.App.Controls;
 using Parrhesia.Core.Graph;
 
 namespace Parrhesia.App.Views.Graph;
@@ -32,6 +33,9 @@ internal sealed class NodeElement : Border
     private readonly TextBlock _title;
     private readonly Border[] _inPorts = new Border[2];
     private readonly Border[] _outPorts = new Border[2];
+
+    /// <summary>Мини-метр уровня узла (заполняется снаружи через render-тикер).</summary>
+    public LedMeterControl Meter { get; }
 
     public NodeElement(AudioNode node)
     {
@@ -78,6 +82,22 @@ internal sealed class NodeElement : Border
         header.Children.Add(kindLabel);
         header.Children.Add(_title);
 
+        Meter = new LedMeterControl
+        {
+            Orientation = Orientation.Horizontal,
+            Height = 5,
+            Margin = new Thickness(0, 6, 0, 0),
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+        };
+
+        var bodyContent = new Grid();
+        bodyContent.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        bodyContent.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        Grid.SetRow(header, 0);
+        Grid.SetRow(Meter, 1);
+        bodyContent.Children.Add(header);
+        bodyContent.Children.Add(Meter);
+
         var body = new Border
         {
             Background = ResolveBrush("Brush.Elevated", "#FF1B1F26"),
@@ -86,7 +106,7 @@ internal sealed class NodeElement : Border
             CornerRadius = new CornerRadius(8),
             Padding = new Thickness(11, 8, 11, 8),
             MinHeight = 38,
-            Child = header,
+            Child = bodyContent,
         };
 
         var inPanel = BuildPortColumn(_inPorts, isInput: true);

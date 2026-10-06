@@ -3,6 +3,7 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
+using Parrhesia.App.Rendering;
 using Parrhesia.App.Views.Graph;
 using Parrhesia.Audio.Devices;
 using Parrhesia.Audio.Engine;
@@ -506,6 +507,113 @@ public partial class GraphView : UserControl
     private Point ViewportToWorld(Point viewport) => new(
         (viewport.X - _translate.X) / _scale,
         (viewport.Y - _translate.Y) / _scale);
+
+    // ===== Пресеты =====
+
+    private bool _loadingPresets;
+
+    private void OnGraphViewLoaded(object sender, RoutedEventArgs e)
+    {
+        RefreshPresetList();
+        RenderTicker.Subscribe(OnRenderTick);
+    }
+
+    private void OnGraphViewUnloaded(object sender, RoutedEventArgs e)
+    {
+        RenderTicker.Unsubscribe(OnRenderTick);
+    }
+
+    private void RefreshPresetList(string? selectName = null)
+    {
+        _loadingPresets = true;
+        try
+        {
+            var names = AppServices.Presets.List();
+            PresetBox.ItemsSource = names;
+            if (selectName is not null)
+            {
+                PresetBox.SelectedItem = names.FirstOrDefault(n =>
+                    string.Equals(n, selectName, StringComparison.OrdinalIgnoreCase));
+            }
+        }
+        finally
+        {
+            _loadingPresets = false;
+        }
+    }
+
+    private void OnPresetSelected(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loadingPresets || PresetBox.SelectedItem is not string name)
+        {
+            return;
+        }
+
+        if (!AppServices.Presets.TryLoad(name, out var error))
+        {
+            MessageBox.Show(error, "Пресет", MessageBoxButton.OK, MessageBoxImage.Warning);
+            RefreshPresetList();
+        }
+    }
+
+    private void OnSavePreset(object sender, RoutedEventArgs e)
+    {
+        var owner = Window.GetWindow(this);
+        if (PromptDialog.Show(owner, "Сохранить пресет", PresetBox.SelectedItem as string, out var name))
+        {
+            AppServices.Presets.Save(name);
+            RefreshPresetList(selectName: name);
+        }
+    }
+
+    private void OnDeletePreset(object sender, RoutedEventArgs e)
+    {
+        if (PresetBox.SelectedItem is not string name)
+        {
+            return;
+        }
+
+        var answer = MessageBox.Show(
+            $"Удалить пресет «{name}»?",
+            "Пресет",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Question);
+        if (answer != MessageBoxResult.Yes)
+        {
+            return;
+        }
+
+        AppServices.Presets.Delete(name);
+        if (AppServices.Settings.AutoLoadPreset == name)
+        {
+            AppServices.Settings.AutoLoadPreset = null;
+            AppServices.Settings.Save();
+        }
+
+        RefreshPresetList();
+    }
+
+    // ===== Мини-метры на узлах =====
+
+    private void OnRenderTick(double now, double dt)
+    {
+        foreach (var element in _elements.Values)
+        {
+            element.Meter.Value = NormalizePeak(AppServices.Engine.GetPeak(element.Node.Id));
+        }
+    }
+
+    private static float NormalizePeak(float peak)
+    {
+        var db = Decibels.ToDb(peak);
+        if (float.IsNegativeInfinity(db) || db <= Decibels.MinDb)
+        {
+            return 0f;
+        }
+
+        // −60..0 дБ → 0..1
+        return Math.Clamp((db - Decibels.MinDb) / -Decibels.MinDb, 0f, 1f);
+    }
 
     // ===== Инспектор =====
 

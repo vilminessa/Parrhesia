@@ -62,6 +62,8 @@ public sealed class WasapiAudioEngine : IAudioEngine
 
     public EngineStatus Status => BuildStatus();
 
+    public float GetPeak(Guid nodeId) => _processor.GetPeak(nodeId);
+
     public void Start()
     {
         lock (_gate)

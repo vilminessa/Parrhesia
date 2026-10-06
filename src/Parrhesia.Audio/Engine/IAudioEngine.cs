@@ -13,6 +13,9 @@ public interface IAudioEngine : IDisposable
     /// <summary>Текущее состояние (потокобезопасный снимок, xrun-счётчики включены).</summary>
     EngineStatus Status { get; }
 
+    /// <summary>Пик (linear, |x|) последнего блока узла — для метров UI. Потокобезопасно.</summary>
+    float GetPeak(Guid nodeId);
+
     event EventHandler<EngineLogEntry>? Log;
 
     /// <summary>Поднимается при старте/остановке. Счётчики опрашиваются через <see cref="Status"/>.</summary>

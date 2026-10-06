@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Parrhesia.App.Presets;
 using Parrhesia.Audio.Devices;
 using Parrhesia.Audio.Engine;
 using Parrhesia.Core.Graph;
@@ -17,11 +18,23 @@ public static class AppServices
 
     public static IAudioEngine Engine { get; private set; } = null!;
 
+    public static PresetService Presets { get; private set; } = null!;
+
+    public static AppSettings Settings { get; private set; } = null!;
+
     public static void Initialize()
     {
         Devices = new WasapiDeviceService();
         Graph = CreateSessionGraph();
         Engine = new WasapiAudioEngine(Graph, Devices);
+        Settings = AppSettings.Load();
+        Presets = new PresetService(Graph);
+
+        // Автозагрузка: при ошибке файла остаётся схема по умолчанию.
+        if (Settings.AutoLoadPreset is { } presetName)
+        {
+            Presets.TryLoad(presetName, out _);
+        }
     }
 
     public static void StartEngine()
