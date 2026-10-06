@@ -3,6 +3,8 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using Parrhesia.App.Views.Graph;
+using Parrhesia.Audio.Devices;
+using Parrhesia.Audio.Engine;
 using Parrhesia.Core.Graph;
 
 namespace Parrhesia.App.Views;
@@ -42,6 +44,11 @@ public partial class GraphView : UserControl
 
     /// <summary>Глушит реакцию на события графа во время внутренних операций Rebuild.</summary>
     private bool _suppressChanges;
+
+    /// <summary>Глушит обработчики инспектора при программном обновлении полей.</summary>
+    private bool _syncing;
+
+    private Guid _deviceNodeId = Guid.Empty;
 
     private sealed record PortHit(NodeElement Element, bool Output, int Channel);
 
@@ -349,6 +356,8 @@ public partial class GraphView : UserControl
             _cableLayer.SelectedRoute = null;
             _cableLayer.InvalidateVisual();
         }
+
+        RefreshInspector();
     }
 
     private void SelectRoute(Route? route)
@@ -358,9 +367,325 @@ public partial class GraphView : UserControl
         _selectedRoute = route;
         _cableLayer.SelectedRoute = route;
         _cableLayer.InvalidateVisual();
+        RefreshInspector();
     }
 
     private void ClearSelection() => SelectNode(null);
+
+    // ===== Инспектор =====
+
+    private sealed record DeviceChoice(string Name, string? Value);
+
+    private void RefreshInspector()
+    {
+        if (_selectedNode is { } element && _graph.FindNode(element.Node.Id) is { } node)
+        {
+            ShowNodeInspector(node);
+            return;
+        }
+
+        if (_selectedRoute is { } route && _graph.Routes.Contains(route))
+        {
+            ShowRouteInspector(route);
+            return;
+        }
+
+        HideInspector();
+    }
+
+    private void HideInspector()
+    {
+        InspectorPanel.Visibility = Visibility.Collapsed;
+        NodeSection.Visibility = Visibility.Collapsed;
+        RouteSection.Visibility = Visibility.Collapsed;
+        _deviceNodeId = Guid.Empty;
+    }
+
+    private void ShowNodeInspector(AudioNode node)
+    {
+        _syncing = true;
+        try
+        {
+            InspectorTitle.Text = node.Kind switch
+            {
+                NodeKind.Source => "Источник",
+                NodeKind.Bus => "Шина",
+                _ => "Назначение",
+            };
+            NodeSection.Visibility = Visibility.Visible;
+            RouteSection.Visibility = Visibility.Collapsed;
+            InspectorPanel.Visibility = Visibility.Visible;
+
+            if (!NodeNameBox.IsKeyboardFocused && NodeNameBox.Text != node.Name)
+            {
+                NodeNameBox.Text = node.Name;
+            }
+
+            SyncDeviceChoices(node);
+
+            var db = Decibels.ToDb(node.Gain);
+            NodeGainSlider.Value = float.IsNegativeInfinity(db) || db < Decibels.MinDb
+                ? Decibels.MinDb
+                : db;
+            UpdateGainText(NodeGainText, db);
+            NodeMuteBox.IsChecked = node.Mute;
+            NodeSoloBox.IsChecked = node.Solo;
+        }
+        finally
+        {
+            _syncing = false;
+        }
+    }
+
+    private void ShowRouteInspector(Route route)
+    {
+        _syncing = true;
+        try
+        {
+            InspectorTitle.Text = "Кабель";
+            NodeSection.Visibility = Visibility.Collapsed;
+            RouteSection.Visibility = Visibility.Visible;
+            InspectorPanel.Visibility = Visibility.Visible;
+
+            var from = _graph.FindNode(route.FromId)?.Name ?? "?";
+            var to = _graph.FindNode(route.ToId)?.Name ?? "?";
+            RouteEndpoints.Text = $"«{from}» → «{to}»";
+
+            ChLeftLeft.IsChecked = route.Map.Has(ChannelMap.Left, ChannelMap.Left);
+            ChLeftRight.IsChecked = route.Map.Has(ChannelMap.Left, ChannelMap.Right);
+            ChRightLeft.IsChecked = route.Map.Has(ChannelMap.Right, ChannelMap.Left);
+            ChRightRight.IsChecked = route.Map.Has(ChannelMap.Right, ChannelMap.Right);
+
+            var db = Decibels.ToDb(route.Gain);
+            RouteGainSlider.Value = float.IsNegativeInfinity(db) || db < Decibels.MinDb
+                ? Decibels.MinDb
+                : db;
+            UpdateGainText(RouteGainText, db);
+            RouteEnabledBox.IsChecked = route.Enabled;
+        }
+        finally
+        {
+            _syncing = false;
+        }
+    }
+
+    /// <summary>
+    /// Список устройств для узла. Перестраивается только при смене узла:
+    /// перечисление устройств — COM-вызов, его нельзя делать на каждой тяге гейна.
+    /// </summary>
+    private void SyncDeviceChoices(AudioNode node)
+    {
+        if (node.Kind == NodeKind.Bus)
+        {
+            NodeDeviceBox.IsEnabled = false;
+            if (NodeDeviceBox.ItemsSource is not null)
+            {
+                NodeDeviceBox.ItemsSource = null;
+            }
+
+            _deviceNodeId = node.Id;
+            return;
+        }
+
+        if (_deviceNodeId != node.Id || NodeDeviceBox.ItemsSource is not List<DeviceChoice>)
+        {
+            var choices = BuildDeviceChoices(node);
+            NodeDeviceBox.ItemsSource = choices;
+            _deviceNodeId = node.Id;
+        }
+
+        if (NodeDeviceBox.ItemsSource is List<DeviceChoice> items)
+        {
+            var target = items.FirstOrDefault(c => c.Value == node.DeviceId) ?? items[0];
+            if (!ReferenceEquals(NodeDeviceBox.SelectedItem, target))
+            {
+                NodeDeviceBox.SelectedItem = target;
+            }
+        }
+
+        NodeDeviceBox.IsEnabled = true;
+    }
+
+    private List<DeviceChoice> BuildDeviceChoices(AudioNode node)
+    {
+        var choices = new List<DeviceChoice> { new("(не привязан)", null) };
+
+        if (node.Kind == NodeKind.Source)
+        {
+            choices.Add(new("По умолчанию (захват)", DeviceSpec.DefaultCapture));
+            choices.Add(new("Loopback: по умолчанию", DeviceSpec.DefaultLoopback));
+            foreach (var device in AppServices.Devices.GetDevices(DeviceFlow.Capture))
+            {
+                choices.Add(new(device.Name, device.Id));
+            }
+
+            foreach (var device in AppServices.Devices.GetDevices(DeviceFlow.Render))
+            {
+                choices.Add(new("Loopback: " + device.Name, "loopback:" + device.Id));
+            }
+        }
+        else
+        {
+            choices.Add(new("По умолчанию (вывод)", DeviceSpec.DefaultRender));
+            foreach (var device in AppServices.Devices.GetDevices(DeviceFlow.Render))
+            {
+                choices.Add(new(device.Name, device.Id));
+            }
+        }
+
+        return choices;
+    }
+
+    private static void UpdateGainText(TextBlock target, float db) =>
+        target.Text = float.IsNegativeInfinity(db) ? "−∞ дБ" : db.ToString("0.0") + " дБ";
+
+    private void CommitNodeName()
+    {
+        if (_syncing || _selectedNode is not { } element)
+        {
+            return;
+        }
+
+        var name = NodeNameBox.Text.Trim();
+        if (name.Length > 0 && name != element.Node.Name)
+        {
+            _graph.RenameNode(element.Node.Id, name);
+        }
+    }
+
+    private void OnNodeNameCommit(object sender, RoutedEventArgs e) => CommitNodeName();
+
+    private void OnNodeNameKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Enter)
+        {
+            return;
+        }
+
+        CommitNodeName();
+        Keyboard.ClearFocus();
+        e.Handled = true;
+    }
+
+    private void OnNodeDeviceChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_syncing || _selectedNode is not { } element)
+        {
+            return;
+        }
+
+        if (NodeDeviceBox.SelectedItem is DeviceChoice choice &&
+            _graph.FindNode(element.Node.Id) is { } node &&
+            node.DeviceId != choice.Value)
+        {
+            _graph.SetNodeDevice(node.Id, choice.Value);
+        }
+    }
+
+    private void OnNodeGainChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (_syncing)
+        {
+            return;
+        }
+
+        UpdateGainText(NodeGainText, (float)e.NewValue);
+        if (_selectedNode is { } element)
+        {
+            _graph.SetNodeGain(element.Node.Id, Decibels.FromDb((float)e.NewValue));
+        }
+    }
+
+    private void OnNodeMuteChanged(object sender, RoutedEventArgs e)
+    {
+        if (_syncing || _selectedNode is not { } element)
+        {
+            return;
+        }
+
+        _graph.SetNodeMute(element.Node.Id, NodeMuteBox.IsChecked == true);
+    }
+
+    private void OnNodeSoloChanged(object sender, RoutedEventArgs e)
+    {
+        if (_syncing || _selectedNode is not { } element)
+        {
+            return;
+        }
+
+        _graph.SetNodeSolo(element.Node.Id, NodeSoloBox.IsChecked == true);
+    }
+
+    private void OnDeleteNodeClick(object sender, RoutedEventArgs e)
+    {
+        if (_selectedNode is { } element)
+        {
+            _graph.RemoveNode(element.Node.Id);
+        }
+    }
+
+    private void OnChannelChanged(object sender, RoutedEventArgs e)
+    {
+        if (_syncing || _selectedRoute is not { } route)
+        {
+            return;
+        }
+
+        byte bits = 0;
+        if (ChLeftLeft.IsChecked == true)
+        {
+            bits |= 1 << 0;
+        }
+
+        if (ChLeftRight.IsChecked == true)
+        {
+            bits |= 1 << 1;
+        }
+
+        if (ChRightLeft.IsChecked == true)
+        {
+            bits |= 1 << 2;
+        }
+
+        if (ChRightRight.IsChecked == true)
+        {
+            bits |= 1 << 3;
+        }
+
+        _graph.SetRouteMap(route.FromId, route.ToId, new ChannelMap(bits));
+    }
+
+    private void OnRouteGainChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (_syncing)
+        {
+            return;
+        }
+
+        UpdateGainText(RouteGainText, (float)e.NewValue);
+        if (_selectedRoute is { } route)
+        {
+            _graph.SetRouteGain(route.FromId, route.ToId, Decibels.FromDb((float)e.NewValue));
+        }
+    }
+
+    private void OnRouteEnabledChanged(object sender, RoutedEventArgs e)
+    {
+        if (_syncing || _selectedRoute is not { } route)
+        {
+            return;
+        }
+
+        _graph.SetRouteEnabled(route.FromId, route.ToId, RouteEnabledBox.IsChecked == true);
+    }
+
+    private void OnDeleteRouteClick(object sender, RoutedEventArgs e)
+    {
+        if (_selectedRoute is { } route)
+        {
+            _graph.RemoveRoute(route.FromId, route.ToId);
+        }
+    }
 
     // ===== Хит-тесты =====
 
@@ -449,6 +774,7 @@ public partial class GraphView : UserControl
         }
 
         _cableLayer.InvalidateVisual();
+        RefreshInspector();
     }
 
     private void Rebuild()

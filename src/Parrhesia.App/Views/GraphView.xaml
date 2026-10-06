@@ -8,20 +8,189 @@
              MouseUp="OnMouseUp"
              PreviewKeyDown="OnKeyDown"
              PreviewKeyUp="OnKeyUp">
-  <Grid x:Name="Viewport" ClipToBounds="True" Background="{DynamicResource Brush.Deep}">
-    <Canvas x:Name="World" />
+  <Grid>
+    <Grid.ColumnDefinitions>
+      <ColumnDefinition Width="*" />
+      <ColumnDefinition Width="Auto" />
+    </Grid.ColumnDefinitions>
 
-    <Border HorizontalAlignment="Left"
-            VerticalAlignment="Bottom"
-            Margin="14"
+    <Grid x:Name="Viewport"
+          Grid.Column="0"
+          ClipToBounds="True"
+          Background="{DynamicResource Brush.Deep}">
+      <Canvas x:Name="World" />
+
+      <Border HorizontalAlignment="Left"
+              VerticalAlignment="Bottom"
+              Margin="14"
+              Background="{DynamicResource Brush.Panel}"
+              BorderBrush="{DynamicResource Brush.Stroke}"
+              BorderThickness="1"
+              CornerRadius="6"
+              Padding="11,7">
+        <TextBlock Text="Колесо — масштаб · Пробел/СКМ — панорама · Тяни от порта L/R — канал · Del — удалить"
+                   FontSize="11"
+                   Foreground="{DynamicResource Brush.TextDim}" />
+      </Border>
+    </Grid>
+
+    <!-- Инспектор выделенного объекта -->
+    <Border x:Name="InspectorPanel"
+            Grid.Column="1"
+            Width="276"
+            Margin="0,14,14,14"
             Background="{DynamicResource Brush.Panel}"
             BorderBrush="{DynamicResource Brush.Stroke}"
             BorderThickness="1"
-            CornerRadius="6"
-            Padding="11,7">
-      <TextBlock Text="Колесо — масштаб · Пробел/СКМ — панорама · Тяни от порта L/R — канал · Del — удалить"
-                 FontSize="11"
-                 Foreground="{DynamicResource Brush.TextDim}" />
+            CornerRadius="8"
+            Padding="16,14"
+            Visibility="Collapsed">
+      <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel>
+          <TextBlock x:Name="InspectorTitle"
+                     Text="Инспектор"
+                     FontWeight="SemiBold"
+                     FontSize="14"
+                     Foreground="{DynamicResource Brush.Text}"
+                     Margin="0,0,0,12" />
+
+          <!-- Свойства узла -->
+          <StackPanel x:Name="NodeSection" Visibility="Collapsed">
+            <TextBlock Text="Имя"
+                       FontSize="11"
+                       Foreground="{DynamicResource Brush.TextFaint}"
+                       Margin="0,0,0,4" />
+            <TextBox x:Name="NodeNameBox"
+                     LostFocus="OnNodeNameCommit"
+                     KeyDown="OnNodeNameKeyDown" />
+
+            <TextBlock Text="Устройство"
+                       FontSize="11"
+                       Foreground="{DynamicResource Brush.TextFaint}"
+                       Margin="0,12,0,4" />
+            <ComboBox x:Name="NodeDeviceBox"
+                      DisplayMemberPath="Name"
+                      SelectionChanged="OnNodeDeviceChanged" />
+
+            <TextBlock Text="Гейн"
+                       FontSize="11"
+                       Foreground="{DynamicResource Brush.TextFaint}"
+                       Margin="0,12,0,4" />
+            <Grid>
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+              </Grid.ColumnDefinitions>
+              <Slider x:Name="NodeGainSlider"
+                      Minimum="-60"
+                      Maximum="6"
+                      ValueChanged="OnNodeGainChanged"
+                      VerticalAlignment="Center" />
+              <TextBlock x:Name="NodeGainText"
+                         Grid.Column="1"
+                         Width="58"
+                         TextAlignment="Right"
+                         FontSize="12"
+                         Foreground="{DynamicResource Brush.Cyan}"
+                         VerticalAlignment="Center" />
+            </Grid>
+
+            <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+              <CheckBox x:Name="NodeMuteBox"
+                        Content="Mute"
+                        Foreground="{DynamicResource Brush.Text}"
+                        Checked="OnNodeMuteChanged"
+                        Unchecked="OnNodeMuteChanged"
+                        Margin="0,0,16,0" />
+              <CheckBox x:Name="NodeSoloBox"
+                        Content="Solo"
+                        Foreground="{DynamicResource Brush.Text}"
+                        Checked="OnNodeSoloChanged"
+                        Unchecked="OnNodeSoloChanged" />
+            </StackPanel>
+
+            <Button Content="Удалить узел"
+                    HorizontalAlignment="Left"
+                    Margin="0,16,0,0"
+                    Click="OnDeleteNodeClick" />
+          </StackPanel>
+
+          <!-- Свойства кабеля -->
+          <StackPanel x:Name="RouteSection" Visibility="Collapsed">
+            <TextBlock x:Name="RouteEndpoints"
+                       FontSize="12"
+                       TextWrapping="Wrap"
+                       Foreground="{DynamicResource Brush.TextDim}"
+                       Margin="0,0,0,12" />
+
+            <TextBlock Text="Каналы"
+                       FontSize="11"
+                       Foreground="{DynamicResource Brush.TextFaint}"
+                       Margin="0,0,0,6" />
+            <UniformGrid Columns="2">
+              <CheckBox x:Name="ChLeftLeft"
+                        Content="L → L"
+                        Foreground="{DynamicResource Brush.Text}"
+                        Checked="OnChannelChanged"
+                        Unchecked="OnChannelChanged"
+                        Margin="0,2,8,2" />
+              <CheckBox x:Name="ChLeftRight"
+                        Content="L → R"
+                        Foreground="{DynamicResource Brush.Text}"
+                        Checked="OnChannelChanged"
+                        Unchecked="OnChannelChanged"
+                        Margin="0,2,8,2" />
+              <CheckBox x:Name="ChRightLeft"
+                        Content="R → L"
+                        Foreground="{DynamicResource Brush.Text}"
+                        Checked="OnChannelChanged"
+                        Unchecked="OnChannelChanged"
+                        Margin="0,2,8,2" />
+              <CheckBox x:Name="ChRightRight"
+                        Content="R → R"
+                        Foreground="{DynamicResource Brush.Text}"
+                        Checked="OnChannelChanged"
+                        Unchecked="OnChannelChanged"
+                        Margin="0,2,8,2" />
+            </UniformGrid>
+
+            <TextBlock Text="Гейн"
+                       FontSize="11"
+                       Foreground="{DynamicResource Brush.TextFaint}"
+                       Margin="0,12,0,4" />
+            <Grid>
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+              </Grid.ColumnDefinitions>
+              <Slider x:Name="RouteGainSlider"
+                      Minimum="-60"
+                      Maximum="6"
+                      ValueChanged="OnRouteGainChanged"
+                      VerticalAlignment="Center" />
+              <TextBlock x:Name="RouteGainText"
+                         Grid.Column="1"
+                         Width="58"
+                         TextAlignment="Right"
+                         FontSize="12"
+                         Foreground="{DynamicResource Brush.Cyan}"
+                         VerticalAlignment="Center" />
+            </Grid>
+
+            <CheckBox x:Name="RouteEnabledBox"
+                      Content="Маршрут включён"
+                      Foreground="{DynamicResource Brush.Text}"
+                      Margin="0,12,0,0"
+                      Checked="OnRouteEnabledChanged"
+                      Unchecked="OnRouteEnabledChanged" />
+
+            <Button Content="Удалить кабель"
+                    HorizontalAlignment="Left"
+                    Margin="0,16,0,0"
+                    Click="OnDeleteRouteClick" />
+          </StackPanel>
+        </StackPanel>
+      </ScrollViewer>
     </Border>
   </Grid>
 </UserControl>
