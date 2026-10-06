@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Parrhesia.App/Parrhesia.App.csproj" />
+    <Project Path="src/Parrhesia.Audio/Parrhesia.Audio.csproj" />
+    <Project Path="src/Parrhesia.Core/Parrhesia.Core.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Parrhesia.Core.Tests/Parrhesia.Core.Tests.csproj" />
+  </Folder>
+</Solution>
