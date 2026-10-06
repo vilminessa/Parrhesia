@@ -19,7 +19,7 @@
             BorderThickness="1"
             CornerRadius="6"
             Padding="11,7">
-      <TextBlock Text="Колесо — масштаб · Пробел или средняя кнопка — панорама · Del — удалить · Esc — снять выделение"
+      <TextBlock Text="Колесо — масштаб · Пробел/СКМ — панорама · Тяни от порта L/R — канал · Del — удалить"
                  FontSize="11"
                  Foreground="{DynamicResource Brush.TextDim}" />
     </Border>

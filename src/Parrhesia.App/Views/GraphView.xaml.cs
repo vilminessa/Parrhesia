@@ -43,9 +43,9 @@ public partial class GraphView : UserControl
     /// <summary>Глушит реакцию на события графа во время внутренних операций Rebuild.</summary>
     private bool _suppressChanges;
 
-    private sealed record PortHit(NodeElement Element, bool Output);
+    private sealed record PortHit(NodeElement Element, bool Output, int Channel);
 
-    private sealed record CableDrag(Guid NodeId, bool FromOutput);
+    private sealed record CableDrag(Guid NodeId, bool FromOutput, int Channel);
 
     public GraphView()
     {
@@ -61,8 +61,10 @@ public partial class GraphView : UserControl
         _cableLayer = new CableLayer
         {
             Routes = _graph.Routes,
-            GetOutputPoint = id => _elements.TryGetValue(id, out var element) ? element.OutputPortCenter : null,
-            GetInputPoint = id => _elements.TryGetValue(id, out var element) ? element.InputPortCenter : null,
+            GetOutputPoint = (id, channel) =>
+                _elements.TryGetValue(id, out var element) ? element.OutputPortCenter(channel) : null,
+            GetInputPoint = (id, channel) =>
+                _elements.TryGetValue(id, out var element) ? element.InputPortCenter(channel) : null,
         };
         World.Children.Add(_cableLayer);
 
@@ -246,10 +248,10 @@ public partial class GraphView : UserControl
 
     private void StartCableDrag(PortHit origin, Point world)
     {
-        _cableDrag = new CableDrag(origin.Element.Node.Id, origin.Output);
+        _cableDrag = new CableDrag(origin.Element.Node.Id, origin.Output, origin.Channel);
         _cableLayer.TempFrom = origin.Output
-            ? origin.Element.OutputPortCenter
-            : origin.Element.InputPortCenter;
+            ? origin.Element.OutputPortCenter(origin.Channel)
+            : origin.Element.InputPortCenter(origin.Channel);
         _cableLayer.TempTo = world;
         _cableLayer.TempValid = false;
         CaptureMouse();
@@ -268,10 +270,15 @@ public partial class GraphView : UserControl
             return;
         }
 
-        var (from, to) = drag.FromOutput
-            ? (drag.NodeId, target.Element.Node.Id)
-            : (target.Element.Node.Id, drag.NodeId);
-        _graph.AddRoute(from, to, out _);
+        // Тянем из выхода → подключаем к конкретному входу, и наоборот.
+        if (drag.FromOutput)
+        {
+            _graph.AddRoute(drag.NodeId, drag.Channel, target.Element.Node.Id, target.Channel, out _);
+        }
+        else
+        {
+            _graph.AddRoute(target.Element.Node.Id, target.Channel, drag.NodeId, drag.Channel, out _);
+        }
     }
 
     private void EndCableDrag()
@@ -298,7 +305,11 @@ public partial class GraphView : UserControl
             element.ClearPortHighlights();
             if (Validate(drag, element.Node.Id) == RouteError.None)
             {
-                element.SetPortHighlight(!drag.FromOutput, PortHighlight.Valid);
+                // Цель — противоположная сторона узла; любой канал принимается.
+                for (var channel = ChannelMap.Left; channel <= ChannelMap.Right; channel++)
+                {
+                    element.SetPortHighlight(!drag.FromOutput, channel, PortHighlight.Valid);
+                }
             }
         }
 
@@ -309,6 +320,7 @@ public partial class GraphView : UserControl
             var hoverValid = error == RouteError.None;
             hovered.Element.SetPortHighlight(
                 hovered.Output,
+                hovered.Channel,
                 hoverValid ? PortHighlight.Valid : PortHighlight.Invalid);
             _cableLayer.TempValid = hoverValid;
         }
@@ -352,23 +364,33 @@ public partial class GraphView : UserControl
 
     // ===== Хит-тесты =====
 
+    /// <summary>Ближайший порт в радиусе (каналы стоят столбиком — ближайший выигрывает).</summary>
     private PortHit? FindPort(Point world)
     {
         var radius = PortHitRadius * _cableLayer.InverseScale;
-        foreach (var element in _elements.Values)
-        {
-            if (Distance(element.InputPortCenter, world) <= radius)
-            {
-                return new PortHit(element, Output: false);
-            }
+        PortHit? best = null;
+        var bestDistance = radius;
 
-            if (Distance(element.OutputPortCenter, world) <= radius)
+        void Consider(Point portCenter, NodeElement element, bool output, int channel)
+        {
+            var distance = Distance(portCenter, world);
+            if (distance <= bestDistance)
             {
-                return new PortHit(element, Output: true);
+                bestDistance = distance;
+                best = new PortHit(element, output, channel);
             }
         }
 
-        return null;
+        foreach (var element in _elements.Values)
+        {
+            for (var channel = ChannelMap.Left; channel <= ChannelMap.Right; channel++)
+            {
+                Consider(element.InputPortCenter(channel), element, output: false, channel);
+                Consider(element.OutputPortCenter(channel), element, output: true, channel);
+            }
+        }
+
+        return best;
     }
 
     private NodeElement? FindNodeAt(Point world)

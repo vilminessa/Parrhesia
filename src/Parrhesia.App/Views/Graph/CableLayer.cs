@@ -5,9 +5,10 @@ using Parrhesia.Core.Graph;
 namespace Parrhesia.App.Views.Graph;
 
 /// <summary>
-/// Слой отрисовки кабелей (в координатах мира): все маршруты — кривыми безье,
-/// плюс «резиновый» кабель во время перетаскивания. Hit-test кабелей — по расстоянию
-/// до кривой. Рисуется одним проходом OnRender.
+/// Слой отрисовки кабелей (координаты мира): маршрут рисуется одной жилой
+/// на каждую соединённую пару каналов (стерео = две параллельные жилы,
+/// кросс = пересечение к конкретным портам). Hit-test — по расстоянию
+/// до любой жилы маршрута. Один проход OnRender.
 /// </summary>
 internal sealed class CableLayer : FrameworkElement
 {
@@ -39,14 +40,14 @@ internal sealed class CableLayer : FrameworkElement
     /// <summary>1/масштаб: радиус hit-test кабеля задаётся в экранных пикселях.</summary>
     public double InverseScale { get; set; } = 1;
 
-    public Func<Guid, Point?>? GetOutputPoint { get; set; }
+    public Func<Guid, int, Point?>? GetOutputPoint { get; set; }
 
-    public Func<Guid, Point?>? GetInputPoint { get; set; }
+    public Func<Guid, int, Point?>? GetInputPoint { get; set; }
 
     /// <summary>Кабель под точкой (координаты мира) или null.</summary>
     public Route? HitTest(Point worldPoint)
     {
-        if (Routes is null)
+        if (Routes is null || GetOutputPoint is null || GetInputPoint is null)
         {
             return null;
         }
@@ -58,23 +59,20 @@ internal sealed class CableLayer : FrameworkElement
 
         foreach (var route in Routes)
         {
-            if (GetOutputPoint?.Invoke(route.FromId) is not { } from ||
-                GetInputPoint?.Invoke(route.ToId) is not { } to)
+            foreach (var (from, to) in Strands(route))
             {
-                continue;
-            }
-
-            var (c1, c2) = ControlPoints(from, to);
-            for (var i = 0; i <= HitTestSamples; i++)
-            {
-                var p = Bezier(from, c1, c2, to, i / (double)HitTestSamples);
-                var dx = p.X - worldPoint.X;
-                var dy = p.Y - worldPoint.Y;
-                var distance = dx * dx + dy * dy;
-                if (distance < bestDistance)
+                var (c1, c2) = ControlPoints(from, to);
+                for (var i = 0; i <= HitTestSamples; i++)
                 {
-                    bestDistance = distance;
-                    best = route;
+                    var p = Bezier(from, c1, c2, to, i / (double)HitTestSamples);
+                    var dx = p.X - worldPoint.X;
+                    var dy = p.Y - worldPoint.Y;
+                    var distance = dx * dx + dy * dy;
+                    if (distance < bestDistance)
+                    {
+                        bestDistance = distance;
+                        best = route;
+                    }
                 }
             }
         }
@@ -117,6 +115,25 @@ internal sealed class CableLayer : FrameworkElement
         }
     }
 
+    /// <summary>Жилы маршрута: одна на соединённую пару каналов.</summary>
+    private IEnumerable<(Point From, Point To)> Strands(Route route)
+    {
+        if (GetOutputPoint is null || GetInputPoint is null)
+        {
+            yield break;
+        }
+
+        foreach (var (fromChannel, toChannel) in route.Map.Pairs())
+        {
+            var from = GetOutputPoint(route.FromId, fromChannel);
+            var to = GetInputPoint(route.ToId, toChannel);
+            if (from is { } f && to is { } t)
+            {
+                yield return (f, t);
+            }
+        }
+    }
+
     private static Pen CreatePen(Brush brush)
     {
         var pen = new Pen(brush, 1.75)
@@ -143,13 +160,6 @@ internal sealed class CableLayer : FrameworkElement
 
     private void DrawRoute(DrawingContext dc, Route route, Brush brush, double thickness)
     {
-        if (GetOutputPoint?.Invoke(route.FromId) is not { } from ||
-            GetInputPoint?.Invoke(route.ToId) is not { } to)
-        {
-            return;
-        }
-
-        var (c1, c2) = ControlPoints(from, to);
         var pen = new Pen(brush, thickness)
         {
             StartLineCap = PenLineCap.Round,
@@ -157,15 +167,19 @@ internal sealed class CableLayer : FrameworkElement
         };
         pen.Freeze();
 
-        var geometry = new StreamGeometry();
-        using (var context = geometry.Open())
+        foreach (var (from, to) in Strands(route))
         {
-            context.BeginFigure(from, isFilled: false, isClosed: false);
-            context.BezierTo(c1, c2, to, isStroked: true, isSmoothJoin: false);
-        }
+            var (c1, c2) = ControlPoints(from, to);
+            var geometry = new StreamGeometry();
+            using (var context = geometry.Open())
+            {
+                context.BeginFigure(from, isFilled: false, isClosed: false);
+                context.BezierTo(c1, c2, to, isStroked: true, isSmoothJoin: false);
+            }
 
-        geometry.Freeze();
-        dc.DrawGeometry(null, pen, geometry);
+            geometry.Freeze();
+            dc.DrawGeometry(null, pen, geometry);
+        }
     }
 
     private static (Point C1, Point C2) ControlPoints(Point from, Point to)

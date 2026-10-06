@@ -23,19 +23,25 @@ internal sealed class NodeElement : Border
     public const double NodeWidth = 168;
     public const double PortVisualRadius = 5;
 
+    /// <summary>Смещение центров каналов L/R от центра узла (порты стоят столбиком).</summary>
+    public const double PortChannelOffset = 9.0;
+
     private static readonly DropShadowEffect SelectedEffect = CreateSelectionEffect();
 
     private readonly Border _root;
     private readonly TextBlock _title;
-    private readonly Border _inPort;
-    private readonly Border _outPort;
+    private readonly Border[] _inPorts = new Border[2];
+    private readonly Border[] _outPorts = new Border[2];
 
     public NodeElement(AudioNode node)
     {
         Node = node;
 
-        _inPort = BuildPort(isInput: true);
-        _outPort = BuildPort(isInput: false);
+        for (var channel = ChannelMap.Left; channel <= ChannelMap.Right; channel++)
+        {
+            _inPorts[channel] = BuildPort(isInput: true, channel);
+            _outPorts[channel] = BuildPort(isInput: false, channel);
+        }
 
         _title = new TextBlock
         {
@@ -83,10 +89,13 @@ internal sealed class NodeElement : Border
             Child = header,
         };
 
+        var inPanel = BuildPortColumn(_inPorts, isInput: true);
+        var outPanel = BuildPortColumn(_outPorts, isInput: false);
+
         var grid = new Grid();
         grid.Children.Add(body);
-        grid.Children.Add(_inPort);
-        grid.Children.Add(_outPort);
+        grid.Children.Add(inPanel);
+        grid.Children.Add(outPanel);
 
         _root = new Border
         {
@@ -109,9 +118,12 @@ internal sealed class NodeElement : Border
 
     public double Top { get; private set; }
 
-    public Point InputPortCenter => new(Left, Top + ActualHeight / 2);
+    public Point InputPortCenter(int channel) => new(Left, ChannelCenterY(channel));
 
-    public Point OutputPortCenter => new(Left + ActualWidth, Top + ActualHeight / 2);
+    public Point OutputPortCenter(int channel) => new(Left + ActualWidth, ChannelCenterY(channel));
+
+    private double ChannelCenterY(int channel) =>
+        Top + (ActualHeight / 2) + (channel == ChannelMap.Left ? -PortChannelOffset : PortChannelOffset);
 
     public void SetPosition(double x, double y)
     {
@@ -127,9 +139,9 @@ internal sealed class NodeElement : Border
         _root.Effect = selected ? SelectedEffect : null;
     }
 
-    public void SetPortHighlight(bool outputPort, PortHighlight highlight)
+    public void SetPortHighlight(bool outputPort, int channel, PortHighlight highlight)
     {
-        var port = outputPort ? _outPort : _inPort;
+        var port = outputPort ? _outPorts[channel] : _inPorts[channel];
         switch (highlight)
         {
             case PortHighlight.None:
@@ -149,8 +161,11 @@ internal sealed class NodeElement : Border
 
     public void ClearPortHighlights()
     {
-        SetPortHighlight(true, PortHighlight.None);
-        SetPortHighlight(false, PortHighlight.None);
+        for (var channel = ChannelMap.Left; channel <= ChannelMap.Right; channel++)
+        {
+            SetPortHighlight(outputPort: true, channel, PortHighlight.None);
+            SetPortHighlight(outputPort: false, channel, PortHighlight.None);
+        }
     }
 
     public void RefreshFromNode()
@@ -172,7 +187,30 @@ internal sealed class NodeElement : Border
         return effect;
     }
 
-    private static Border BuildPort(bool isInput)
+    private static StackPanel BuildPortColumn(Border[] ports, bool isInput)
+    {
+        var channelName = isInput ? "Вход" : "Выход";
+        for (var channel = ChannelMap.Left; channel <= ChannelMap.Right; channel++)
+        {
+            var port = ports[channel];
+            port.ToolTip = $"{channelName} {(channel == ChannelMap.Left ? "L" : "R")}";
+        }
+
+        var column = new StackPanel
+        {
+            Orientation = Orientation.Vertical,
+            HorizontalAlignment = isInput ? HorizontalAlignment.Left : HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = isInput
+                ? new Thickness(-PortVisualRadius, 0, 0, 0)
+                : new Thickness(0, 0, -PortVisualRadius, 0),
+        };
+        column.Children.Add(ports[ChannelMap.Left]);
+        column.Children.Add(ports[ChannelMap.Right]);
+        return column;
+    }
+
+    private static Border BuildPort(bool isInput, int channel)
     {
         return new Border
         {
@@ -182,11 +220,12 @@ internal sealed class NodeElement : Border
             Background = ResolveBrush("Brush.Panel", "#FF14171C"),
             BorderThickness = new Thickness(1),
             BorderBrush = ResolveBrush("Brush.StrokeStrong", "#FF39404B"),
-            HorizontalAlignment = isInput ? HorizontalAlignment.Left : HorizontalAlignment.Right,
+            HorizontalAlignment = HorizontalAlignment.Center,
             VerticalAlignment = VerticalAlignment.Center,
-            Margin = isInput
-                ? new Thickness(-PortVisualRadius, 0, 0, 0)
-                : new Thickness(0, 0, -PortVisualRadius, 0),
+            // Верхний столбика — L, у него зазор до нижнего (R).
+            Margin = channel == ChannelMap.Left
+                ? new Thickness(0, 0, 0, 8)
+                : new Thickness(0),
         };
     }
 
