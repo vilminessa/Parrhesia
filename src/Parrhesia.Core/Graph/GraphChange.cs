@@ -8,6 +8,9 @@ public enum GraphChangeKind
     RouteAdded,
     RouteRemoved,
     RouteChanged,
+
+    /// <summary>Содержимое графа заменено целиком (загрузка пресета).</summary>
+    Reset,
 }
 
 /// <summary>Изменение графа, о котором нужно узнать UI и движку.</summary>

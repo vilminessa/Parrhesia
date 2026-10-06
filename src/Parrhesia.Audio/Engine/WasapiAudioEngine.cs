@@ -322,7 +322,10 @@ public sealed class WasapiAudioEngine : IAudioEngine
 
     private void OnGraphChanged(object? sender, GraphChange e)
     {
-        if (e.Kind is not (GraphChangeKind.NodeAdded or GraphChangeKind.NodeRemoved or GraphChangeKind.NodeChanged))
+        if (e.Kind is not (GraphChangeKind.NodeAdded
+            or GraphChangeKind.NodeRemoved
+            or GraphChangeKind.NodeChanged
+            or GraphChangeKind.Reset))
         {
             return;
         }

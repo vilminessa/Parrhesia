@@ -21,7 +21,6 @@ public partial class GraphView : UserControl
 
     private readonly AudioGraph _graph;
     private readonly Dictionary<Guid, NodeElement> _elements = [];
-    private readonly Dictionary<Guid, Point> _positions = [];
     private readonly CableLayer _cableLayer;
 
     private readonly ScaleTransform _scaleTransform = new(1, 1);
@@ -40,6 +39,9 @@ public partial class GraphView : UserControl
     private CableDrag? _cableDrag;
     private NodeElement? _selectedNode;
     private Route? _selectedRoute;
+
+    /// <summary>Глушит реакцию на события графа во время внутренних операций Rebuild.</summary>
+    private bool _suppressChanges;
 
     private sealed record PortHit(NodeElement Element, bool Output);
 
@@ -136,7 +138,7 @@ public partial class GraphView : UserControl
             var x = world.X - _dragOffset.X;
             var y = world.Y - _dragOffset.Y;
             node.SetPosition(x, y);
-            _positions[node.Node.Id] = new Point(x, y);
+            _graph.SetNodePosition(node.Node.Id, x, y);
             _cableLayer.InvalidateVisual();
             return;
         }
@@ -396,6 +398,20 @@ public partial class GraphView : UserControl
 
     private void OnGraphChanged(object? sender, GraphChange change)
     {
+        if (_suppressChanges)
+        {
+            return;
+        }
+
+        // Перетаскивание: позиция уже применена к элементу — достаточно кабелей.
+        if (change.Kind == GraphChangeKind.NodeChanged &&
+            _draggedNode is not null &&
+            change.Node?.Id == _draggedNode.Node.Id)
+        {
+            _cableLayer.InvalidateVisual();
+            return;
+        }
+
         Rebuild();
 
         if (_selectedRoute is { } route && !_graph.Routes.Contains(route))
@@ -432,13 +448,33 @@ public partial class GraphView : UserControl
             var element = new NodeElement(node);
             element.SizeChanged += (_, _) => _cableLayer.InvalidateVisual();
 
-            if (!_positions.TryGetValue(node.Id, out var position))
+            double x;
+            double y;
+            if (node.X is { } modelX && node.Y is { } modelY)
             {
-                position = DefaultPosition(node.Kind);
-                _positions[node.Id] = position;
+                x = modelX;
+                y = modelY;
+            }
+            else
+            {
+                // Ещё не расставлен — назначаем позицию по колонкам; она сразу
+                // живёт в модели и попадёт в пресеты.
+                var fallback = DefaultPosition(node.Kind);
+                x = fallback.X;
+                y = fallback.Y;
+
+                _suppressChanges = true;
+                try
+                {
+                    _graph.SetNodePosition(node.Id, x, y);
+                }
+                finally
+                {
+                    _suppressChanges = false;
+                }
             }
 
-            element.SetPosition(position.X, position.Y);
+            element.SetPosition(x, y);
             _elements[node.Id] = element;
             World.Children.Add(element);
         }

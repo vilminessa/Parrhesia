@@ -272,6 +272,67 @@ public sealed class AudioGraph
         Raise(GraphChangeKind.NodeChanged, node: node);
     }
 
+    /// <summary>Задаёт координаты узла на холсте схемы.</summary>
+    public void SetNodePosition(Guid id, double x, double y)
+    {
+        if (!double.IsFinite(x) || !double.IsFinite(y))
+        {
+            throw new ArgumentOutOfRangeException(nameof(x), "Координаты должны быть конечными числами.");
+        }
+
+        var node = FindNode(id) ?? throw new ArgumentException($"Узел {id:N} не найден.", nameof(id));
+        if (node.X == x && node.Y == y)
+        {
+            return;
+        }
+
+        node.X = x;
+        node.Y = y;
+        Raise(GraphChangeKind.NodeChanged, node: node);
+    }
+
+    /// <summary>
+    /// Атомарно заменяет содержимое графа копиями <paramref name="source"/>
+    /// и поднимает одно событие <see cref="GraphChangeKind.Reset"/>.
+    /// Идентичность графа сохраняется — подписчики (движок, UI) продолжают работать.
+    /// </summary>
+    public void ReplaceWith(AudioGraph source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        if (ReferenceEquals(source, this))
+        {
+            return;
+        }
+
+        _nodes.Clear();
+        _routes.Clear();
+
+        foreach (var node in source._nodes)
+        {
+            _nodes.Add(new AudioNode(node.Id, node.Name, node.Kind)
+            {
+                Gain = node.Gain,
+                Mute = node.Mute,
+                Solo = node.Solo,
+                DeviceId = node.DeviceId,
+                X = node.X,
+                Y = node.Y,
+            });
+        }
+
+        foreach (var route in source._routes)
+        {
+            _routes.Add(new Route(route.FromId, route.ToId)
+            {
+                Gain = route.Gain,
+                Enabled = route.Enabled,
+                Map = route.Map,
+            });
+        }
+
+        Raise(GraphChangeKind.Reset);
+    }
+
     /// <summary>
     /// Узел фактически нем: выключен сам, либо (только для источников)
     /// включён чей-то соло и это не он. Шины и назначения соло не глушат —

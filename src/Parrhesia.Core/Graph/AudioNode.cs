@@ -29,6 +29,14 @@ public sealed class AudioNode
     /// </summary>
     public string? DeviceId { get; internal set; }
 
+    /// <summary>
+    /// Положение на холсте схемы. Хранится в модели (а не в UI), чтобы пресеты
+    /// восстанавливали раскладку. null — узел ещё не расставлен, UI назначит позицию.
+    /// </summary>
+    public double? X { get; internal set; }
+
+    public double? Y { get; internal set; }
+
     public bool HasInput => Kind is NodeKind.Bus or NodeKind.Sink;
 
     public bool HasOutput => Kind is NodeKind.Source or NodeKind.Bus;

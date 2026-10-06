@@ -238,6 +238,70 @@ public class AudioGraphTests
     }
 
     [Fact]
+    public void SetNodePosition_StoresCoordinates_AndRaisesChanged()
+    {
+        var graph = new AudioGraph();
+        var node = graph.AddNode("Вход", NodeKind.Source);
+        GraphChange? change = null;
+        graph.Changed += (_, e) => change = e;
+
+        graph.SetNodePosition(node.Id, 120.5, -40.25);
+
+        Assert.Equal(120.5, node.X);
+        Assert.Equal(-40.25, node.Y);
+        Assert.Equal(GraphChangeKind.NodeChanged, change?.Kind);
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => graph.SetNodePosition(node.Id, double.NaN, 0));
+        Assert.Throws<ArgumentException>(() => graph.SetNodePosition(Guid.NewGuid(), 1, 1));
+    }
+
+    [Fact]
+    public void ReplaceWith_CopiesEverything_AndRaisesSingleReset()
+    {
+        var source = new AudioGraph();
+        var a = source.AddNode("A", NodeKind.Source);
+        var b = source.AddNode("B", NodeKind.Sink);
+        source.SetNodeDevice(a.Id, "default:capture");
+        source.SetNodePosition(a.Id, 10, 20);
+        source.SetNodeGain(a.Id, 0.5f);
+        source.AddRoute(a.Id, 0, b.Id, 1, out _);
+
+        var target = new AudioGraph();
+        var old = target.AddNode("Старый", NodeKind.Bus);
+        target.AddNode("Старый2", NodeKind.Bus);
+        target.AddRoute(old.Id, target.Nodes[1].Id, out _);
+
+        var changes = new List<GraphChangeKind>();
+        target.Changed += (_, e) => changes.Add(e.Kind);
+
+        target.ReplaceWith(source);
+
+        Assert.Equal(new[] { GraphChangeKind.Reset }, changes);
+        Assert.Equal(2, target.Nodes.Count);
+        var restoredA = target.FindNode(a.Id);
+        Assert.NotNull(restoredA);
+        Assert.Equal("default:capture", restoredA!.DeviceId);
+        Assert.Equal(10.0, restoredA.X);
+        Assert.Equal(0.5f, restoredA.Gain, 3);
+        Assert.Single(target.Routes);
+        Assert.Equal(ChannelMap.Pair(0, 1), target.Routes[0].Map);
+    }
+
+    [Fact]
+    public void ReplaceWith_Self_IsNoOpWithoutEvent()
+    {
+        var graph = new AudioGraph();
+        graph.AddNode("A", NodeKind.Source);
+        var raised = false;
+        graph.Changed += (_, _) => raised = true;
+
+        graph.ReplaceWith(graph);
+
+        Assert.False(raised);
+        Assert.Single(graph.Nodes);
+    }
+
+    [Fact]
     public void RemoveNode_RemovesAttachedRoutes()
     {
         var graph = new AudioGraph();

@@ -1,0 +1,258 @@
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using Parrhesia.Core.Graph;
+
+namespace Parrhesia.Core.Serialization;
+
+/// <summary>
+/// Сериализация графа маршрутизации в версионированный JSON (файлы пресетов).
+/// Формат: { version, nodes[], routes[] }. Неизвестные поля игнорируются,
+/// неподдерживаемая версия — ошибка (пресеты пишутся машиной, читаем строго).
+/// </summary>
+public static class GraphSerializer
+{
+    public const int CurrentVersion = 1;
+
+    private static readonly JsonSerializerOptions Options = new()
+    {
+        WriteIndented = true,
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        Converters = { new JsonStringEnumConverter() },
+        AllowTrailingCommas = true,
+        ReadCommentHandling = JsonCommentHandling.Skip,
+    };
+
+    public static string Serialize(AudioGraph graph)
+    {
+        ArgumentNullException.ThrowIfNull(graph);
+
+        var document = new GraphDocument
+        {
+            Version = CurrentVersion,
+            Nodes = graph.Nodes.Select(n => new NodeDocument
+            {
+                Id = n.Id,
+                Name = n.Name,
+                Kind = n.Kind,
+                Gain = n.Gain,
+                Mute = n.Mute,
+                Solo = n.Solo,
+                Device = n.DeviceId,
+                X = n.X,
+                Y = n.Y,
+            }).ToList(),
+            Routes = graph.Routes.Select(r => new RouteDocument
+            {
+                From = r.FromId,
+                To = r.ToId,
+                Gain = r.Gain,
+                Enabled = r.Enabled,
+                Map = r.Map.Bits,
+            }).ToList(),
+        };
+
+        return JsonSerializer.Serialize(document, Options);
+    }
+
+    public static AudioGraph Deserialize(string json)
+    {
+        if (TryDeserialize(json, out var graph, out var error))
+        {
+            return graph!;
+        }
+
+        throw new GraphSerializerException(error!);
+    }
+
+    public static bool TryDeserialize(string json, out AudioGraph? graph, out string? error)
+    {
+        ArgumentNullException.ThrowIfNull(json);
+        graph = null;
+        error = null;
+
+        GraphDocument? document;
+        try
+        {
+            document = JsonSerializer.Deserialize<GraphDocument>(json, Options);
+        }
+        catch (JsonException ex)
+        {
+            error = "Некорректный JSON: " + ex.Message;
+            return false;
+        }
+
+        if (document is null)
+        {
+            error = "Пустой документ пресета.";
+            return false;
+        }
+
+        if (document.Version != CurrentVersion)
+        {
+            error = $"Неподдерживаемая версия пресета {document.Version} (ожидается {CurrentVersion}).";
+            return false;
+        }
+
+        var built = new AudioGraph();
+        var nodeDocuments = document.Nodes ?? [];
+        if (nodeDocuments.Count == 0 && (document.Routes?.Count ?? 0) > 0)
+        {
+            error = "Есть маршруты, но нет узлов.";
+            return false;
+        }
+
+        foreach (var nodeDocument in nodeDocuments)
+        {
+            var nodeError = ValidateNode(nodeDocument);
+            if (nodeError is not null)
+            {
+                error = nodeError;
+                return false;
+            }
+
+            if (built.FindNode(nodeDocument.Id) is not null)
+            {
+                error = $"Дублирующийся id узла: {nodeDocument.Id:N}.";
+                return false;
+            }
+
+            var node = built.AddNode(nodeDocument.Name!, nodeDocument.Kind, nodeDocument.Id);
+            node.Gain = nodeDocument.Gain;
+            node.Mute = nodeDocument.Mute;
+            node.Solo = nodeDocument.Solo;
+            node.DeviceId = nodeDocument.Device;
+            node.X = nodeDocument.X;
+            node.Y = nodeDocument.Y;
+        }
+
+        foreach (var routeDocument in document.Routes ?? [])
+        {
+            var routeError = ValidateRoute(routeDocument, built);
+            if (routeError is not null)
+            {
+                error = routeError;
+                return false;
+            }
+
+            var addError = built.AddRoute(routeDocument.From, routeDocument.To, out var route);
+            if (addError != RouteError.None || route is null)
+            {
+                error = $"Маршрут {routeDocument.From:N} → {routeDocument.To:N}: {addError}.";
+                return false;
+            }
+
+            route.Gain = routeDocument.Gain;
+            route.Enabled = routeDocument.Enabled;
+            route.Map = new ChannelMap(routeDocument.Map);
+        }
+
+        graph = built;
+        return true;
+    }
+
+    private static string? ValidateNode(NodeDocument document)
+    {
+        if (document.Id == Guid.Empty)
+        {
+            return "Узел с пустым id.";
+        }
+
+        if (string.IsNullOrWhiteSpace(document.Name))
+        {
+            return $"Узел {document.Id:N} без имени.";
+        }
+
+        if (!Enum.IsDefined(document.Kind))
+        {
+            return $"Узел «{document.Name}»: неизвестный тип {document.Kind}.";
+        }
+
+        if (!float.IsFinite(document.Gain) || document.Gain < 0f)
+        {
+            return $"Узел «{document.Name}»: недопустимый гейн {document.Gain}.";
+        }
+
+        if (document.X is { } x && !double.IsFinite(x))
+        {
+            return $"Узел «{document.Name}»: недопустимая координата X.";
+        }
+
+        if (document.Y is { } y && !double.IsFinite(y))
+        {
+            return $"Узел «{document.Name}»: недопустимая координата Y.";
+        }
+
+        return null;
+    }
+
+    private static string? ValidateRoute(RouteDocument document, AudioGraph graph)
+    {
+        var from = graph.FindNode(document.From);
+        var to = graph.FindNode(document.To);
+        if (from is null || to is null)
+        {
+            return $"Маршрут {document.From:N} → {document.To:N} ссылается на неизвестный узел.";
+        }
+
+        if (document.Map == 0 || (document.Map & ~0x0F) != 0)
+        {
+            return $"Маршрут «{from.Name}» → «{to.Name}»: недопустимая карта каналов 0x{document.Map:X2}.";
+        }
+
+        if (!float.IsFinite(document.Gain) || document.Gain < 0f)
+        {
+            return $"Маршрут «{from.Name}» → «{to.Name}»: недопустимый гейн {document.Gain}.";
+        }
+
+        if (!from.HasOutput || !to.HasInput)
+        {
+            return $"Маршрут «{from.Name}» → «{to.Name}» противоречит типам узлов.";
+        }
+
+        return null;
+    }
+
+    private sealed class GraphDocument
+    {
+        public int Version { get; set; }
+
+        public List<NodeDocument>? Nodes { get; set; }
+
+        public List<RouteDocument>? Routes { get; set; }
+    }
+
+    private sealed class NodeDocument
+    {
+        public Guid Id { get; set; }
+
+        public string? Name { get; set; }
+
+        public NodeKind Kind { get; set; }
+
+        public float Gain { get; set; } = 1f;
+
+        public bool Mute { get; set; }
+
+        public bool Solo { get; set; }
+
+        public string? Device { get; set; }
+
+        public double? X { get; set; }
+
+        public double? Y { get; set; }
+    }
+
+    private sealed class RouteDocument
+    {
+        public Guid From { get; set; }
+
+        public Guid To { get; set; }
+
+        public float Gain { get; set; } = 1f;
+
+        public bool Enabled { get; set; } = true;
+
+        public byte Map { get; set; } = ChannelMap.Direct.Bits;
+    }
+}
