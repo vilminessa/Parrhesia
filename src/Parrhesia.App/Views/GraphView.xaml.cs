@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using Parrhesia.App.Views.Graph;
@@ -84,6 +85,12 @@ public partial class GraphView : UserControl
     private void OnMouseDown(object sender, MouseButtonEventArgs e)
     {
         Focus();
+
+        if (e.ChangedButton == MouseButton.Right)
+        {
+            HandleContextMenu(e);
+            return;
+        }
 
         if (e.ChangedButton == MouseButton.Middle || (e.ChangedButton == MouseButton.Left && _spaceDown))
         {
@@ -371,6 +378,134 @@ public partial class GraphView : UserControl
     }
 
     private void ClearSelection() => SelectNode(null);
+
+    // ===== Контекстные меню =====
+
+    private void HandleContextMenu(MouseButtonEventArgs e)
+    {
+        var world = e.GetPosition(World);
+        if (FindNodeAt(world) is { } node)
+        {
+            SelectNode(node);
+            ShowNodeContextMenu();
+        }
+        else if (_cableLayer.HitTest(world) is { } route)
+        {
+            SelectRoute(route);
+            ShowRouteContextMenu(route);
+        }
+        else
+        {
+            ClearSelection();
+            return;
+        }
+
+        e.Handled = true;
+    }
+
+    private void ShowNodeContextMenu()
+    {
+        var menu = CreateContextMenu();
+
+        var rename = new MenuItem { Header = "Переименовать" };
+        rename.Click += (_, _) =>
+        {
+            NodeNameBox.Focus();
+            NodeNameBox.SelectAll();
+        };
+
+        var delete = new MenuItem { Header = "Удалить" };
+        delete.Click += (_, _) =>
+        {
+            if (_selectedNode is { } element)
+            {
+                _graph.RemoveNode(element.Node.Id);
+            }
+        };
+
+        menu.Items.Add(rename);
+        menu.Items.Add(new Separator());
+        menu.Items.Add(delete);
+        OpenContextMenu(menu);
+    }
+
+    private void ShowRouteContextMenu(Route route)
+    {
+        var menu = CreateContextMenu();
+
+        var toggle = new MenuItem { Header = route.Enabled ? "Выключить кабель" : "Включить кабель" };
+        toggle.Click += (_, _) =>
+            _graph.SetRouteEnabled(route.FromId, route.ToId, !route.Enabled);
+
+        var delete = new MenuItem { Header = "Удалить кабель" };
+        delete.Click += (_, _) => _graph.RemoveRoute(route.FromId, route.ToId);
+
+        menu.Items.Add(toggle);
+        menu.Items.Add(new Separator());
+        menu.Items.Add(delete);
+        OpenContextMenu(menu);
+    }
+
+    private static ContextMenu CreateContextMenu() => new()
+    {
+        Placement = PlacementMode.MousePoint,
+        MinWidth = 160,
+    };
+
+    private static void OpenContextMenu(ContextMenu menu)
+    {
+        menu.IsOpen = true;
+    }
+
+    // ===== Инструментарий =====
+
+    private void OnPaletteAdd(object sender, RoutedEventArgs e)
+    {
+        if ((sender as Button)?.Tag is not string kind)
+        {
+            return;
+        }
+
+        // Центр видимой области холста в координатах мира.
+        var center = ViewportToWorld(new Point(Viewport.ActualWidth / 2, Viewport.ActualHeight / 2));
+        AddNodeAt(kind, center);
+    }
+
+    private void AddNodeAt(string kind, Point worldPosition)
+    {
+        AudioNode node = kind switch
+        {
+            "Capture" => _graph.AddNode("Захват", NodeKind.Source),
+            "Loopback" => _graph.AddNode("Звук системный", NodeKind.Source),
+            "Bus" => _graph.AddNode("Шина", NodeKind.Bus),
+            "Sink" => _graph.AddNode("Вывод", NodeKind.Sink),
+            _ => throw new ArgumentOutOfRangeException(nameof(kind)),
+        };
+
+        var deviceId = kind switch
+        {
+            "Capture" => DeviceSpec.DefaultCapture,
+            "Loopback" => DeviceSpec.DefaultLoopback,
+            "Sink" => DeviceSpec.DefaultRender,
+            _ => null,
+        };
+
+        if (deviceId is not null)
+        {
+            _graph.SetNodeDevice(node.Id, deviceId);
+        }
+
+        _graph.SetNodePosition(node.Id, worldPosition.X, worldPosition.Y);
+
+        if (_elements.TryGetValue(node.Id, out var element))
+        {
+            SelectNode(element);
+        }
+    }
+
+    private Point ViewportToWorld(Point viewport) => new(
+        (viewport.X - _translate.X) / _scale,
+        (viewport.Y - _translate.Y) / _scale);
 
     // ===== Инспектор =====
 
@@ -790,6 +925,12 @@ public partial class GraphView : UserControl
             if (_elements.TryGetValue(node.Id, out var existing))
             {
                 existing.RefreshFromNode();
+                if (node.X is { } placedX && node.Y is { } placedY)
+                {
+                    // Позиция могла измениться извне (пресет, инструментарий).
+                    existing.SetPosition(placedX, placedY);
+                }
+
                 continue;
             }
 

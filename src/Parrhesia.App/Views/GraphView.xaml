@@ -10,12 +10,85 @@
              PreviewKeyUp="OnKeyUp">
   <Grid>
     <Grid.ColumnDefinitions>
+      <ColumnDefinition Width="Auto" />
       <ColumnDefinition Width="*" />
       <ColumnDefinition Width="Auto" />
     </Grid.ColumnDefinitions>
 
+    <!-- Инструментарий: добавление узлов -->
+    <Border Grid.Column="0"
+            Width="200"
+            Margin="14"
+            Background="{DynamicResource Brush.Panel}"
+            BorderBrush="{DynamicResource Brush.Stroke}"
+            BorderThickness="1"
+            CornerRadius="8"
+            Padding="14,14,14,10">
+      <StackPanel>
+        <TextBlock Text="Инструментарий"
+                   FontWeight="SemiBold"
+                   FontSize="14"
+                   Foreground="{DynamicResource Brush.Text}"
+                   Margin="0,0,0,12" />
+
+        <TextBlock Text="ИСТОЧНИКИ"
+                   FontSize="10"
+                   FontWeight="SemiBold"
+                   Foreground="{DynamicResource Brush.TextFaint}"
+                   Margin="0,0,0,6" />
+        <Button Content="Захват устройства"
+                Click="OnPaletteAdd"
+                Tag="Capture"
+                Margin="0,0,0,6" />
+        <Button Content="Звук системный"
+                Click="OnPaletteAdd"
+                Tag="Loopback"
+                Margin="0,0,0,6" />
+        <Button IsEnabled="False" Margin="0,0,0,10">
+          <Grid>
+            <TextBlock Text="Процесс приложения" VerticalAlignment="Center" />
+            <TextBlock Text="Ф4"
+                       FontSize="10"
+                       Foreground="{DynamicResource Brush.TextFaint}"
+                       HorizontalAlignment="Right"
+                       VerticalAlignment="Center" />
+          </Grid>
+        </Button>
+
+        <TextBlock Text="ШИНЫ"
+                   FontSize="10"
+                   FontWeight="SemiBold"
+                   Foreground="{DynamicResource Brush.TextFaint}"
+                   Margin="0,0,0,6" />
+        <Button Content="Шина"
+                Click="OnPaletteAdd"
+                Tag="Bus"
+                Margin="0,0,0,10" />
+
+        <TextBlock Text="НАЗНАЧЕНИЯ"
+                   FontSize="10"
+                   FontWeight="SemiBold"
+                   Foreground="{DynamicResource Brush.TextFaint}"
+                   Margin="0,0,0,6" />
+        <Button Content="Устройство вывода"
+                Click="OnPaletteAdd"
+                Tag="Sink"
+                Margin="0,0,0,6" />
+        <Button IsEnabled="False">
+          <Grid>
+            <TextBlock Text="Виртуальный микрофон" VerticalAlignment="Center" />
+            <TextBlock Text="Ф4"
+                       FontSize="10"
+                       Foreground="{DynamicResource Brush.TextFaint}"
+                       HorizontalAlignment="Right"
+                       VerticalAlignment="Center" />
+          </Grid>
+        </Button>
+      </StackPanel>
+    </Border>
+
     <Grid x:Name="Viewport"
-          Grid.Column="0"
+          Grid.Column="1"
           ClipToBounds="True"
           Background="{DynamicResource Brush.Deep}">
       <Canvas x:Name="World" />
@@ -28,7 +101,7 @@
               BorderThickness="1"
               CornerRadius="6"
               Padding="11,7">
-        <TextBlock Text="Колесо — масштаб · Пробел/СКМ — панорама · Тяни от порта L/R — канал · Del — удалить"
+        <TextBlock Text="Колесо — масштаб · Пробел/СКМ — панорама · Тяни от порта L/R — канал · ПКМ — меню · Del — удалить"
                    FontSize="11"
                    Foreground="{DynamicResource Brush.TextDim}" />
       </Border>
@@ -36,7 +109,7 @@
 
     <!-- Инспектор выделенного объекта -->
     <Border x:Name="InspectorPanel"
-            Grid.Column="1"
+            Grid.Column="2"
             Width="276"
             Margin="0,14,14,14"
             Background="{DynamicResource Brush.Panel}"
