@@ -19,7 +19,7 @@ public partial class GraphView : UserControl
     private const double ZoomFactor = 1.1;
     private const double PortHitRadius = 12.0;
 
-    private readonly AudioGraph _graph = new();
+    private readonly AudioGraph _graph;
     private readonly Dictionary<Guid, NodeElement> _elements = [];
     private readonly Dictionary<Guid, Point> _positions = [];
     private readonly CableLayer _cableLayer;
@@ -49,6 +49,8 @@ public partial class GraphView : UserControl
     {
         InitializeComponent();
 
+        _graph = AppServices.Graph;
+
         var transforms = new TransformGroup();
         transforms.Children.Add(_scaleTransform);
         transforms.Children.Add(_translate);
@@ -62,7 +64,6 @@ public partial class GraphView : UserControl
         };
         World.Children.Add(_cableLayer);
 
-        BuildDemoGraph();
         Rebuild();
         _graph.Changed += OnGraphChanged;
     }
@@ -452,28 +453,9 @@ public partial class GraphView : UserControl
             _ => 2,
         };
 
-        // Считаем уже размещённые элементы: при пакетном построении (демо-граф)
+        // Считаем уже размещённые элементы: при пакетном построении
         // модель содержит все узлы сразу, и счёт по модели сложил бы колонку в стопку.
         var row = _elements.Values.Count(e => e.Node.Kind == kind);
         return new Point(60 + column * 300, 60 + row * 96);
-    }
-
-    private void BuildDemoGraph()
-    {
-        var mic = _graph.AddNode("Микрофон", NodeKind.Source);
-        var capture = _graph.AddNode("Захват устройств", NodeKind.Source);
-        var browser = _graph.AddNode("Браузер", NodeKind.Source);
-        var main = _graph.AddNode("Основная шина", NodeKind.Bus);
-        var stream = _graph.AddNode("Шина стрима", NodeKind.Bus);
-        var headphones = _graph.AddNode("Наушники", NodeKind.Sink);
-        var discord = _graph.AddNode("Discord (вирт.)", NodeKind.Sink);
-
-        _graph.AddRoute(mic.Id, main.Id, out _);
-        _graph.AddRoute(capture.Id, main.Id, out _);
-        _graph.AddRoute(browser.Id, main.Id, out _);
-        _graph.AddRoute(browser.Id, stream.Id, out _);
-        _graph.AddRoute(main.Id, headphones.Id, out _);
-        _graph.AddRoute(main.Id, stream.Id, out _);
-        _graph.AddRoute(stream.Id, discord.Id, out _);
     }
 }

@@ -41,6 +41,13 @@ public sealed class SampleRing : ISampleInput
 
     public long UnderrunSamples => Volatile.Read(ref _underrunSamples);
 
+    /// <summary>Обнулить счётчики xrun (не трогает данные).</summary>
+    public void ResetStatistics()
+    {
+        Interlocked.Exchange(ref _overflowSamples, 0);
+        Interlocked.Exchange(ref _underrunSamples, 0);
+    }
+
     /// <summary>Записывает, сколько влезло. Возвращает число принятых сэмплов.</summary>
     public int Write(ReadOnlySpan<float> source)
     {

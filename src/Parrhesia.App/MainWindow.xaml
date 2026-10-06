@@ -102,8 +102,7 @@
         <views:GraphView />
       </TabItem>
       <TabItem Header="Устройства">
-        <views:PlaceholderView Title="Устройства"
-                               Description="Захват и вывод устройств — раздел в разработке." />
+        <views:DevicesView />
       </TabItem>
       <TabItem Header="Настройки">
         <views:PlaceholderView Title="Настройки"
