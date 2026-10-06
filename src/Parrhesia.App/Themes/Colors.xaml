@@ -23,11 +23,6 @@
   <SolidColorBrush x:Key="Brush.Danger" Color="#FFFF5A52" />
   <SolidColorBrush x:Key="Brush.Success" Color="#FF3DDC84" />
 
-  <!-- Метры -->
-  <SolidColorBrush x:Key="Brush.MeterLow" Color="#FF3DDC84" />
-  <SolidColorBrush x:Key="Brush.MeterMid" Color="#FFFFC53D" />
-  <SolidColorBrush x:Key="Brush.MeterHigh" Color="#FFFF4D4D" />
-  <SolidColorBrush x:Key="Brush.MeterPeak" Color="#FFFFF6D8" />
-  <SolidColorBrush x:Key="Brush.MeterOff" Color="#FF232830" />
+  <!-- Цвета LED-метров живут в MeterPalette (Controls/MeterPalette.cs) — код рисует их напрямую. -->
 
 </ResourceDictionary>

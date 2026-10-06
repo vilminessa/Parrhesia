@@ -111,8 +111,7 @@
                                Description="Буферы, задержки и профили — раздел в разработке." />
       </TabItem>
       <TabItem Header="Диагностика">
-        <views:PlaceholderView Title="Диагностика"
-                               Description="Метры производительности — раздел в разработке." />
+        <views:DiagnosticsView />
       </TabItem>
     </TabControl>
   </Grid>

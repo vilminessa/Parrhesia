@@ -1,0 +1,90 @@
+<UserControl x:Class="Parrhesia.App.Views.DiagnosticsView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <Grid Margin="20">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="*" />
+    </Grid.RowDefinitions>
+
+    <!-- Панель метрик -->
+    <Border Grid.Row="0"
+            Background="{DynamicResource Brush.Panel}"
+            BorderBrush="{DynamicResource Brush.Stroke}"
+            BorderThickness="1"
+            CornerRadius="8"
+            Padding="16,10"
+            Margin="0,0,0,14">
+      <Grid>
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="*" />
+          <ColumnDefinition Width="Auto" />
+        </Grid.ColumnDefinitions>
+
+        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+          <TextBlock Text="FPS"
+                     Foreground="{DynamicResource Brush.TextFaint}"
+                     FontSize="12"
+                     VerticalAlignment="Center" />
+          <TextBlock x:Name="FpsText"
+                     Text="—"
+                     Foreground="{DynamicResource Brush.Cyan}"
+                     FontWeight="SemiBold"
+                     FontSize="13"
+                     Margin="7,0,22,0"
+                     VerticalAlignment="Center" />
+
+          <TextBlock Text="Кадр"
+                     Foreground="{DynamicResource Brush.TextFaint}"
+                     FontSize="12"
+                     VerticalAlignment="Center" />
+          <TextBlock x:Name="FrameText"
+                     Text="—"
+                     Foreground="{DynamicResource Brush.Cyan}"
+                     FontWeight="SemiBold"
+                     FontSize="13"
+                     Margin="7,0,22,0"
+                     VerticalAlignment="Center" />
+
+          <TextBlock Text="CPU"
+                     Foreground="{DynamicResource Brush.TextFaint}"
+                     FontSize="12"
+                     VerticalAlignment="Center" />
+          <TextBlock x:Name="CpuText"
+                     Text="—"
+                     Foreground="{DynamicResource Brush.Cyan}"
+                     FontWeight="SemiBold"
+                     FontSize="13"
+                     Margin="7,0,22,0"
+                     VerticalAlignment="Center" />
+
+          <TextBlock Text="Метров"
+                     Foreground="{DynamicResource Brush.TextFaint}"
+                     FontSize="12"
+                     VerticalAlignment="Center" />
+          <TextBlock x:Name="MetersText"
+                     Text="—"
+                     Foreground="{DynamicResource Brush.Text}"
+                     FontWeight="SemiBold"
+                     FontSize="13"
+                     Margin="7,0,0,0"
+                     VerticalAlignment="Center" />
+        </StackPanel>
+
+        <Button Grid.Column="1"
+                x:Name="StressButton"
+                Click="OnStressClick"
+                Content="Стресс: выкл" />
+      </Grid>
+    </Border>
+
+    <!-- Сетка метров -->
+    <Border Grid.Row="1"
+            Background="{DynamicResource Brush.Elevated}"
+            BorderBrush="{DynamicResource Brush.Stroke}"
+            BorderThickness="1"
+            CornerRadius="8">
+      <UniformGrid x:Name="Meters" Columns="10" Margin="12" />
+    </Border>
+  </Grid>
+</UserControl>
