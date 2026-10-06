@@ -262,6 +262,111 @@ public class GraphProcessorTests
         Assert.Equal(0.5f, output[1], 3);
     }
 
+    [Fact]
+    public void Bypass_IgnoresGainAndMute()
+    {
+        var graph = new AudioGraph();
+        var source = graph.AddNode("Вход", NodeKind.Source);
+        var sink = graph.AddNode("Выход", NodeKind.Sink);
+        graph.AddRoute(source.Id, sink.Id, out _);
+
+        using var processor = new GraphProcessor(graph);
+        processor.SetInput(source.Id, new ConstantInput(1f));
+
+        graph.SetNodeGain(source.Id, 0.25f);
+        Assert.Equal(0.25f, Process(processor, sink.Id)[0], 3);
+
+        graph.SetNodeMute(source.Id, true);
+        Assert.Equal(0f, Process(processor, sink.Id)[0]);
+
+        // Обход = полная прозрачность: гейн и mute игнорируются.
+        graph.SetNodeBypass(source.Id, true);
+        Assert.Equal(1f, Process(processor, sink.Id)[0], 3);
+
+        // Выход из обхода — mute снова действует.
+        graph.SetNodeBypass(source.Id, false);
+        Assert.Equal(0f, Process(processor, sink.Id)[0]);
+    }
+
+    [Fact]
+    public void BypassOnBus_PassesSumUnchanged()
+    {
+        var graph = new AudioGraph();
+        var a = graph.AddNode("A", NodeKind.Source);
+        var bus = graph.AddNode("Шина", NodeKind.Bus);
+        var sink = graph.AddNode("Выход", NodeKind.Sink);
+        graph.AddRoute(a.Id, bus.Id, out _);
+        graph.AddRoute(bus.Id, sink.Id, out _);
+
+        using var processor = new GraphProcessor(graph);
+        processor.SetInput(a.Id, new ConstantInput(1f));
+
+        graph.SetNodeGain(bus.Id, 0.5f);
+        Assert.Equal(0.5f, Process(processor, sink.Id)[0], 3);
+
+        graph.SetNodeBypass(bus.Id, true);
+        Assert.Equal(1f, Process(processor, sink.Id)[0], 3);
+    }
+
+    [Fact]
+    public void StereoToMono_ScalesEachChannelByHalf()
+    {
+        var graph = new AudioGraph();
+        var source = graph.AddNode("Вход", NodeKind.Source);
+        var bus = graph.AddNode("Моно-шина", NodeKind.Bus);
+        var sink = graph.AddNode("Выход", NodeKind.Sink);
+        graph.SetNodeChannels(bus.Id, 1);
+        graph.AddRoute(source.Id, bus.Id, out _);   // диагональ 2→1: обе пары, scale 0.5
+        graph.AddRoute(bus.Id, sink.Id, out _);      // 1→2: дубль
+
+        using var processor = new GraphProcessor(graph);
+        processor.SetInput(source.Id, new StereoInput(left: 1f, right: 1f));
+
+        var output = Process(processor, sink.Id);
+        Assert.Equal(1f, output[0], 3);
+        Assert.Equal(1f, output[1], 3);
+
+        processor.SetInput(source.Id, new StereoInput(left: 1f, right: 0f));
+        output = Process(processor, sink.Id);
+        Assert.Equal(0.5f, output[0], 3);
+        Assert.Equal(0.5f, output[1], 3);
+    }
+
+    [Fact]
+    public void MonoSourceToStereo_DuplicatesWithoutScaling()
+    {
+        var graph = new AudioGraph();
+        var source = graph.AddNode("Моно", NodeKind.Source);
+        var sink = graph.AddNode("Выход", NodeKind.Sink);
+        graph.SetNodeChannels(source.Id, 1);
+        graph.AddRoute(source.Id, sink.Id, out _);   // 1→2: дубль без деления
+
+        using var processor = new GraphProcessor(graph);
+        processor.SetInput(source.Id, new StereoInput(left: 0.5f, right: 0.5f));
+
+        var output = Process(processor, sink.Id);
+        Assert.Equal(0.5f, output[0], 3);
+        Assert.Equal(0.5f, output[1], 3);
+    }
+
+    [Fact]
+    public void MonoSink_UpscalesToEngineChannels()
+    {
+        var graph = new AudioGraph();
+        var source = graph.AddNode("Вход", NodeKind.Source);
+        var sink = graph.AddNode("Моно-выход", NodeKind.Sink);
+        graph.SetNodeChannels(sink.Id, 1);
+        graph.AddRoute(source.Id, sink.Id, out _);   // 2→1: scale 0.5
+
+        using var processor = new GraphProcessor(graph);
+        processor.SetInput(source.Id, new StereoInput(left: 1f, right: 1f));
+
+        // Моно-назначение дублируется на оба канала движка (иначе только левый).
+        var output = Process(processor, sink.Id);
+        Assert.Equal(1f, output[0], 3);
+        Assert.Equal(1f, output[1], 3);
+    }
+
     private static float[] Process(GraphProcessor processor, Guid sinkId, int frames = 8)
     {
         var output = new float[frames * 2];

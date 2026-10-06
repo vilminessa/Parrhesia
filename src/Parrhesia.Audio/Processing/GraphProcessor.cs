@@ -92,7 +92,25 @@ public sealed class GraphProcessor : IDisposable
 
         if (_buffers.TryGetValue(sinkId, out var sinkBuffer))
         {
-            sinkBuffer.AsSpan(0, samples).CopyTo(output[..samples]);
+            var sinkChannels = SnapshotChannelCount(snapshot, sinkId);
+            if (sinkChannels == 1 && _channels > 1)
+            {
+                // Моно-назначение: первый канал дублируется на все,
+                // иначе звук уходил бы только в левый динамик.
+                var monoFrames = samples / _channels;
+                for (var frame = 0; frame < monoFrames; frame++)
+                {
+                    var value = sinkBuffer[frame * _channels];
+                    for (var channel = 0; channel < _channels; channel++)
+                    {
+                        output[(frame * _channels) + channel] = value;
+                    }
+                }
+            }
+            else
+            {
+                sinkBuffer.AsSpan(0, samples).CopyTo(output[..samples]);
+            }
         }
         else
         {
@@ -103,6 +121,19 @@ public sealed class GraphProcessor : IDisposable
         {
             output[samples..].Clear();
         }
+    }
+
+    private static int SnapshotChannelCount(GraphSnapshot snapshot, Guid nodeId)
+    {
+        foreach (var node in snapshot.Nodes)
+        {
+            if (node.Id == nodeId)
+            {
+                return node.ChannelCount;
+            }
+        }
+
+        return -1;
     }
 
     public void Dispose() => _graph.Changed -= OnGraphChanged;
@@ -134,7 +165,7 @@ public sealed class GraphProcessor : IDisposable
 
         foreach (var edge in snapshot.Edges)
         {
-            if (edge.To != node.Id || !edge.Enabled || edge.Map.IsEmpty)
+            if (edge.To != node.Id || !edge.Enabled)
             {
                 continue;
             }
@@ -147,14 +178,19 @@ public sealed class GraphProcessor : IDisposable
             var source = from.AsSpan(0, samples);
             if (edge.Map.Bits == StraightStereo.Bits)
             {
-                // Стерео-пара по прямой — данные лежат в буфере сплошняком.
+                // Стерео-диагональ по прямой — данные лежат в буфере сплошняком.
                 Accumulate(span, source, edge.Gain);
             }
             else
             {
-                foreach (var (fromChannel, toChannel) in edge.Map.Pairs())
+                foreach (var assignment in edge.Assignments)
                 {
-                    AccumulateChannel(span, toChannel, source, fromChannel, edge.Gain);
+                    AccumulateChannel(
+                        span,
+                        assignment.To,
+                        source,
+                        assignment.From,
+                        edge.Gain * assignment.Scale);
                 }
             }
         }
@@ -213,9 +249,19 @@ public sealed class GraphProcessor : IDisposable
         }
     }
 
-    /// <summary>Гейн узла → метр (пик) → обнуление, если узел не звучит (mute/solo).</summary>
+    /// <summary>
+    /// Обход (bypass) — полная прозрачность: сигнал проходит без гейна,
+    /// mute/solo игнорируются. Обычный путь: гейн → метр (пик) → обнуление
+    /// при mute/solo.
+    /// </summary>
     private void ApplyNodeStage(NodeInfo node, Span<float> span)
     {
+        if (node.Bypassed)
+        {
+            _peaks[node.Id] = PeakOf(span);
+            return;
+        }
+
         if (node.Gain != 1f)
         {
             for (var i = 0; i < span.Length; i++)
@@ -224,6 +270,16 @@ public sealed class GraphProcessor : IDisposable
             }
         }
 
+        _peaks[node.Id] = PeakOf(span);
+
+        if (node.Muted)
+        {
+            span.Clear();
+        }
+    }
+
+    private static float PeakOf(ReadOnlySpan<float> span)
+    {
         var peak = 0f;
         for (var i = 0; i < span.Length; i++)
         {
@@ -234,12 +290,7 @@ public sealed class GraphProcessor : IDisposable
             }
         }
 
-        _peaks[node.Id] = peak;
-
-        if (node.Muted)
-        {
-            span.Clear();
-        }
+        return peak;
     }
 
     private void EnsureBuffers(GraphSnapshot snapshot, int samples)

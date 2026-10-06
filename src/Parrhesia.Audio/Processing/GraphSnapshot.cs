@@ -25,13 +25,45 @@ internal sealed class GraphSnapshot
     public static GraphSnapshot Build(AudioGraph graph)
     {
         var nodes = graph.Nodes
-            .Select(n => new NodeInfo(n.Id, n.Kind, n.Gain, graph.IsEffectivelyMuted(n)))
+            .Select(n => new NodeInfo(
+                n.Id,
+                n.Kind,
+                n.Gain,
+                graph.IsEffectivelyMuted(n),
+                n.Bypassed,
+                n.ChannelCount))
             .ToArray();
         var edges = graph.Routes
-            .Select(r => new EdgeInfo(r.FromId, r.ToId, r.Gain, r.Enabled, r.Map))
+            .Select(BuildEdge)
+            .Where(e => e.Assignments.Length > 0)
             .ToArray();
 
         return new GraphSnapshot(TopologicalOrder(nodes, edges), edges);
+    }
+
+    /// <summary>
+    /// Разворачивает карту каналов в пары с масштабом: если маршрут кормит
+    /// один канал назначения из нескольких своих (стерео→моно), каждый
+    /// получает 1/n — как mix level в Cantabile.
+    /// </summary>
+    private static EdgeInfo BuildEdge(Route route)
+    {
+        var pairs = route.Map.Pairs().ToArray();
+        var feedCounts = new int[ChannelMap.MaxChannels];
+        foreach (var (_, to) in pairs)
+        {
+            feedCounts[to]++;
+        }
+
+        var assignments = new EdgeAssignment[pairs.Length];
+        for (var i = 0; i < pairs.Length; i++)
+        {
+            var (from, to) = pairs[i];
+            var scale = feedCounts[to] > 1 ? 1f / feedCounts[to] : 1f;
+            assignments[i] = new EdgeAssignment(from, to, scale);
+        }
+
+        return new EdgeInfo(route.FromId, route.ToId, route.Gain, route.Enabled, route.Map, assignments);
     }
 
     private static NodeInfo[] TopologicalOrder(NodeInfo[] nodes, EdgeInfo[] edges)
@@ -91,6 +123,21 @@ internal sealed class GraphSnapshot
     }
 }
 
-internal sealed record NodeInfo(Guid Id, NodeKind Kind, float Gain, bool Muted);
+internal sealed record NodeInfo(
+    Guid Id,
+    NodeKind Kind,
+    float Gain,
+    bool Muted,
+    bool Bypassed,
+    int ChannelCount);
 
-internal sealed record EdgeInfo(Guid From, Guid To, float Gain, bool Enabled, ChannelMap Map);
+/// <summary>Пара каналов маршрута с масштабом (1/n для N→1-суммирования).</summary>
+internal sealed record EdgeAssignment(int From, int To, float Scale);
+
+internal sealed record EdgeInfo(
+    Guid From,
+    Guid To,
+    float Gain,
+    bool Enabled,
+    ChannelMap Map,
+    EdgeAssignment[] Assignments);
