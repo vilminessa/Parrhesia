@@ -198,6 +198,19 @@ public sealed class AudioGraph
 
     public void SetNodeSolo(Guid id, bool solo) => SetNodeFlag(id, solo, static (n, v) => n.Solo = v, n => n.Solo);
 
+    /// <summary>Привязывает узел к устройству (null — отвязывает).</summary>
+    public void SetNodeDevice(Guid id, string? deviceId)
+    {
+        var node = FindNode(id) ?? throw new ArgumentException($"Узел {id:N} не найден.", nameof(id));
+        if (node.DeviceId == deviceId)
+        {
+            return;
+        }
+
+        node.DeviceId = deviceId;
+        Raise(GraphChangeKind.NodeChanged, node: node);
+    }
+
     /// <summary>
     /// Узел фактически нем: выключен сам, или включён чей-то соло и это не он.
     /// </summary>

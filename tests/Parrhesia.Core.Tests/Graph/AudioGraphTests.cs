@@ -217,6 +217,23 @@ public class AudioGraphTests
     }
 
     [Fact]
+    public void SetNodeDevice_BindsAndRaisesChanged()
+    {
+        var graph = new AudioGraph();
+        var node = graph.AddNode("Вход", NodeKind.Source);
+        GraphChange? change = null;
+        graph.Changed += (_, e) => change = e;
+
+        graph.SetNodeDevice(node.Id, "default:capture");
+
+        Assert.Equal("default:capture", node.DeviceId);
+        Assert.Equal(GraphChangeKind.NodeChanged, change?.Kind);
+
+        graph.SetNodeDevice(node.Id, null);
+        Assert.Null(node.DeviceId);
+    }
+
+    [Fact]
     public void NodeGain_IsClampedToNonNegative()
     {
         var graph = new AudioGraph();

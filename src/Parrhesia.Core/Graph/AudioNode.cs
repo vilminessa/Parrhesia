@@ -23,6 +23,12 @@ public sealed class AudioNode
 
     public bool Solo { get; internal set; }
 
+    /// <summary>
+    /// Привязка к аудио-устройству (формат: "default:capture", "default:render",
+    /// "loopback:default", либо MMDevice ID). null — узел не привязан и не активен.
+    /// </summary>
+    public string? DeviceId { get; internal set; }
+
     public bool HasInput => Kind is NodeKind.Bus or NodeKind.Sink;
 
     public bool HasOutput => Kind is NodeKind.Source or NodeKind.Bus;
