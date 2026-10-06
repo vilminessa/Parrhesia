@@ -167,7 +167,7 @@ public sealed class AudioGraph
     }
 
     /// <summary>Валидация пары каналов против ёмкости карты и числа каналов узлов.</summary>
-    private RouteError ValidateChannelPair(Guid fromId, int fromChannel, Guid toId, int toChannel)
+    public RouteError ValidateChannelPair(Guid fromId, int fromChannel, Guid toId, int toChannel)
     {
         // Выход за физический предел карты — ошибка программиста.
         _ = ChannelMap.Pair(fromChannel, toChannel);

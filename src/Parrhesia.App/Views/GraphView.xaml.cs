@@ -41,6 +41,7 @@ public partial class GraphView : UserControl
     private Point _dragOffset;
 
     private CableDrag? _cableDrag;
+    private ReattachDrag? _reattachDrag;
     private NodeElement? _selectedNode;
     private Route? _selectedRoute;
 
@@ -64,6 +65,14 @@ public partial class GraphView : UserControl
     private sealed record PortHit(NodeElement Element, bool Output, int Channel);
 
     private sealed record CableDrag(Guid NodeId, bool FromOutput, int Channel);
+
+    /// <summary>Перетаскивание уже прикреплённого конца жилы (переподключение).</summary>
+    private sealed record ReattachDrag(
+        CableLayer.ReattachTarget Target,
+        bool GrabbedAtOutput,
+        Guid GrabbedNodeId,
+        Guid OtherNodeId,
+        Point OtherEnd);
 
     public GraphView()
     {
@@ -122,7 +131,24 @@ public partial class GraphView : UserControl
 
         if (FindPort(world) is { } port)
         {
-            StartCableDrag(port, world);
+            // Зажатие на занятом порту — хватаем прикреплённый конец жилы
+            // (переподключение); на свободном — новое соединение.
+            var attached = _cableLayer.FindAttachedWire(
+                world,
+                port.Element,
+                port.Output,
+                port.Channel,
+                PortHitRadius * _cableLayer.InverseScale);
+
+            if (attached is not null)
+            {
+                StartReattach(port, attached, world);
+            }
+            else
+            {
+                StartCableDrag(port, world);
+            }
+
             e.Handled = true;
             return;
         }
@@ -169,6 +195,15 @@ public partial class GraphView : UserControl
             return;
         }
 
+        if (_reattachDrag is { } reattach)
+        {
+            var world = e.GetPosition(World);
+            _cableLayer.TempTo = world;
+            UpdateReattachHighlights(world, reattach);
+            _cableLayer.InvalidateVisual();
+            return;
+        }
+
         if (_cableDrag is { } drag)
         {
             var world = e.GetPosition(World);
@@ -192,6 +227,11 @@ public partial class GraphView : UserControl
         {
             _draggedNode = null;
             ReleaseMouseCapture();
+        }
+
+        if (_reattachDrag is { } reattach && e.ChangedButton == MouseButton.Left)
+        {
+            FinishReattach(reattach, e.GetPosition(World));
         }
 
         if (_cableDrag is { } drag && e.ChangedButton == MouseButton.Left)
@@ -295,6 +335,223 @@ public partial class GraphView : UserControl
         _cableLayer.InvalidateVisual();
     }
 
+    private void StartReattach(PortHit origin, CableLayer.ReattachTarget target, Point world)
+    {
+        var otherEnd = _cableLayer.GetOtherEnd(target, origin.Output);
+        if (otherEnd is null)
+        {
+            StartCableDrag(origin, world);
+            return;
+        }
+
+        var otherNodeId = origin.Output ? target.Route.ToId : target.Route.FromId;
+        _reattachDrag = new ReattachDrag(
+            target,
+            origin.Output,
+            origin.Element.Node.Id,
+            otherNodeId,
+            otherEnd.Value);
+
+        // Жила снята с порта: не рисуем её, тянем «свободный» конец от другого края.
+        _cableLayer.DetachedStrand = target;
+        _cableLayer.TempFrom = otherEnd;
+        _cableLayer.TempTo = world;
+        _cableLayer.TempValid = false;
+        CaptureMouse();
+        Cursor = Cursors.Cross;
+        UpdateReattachHighlights(world, _reattachDrag);
+        _cableLayer.InvalidateVisual();
+    }
+
+    private void FinishReattach(ReattachDrag drag, Point world)
+    {
+        var target = FindPort(world);
+        EndCableDrag();
+
+        if (target is null)
+        {
+            // Сброс в пустоту — отцепляем конец.
+            DetachWire(drag.Target);
+            return;
+        }
+
+        if (target.Output != drag.GrabbedAtOutput)
+        {
+            // Другая сторона — бессмыслица: просто возвращаем жилу на место.
+            return;
+        }
+
+        Guid newFrom;
+        Guid newTo;
+        int? newFromChannel;
+        int? newToChannel;
+        if (drag.GrabbedAtOutput)
+        {
+            newFrom = target.Element.Node.Id;
+            newFromChannel = _expandedView ? target.Channel : null;
+            newTo = drag.OtherNodeId;
+            newToChannel = drag.Target.ToChannel;
+        }
+        else
+        {
+            newFrom = drag.OtherNodeId;
+            newFromChannel = drag.Target.FromChannel;
+            newTo = target.Element.Node.Id;
+            newToChannel = _expandedView ? target.Channel : null;
+        }
+
+        if (ValidateReattachEnds(newFrom, newTo) != RouteError.None)
+        {
+            return; // цикл/порты — отмена, жила остаётся где была
+        }
+
+        if (_expandedView &&
+            _graph.ValidateChannelPair(
+                newFrom, newFromChannel!.Value, newTo, newToChannel!.Value) != RouteError.None)
+        {
+            return;
+        }
+
+        ApplyReattach(drag.Target, newFrom, newFromChannel, newTo, newToChannel);
+    }
+
+    /// <summary>Вырезает старую связь и подключает конец заново (с сохранением гейна нового кабеля).</summary>
+    private void ApplyReattach(
+        CableLayer.ReattachTarget oldTarget,
+        Guid newFrom,
+        int? newFromChannel,
+        Guid newTo,
+        int? newToChannel)
+    {
+        var oldRoute = oldTarget.Route;
+        var savedGain = oldRoute.Gain;
+        var savedEnabled = oldRoute.Enabled;
+        var savedMap = oldRoute.Map;
+
+        // 1. Вырезаем старый конец.
+        if (_expandedView && oldTarget.FromChannel is { } fromChannel && oldTarget.ToChannel is { } toChannel)
+        {
+            _graph.SetRouteMap(
+                oldRoute.FromId,
+                oldRoute.ToId,
+                oldRoute.Map.With(fromChannel, toChannel, enabled: false));
+        }
+        else
+        {
+            _graph.RemoveRoute(oldRoute.FromId, oldRoute.ToId);
+        }
+
+        var oldRouteGone = _graph.FindRoute(oldRoute.FromId, oldRoute.ToId) is null;
+
+        // 2. Подключаем к новому порту.
+        Route? created;
+        if (_expandedView)
+        {
+            _graph.AddRoute(newFrom, newFromChannel!.Value, newTo, newToChannel!.Value, out created);
+        }
+        else
+        {
+            _graph.AddRoute(newFrom, newTo, out created);
+        }
+
+        // Переехавший в одиночку кабель сохраняет настройки старого.
+        if (created is not null && oldRouteGone)
+        {
+            _graph.SetRouteGain(created.FromId, created.ToId, savedGain);
+            _graph.SetRouteEnabled(created.FromId, created.ToId, savedEnabled);
+
+            // В бандл-режиме сохраняем карту каналов кабеля (с обрезкой под новые счётчики).
+            if (!_expandedView)
+            {
+                var fromCount = _graph.FindNode(newFrom)?.ChannelCount ?? ChannelMap.MaxChannels;
+                var toCount = _graph.FindNode(newTo)?.ChannelCount ?? ChannelMap.MaxChannels;
+                var restricted = savedMap.Restrict(fromCount, toCount);
+                if (!restricted.IsEmpty && restricted != created.Map)
+                {
+                    _graph.SetRouteMap(created.FromId, created.ToId, restricted);
+                }
+            }
+        }
+
+        if (created is not null)
+        {
+            SelectRoute(created, _expandedView && newFromChannel is { } fc && newToChannel is { } tc
+                ? (fc, tc)
+                : null);
+        }
+    }
+
+    private void DetachWire(CableLayer.ReattachTarget target)
+    {
+        if (_expandedView && target.FromChannel is { } fromChannel && target.ToChannel is { } toChannel)
+        {
+            _graph.SetRouteMap(
+                target.Route.FromId,
+                target.Route.ToId,
+                target.Route.Map.With(fromChannel, toChannel, enabled: false));
+        }
+        else
+        {
+            _graph.RemoveRoute(target.Route.FromId, target.Route.ToId);
+        }
+    }
+
+    /// <summary>ValidateRoute, где дубль не ошибка — существующий маршрут просто расширится парой.</summary>
+    private RouteError ValidateReattachEnds(Guid fromId, Guid toId)
+    {
+        var error = _graph.ValidateRoute(fromId, toId);
+        return error == RouteError.Duplicate ? RouteError.None : error;
+    }
+
+    /// <summary>Подсветка валидных портов во время переподключения: цель — та же сторона, что и хват.</summary>
+    private void UpdateReattachHighlights(Point world, ReattachDrag drag)
+    {
+        foreach (var element in _elements.Values)
+        {
+            element.ClearPortHighlights();
+            var error = drag.GrabbedAtOutput
+                ? ValidateReattachEnds(element.Node.Id, drag.OtherNodeId)
+                : ValidateReattachEnds(drag.OtherNodeId, element.Node.Id);
+            if (error == RouteError.None)
+            {
+                for (var channel = ChannelMap.Left; channel <= ChannelMap.Right; channel++)
+                {
+                    element.SetPortHighlight(drag.GrabbedAtOutput, channel, PortHighlight.Valid);
+                }
+            }
+        }
+
+        if (FindPort(world) is { } hovered && hovered.Output == drag.GrabbedAtOutput)
+        {
+            var error = drag.GrabbedAtOutput
+                ? ValidateReattachEnds(hovered.Element.Node.Id, drag.OtherNodeId)
+                : ValidateReattachEnds(drag.OtherNodeId, hovered.Element.Node.Id);
+            var valid = error == RouteError.None;
+
+            if (valid && _expandedView)
+            {
+                var fromChannel = drag.GrabbedAtOutput ? hovered.Channel : drag.Target.FromChannel;
+                var toChannel = drag.GrabbedAtOutput ? drag.Target.ToChannel : hovered.Channel;
+                valid = fromChannel is { } fc && toChannel is { } tc &&
+                    _graph.ValidateChannelPair(
+                        drag.GrabbedAtOutput ? hovered.Element.Node.Id : drag.OtherNodeId,
+                        fc,
+                        drag.GrabbedAtOutput ? drag.OtherNodeId : hovered.Element.Node.Id,
+                        tc) == RouteError.None;
+            }
+
+            hovered.Element.SetPortHighlight(
+                hovered.Output,
+                hovered.Channel,
+                valid ? PortHighlight.Valid : PortHighlight.Invalid);
+            _cableLayer.TempValid = valid;
+        }
+        else
+        {
+            _cableLayer.TempValid = true;
+        }
+    }
+
     private void FinishCableDrag(CableDrag drag, Point world)
     {
         var target = FindPort(world);
@@ -331,6 +588,8 @@ public partial class GraphView : UserControl
     private void EndCableDrag()
     {
         _cableDrag = null;
+        _reattachDrag = null;
+        _cableLayer.DetachedStrand = null;
         _cableLayer.TempFrom = null;
         _cableLayer.TempTo = null;
         _cableLayer.TempValid = true;

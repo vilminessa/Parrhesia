@@ -27,12 +27,21 @@ internal sealed class CableLayer : FrameworkElement
     /// <summary>Выделенная жила: маршрут + пара каналов (каналы null — весь кабель/бандл).</summary>
     public sealed record WireHit(Route Route, int? FromChannel, int? ToChannel);
 
+    /// <summary>Найденный прикреплённый конец жилы (для перетаскивания-переподключения).</summary>
+    public sealed record ReattachTarget(Route Route, int? FromChannel, int? ToChannel);
+
     public IReadOnlyList<Route>? Routes { get; set; }
 
     public Route? SelectedRoute { get; set; }
 
     /// <summary>Выделенная пара каналов внутри <see cref="SelectedRoute"/> (мастеринг-режим).</summary>
     public (int FromChannel, int ToChannel)? SelectedPair { get; set; }
+
+    /// <summary>
+    /// Жила, «снятая» с порта во время перетаскивания-переподключения:
+    /// не рисуется, пока тянется.
+    /// </summary>
+    public ReattachTarget? DetachedStrand { get; set; }
 
     /// <summary>Мастеринг-режим: жила на каждую пару. false — одна линия на маршрут.</summary>
     public bool Expanded { get; set; }
@@ -53,8 +62,7 @@ internal sealed class CableLayer : FrameworkElement
     public Func<Guid, int, Point?>? GetInputPoint { get; set; }
 
     /// <summary>Жила под точкой (координаты мира) или null.</summary>
-    public WireHit? HitTest(Point worldPoint)
-    {
+    public WireHit? HitTest(Point worldPoint)    {
         if (Routes is null || GetOutputPoint is null || GetInputPoint is null)
         {
             return null;
@@ -93,12 +101,121 @@ internal sealed class CableLayer : FrameworkElement
         return null;
     }
 
+    /// <summary>
+    /// Ближайший прикреплённый конец жилы к порту узла (для захвата и
+    /// переподключения). В бандл-режиме возвращается весь маршрут.
+    /// </summary>
+    public ReattachTarget? FindAttachedWire(Point worldPoint, NodeElement element, bool atOutput, int channel, double radius)
+    {
+        if (Routes is null || GetOutputPoint is null || GetInputPoint is null)
+        {
+            return null;
+        }
+
+        var radiusSq = radius * radius;
+        ReattachTarget? best = null;
+        var bestDistance = radiusSq;
+
+        void Consider(Route route, int? fromChannel, int? toChannel, Point from, Point to)
+        {
+            var (c1, c2) = ControlPoints(from, to);
+            for (var i = 0; i <= HitTestSamples; i++)
+            {
+                var p = Bezier(from, c1, c2, to, i / (double)HitTestSamples);
+                var dx = p.X - worldPoint.X;
+                var dy = p.Y - worldPoint.Y;
+                var distance = (dx * dx) + (dy * dy);
+                if (distance < bestDistance)
+                {
+                    bestDistance = distance;
+                    best = new ReattachTarget(route, fromChannel, toChannel);
+                }
+            }
+        }
+
+        foreach (var route in Routes)
+        {
+            if (!Expanded)
+            {
+                if (atOutput)
+                {
+                    if (route.FromId == element.Node.Id)
+                    {
+                        var from = GetOutputPoint(route.FromId, NodeElement.BundleChannel);
+                        var to = GetInputPoint(route.ToId, NodeElement.BundleChannel);
+                        if (from is { } f && to is { } t)
+                        {
+                            Consider(route, null, null, f, t);
+                        }
+                    }
+                }
+                else if (route.ToId == element.Node.Id)
+                {
+                    var from = GetOutputPoint(route.FromId, NodeElement.BundleChannel);
+                    var to = GetInputPoint(route.ToId, NodeElement.BundleChannel);
+                    if (from is { } f && to is { } t)
+                    {
+                        Consider(route, null, null, f, t);
+                    }
+                }
+
+                continue;
+            }
+
+            foreach (var (fromChannel, toChannel) in route.Map.Pairs())
+            {
+                var matchesPort = atOutput
+                    ? route.FromId == element.Node.Id && fromChannel == channel
+                    : route.ToId == element.Node.Id && toChannel == channel;
+                if (!matchesPort)
+                {
+                    continue;
+                }
+
+                var from = GetOutputPoint(route.FromId, fromChannel);
+                var to = GetInputPoint(route.ToId, toChannel);
+                if (from is { } f && to is { } t)
+                {
+                    Consider(route, fromChannel, toChannel, f, t);
+                }
+            }
+        }
+
+        return best;
+    }
+
+    /// <summary>Точка противоположного конца жилы (не двигается при переподключении).</summary>
+    public Point? GetOtherEnd(ReattachTarget target, bool grabbedAtOutput)
+    {
+        if (GetOutputPoint is null || GetInputPoint is null)
+        {
+            return null;
+        }
+
+        if (!Expanded || target.FromChannel is null || target.ToChannel is null)
+        {
+            return grabbedAtOutput
+                ? GetInputPoint(target.Route.ToId, NodeElement.BundleChannel)
+                : GetOutputPoint(target.Route.FromId, NodeElement.BundleChannel);
+        }
+
+        return grabbedAtOutput
+            ? GetInputPoint(target.Route.ToId, target.ToChannel.Value)
+            : GetOutputPoint(target.Route.FromId, target.FromChannel.Value);
+    }
+
     protected override void OnRender(DrawingContext dc)
     {
         if (Routes is not null && GetOutputPoint is not null && GetInputPoint is not null)
         {
             foreach (var route in Routes)
             {
+                // Снятая во время перетаскивания бандл-жила не рисуется.
+                if (!Expanded && DetachedStrand is { } detached && ReferenceEquals(detached.Route, route))
+                {
+                    continue;
+                }
+
                 if (ReferenceEquals(route, SelectedRoute))
                 {
                     continue;
@@ -218,6 +335,15 @@ internal sealed class CableLayer : FrameworkElement
         double thickness,
         (int FromChannel, int ToChannel)? skipPair = null)
     {
+        // Пара, снятая с порта во время перетаскивания, не рисуется.
+        if (DetachedStrand is { } detached &&
+            ReferenceEquals(detached.Route, route) &&
+            detached.FromChannel is { } detachedFrom &&
+            detached.ToChannel is { } detachedTo)
+        {
+            skipPair = (detachedFrom, detachedTo);
+        }
+
         var pen = CreateStrokePen(brush, thickness);
         foreach (var (from, to, fromChannel, toChannel) in Strands(route))
         {
