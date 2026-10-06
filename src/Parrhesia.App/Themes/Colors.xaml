@@ -1,0 +1,33 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+  <!-- Фоны -->
+  <SolidColorBrush x:Key="Brush.Deep" Color="#FF0B0D10" />
+  <SolidColorBrush x:Key="Brush.Panel" Color="#FF14171C" />
+  <SolidColorBrush x:Key="Brush.Elevated" Color="#FF1B1F26" />
+  <SolidColorBrush x:Key="Brush.Hover" Color="#FF232830" />
+  <SolidColorBrush x:Key="Brush.Pressed" Color="#FF2C323C" />
+
+  <!-- Рамки -->
+  <SolidColorBrush x:Key="Brush.Stroke" Color="#FF262B33" />
+  <SolidColorBrush x:Key="Brush.StrokeStrong" Color="#FF39404B" />
+
+  <!-- Текст -->
+  <SolidColorBrush x:Key="Brush.Text" Color="#FFE6E9EF" />
+  <SolidColorBrush x:Key="Brush.TextDim" Color="#FF8B93A1" />
+  <SolidColorBrush x:Key="Brush.TextFaint" Color="#FF5C6472" />
+
+  <!-- Акценты -->
+  <SolidColorBrush x:Key="Brush.Accent" Color="#FFFFB020" />
+  <SolidColorBrush x:Key="Brush.Cyan" Color="#FF35D0C8" />
+  <SolidColorBrush x:Key="Brush.Danger" Color="#FFFF5A52" />
+  <SolidColorBrush x:Key="Brush.Success" Color="#FF3DDC84" />
+
+  <!-- Метры -->
+  <SolidColorBrush x:Key="Brush.MeterLow" Color="#FF3DDC84" />
+  <SolidColorBrush x:Key="Brush.MeterMid" Color="#FFFFC53D" />
+  <SolidColorBrush x:Key="Brush.MeterHigh" Color="#FFFF4D4D" />
+  <SolidColorBrush x:Key="Brush.MeterPeak" Color="#FFFFF6D8" />
+  <SolidColorBrush x:Key="Brush.MeterOff" Color="#FF232830" />
+
+</ResourceDictionary>
