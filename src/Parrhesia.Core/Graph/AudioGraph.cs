@@ -182,6 +182,31 @@ public sealed class AudioGraph
         Raise(GraphChangeKind.RouteChanged, route: route);
     }
 
+    /// <summary>
+    /// Атомарно заменяет карту каналов маршрута (удобно инспектору: применить
+    /// всё состояние чекбоксов разом, без промежуточного удаления маршрута).
+    /// Пустая карта удаляет маршрут.
+    /// </summary>
+    public void SetRouteMap(Guid fromId, Guid toId, ChannelMap map)
+    {
+        var route = FindRoute(fromId, toId) ??
+            throw new ArgumentException("Маршрут не найден.", nameof(toId));
+
+        if (map == route.Map)
+        {
+            return;
+        }
+
+        if (map.IsEmpty)
+        {
+            RemoveRoute(fromId, toId);
+            return;
+        }
+
+        route.Map = map;
+        Raise(GraphChangeKind.RouteChanged, route: route);
+    }
+
     public bool RemoveRoute(Guid fromId, Guid toId)
     {
         var route = FindRoute(fromId, toId);

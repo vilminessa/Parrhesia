@@ -302,6 +302,44 @@ public class AudioGraphTests
     }
 
     [Fact]
+    public void SetRouteMap_ReplacesAtomically_WithoutIntermediateRemoval()
+    {
+        var graph = new AudioGraph();
+        var source = graph.AddNode("Вход", NodeKind.Source);
+        var sink = graph.AddNode("Выход", NodeKind.Sink);
+        graph.AddRoute(source.Id, sink.Id, out var route);
+
+        var kinds = new List<GraphChangeKind>();
+        graph.Changed += (_, e) => kinds.Add(e.Kind);
+
+        // Прямое переключение на кросс: промежуточного пустого состояния нет.
+        graph.SetRouteMap(source.Id, sink.Id, ChannelMap.Pair(0, 1).With(1, 0, true));
+
+        Assert.Equal(0b0110, route!.Map.Bits);
+        Assert.Equal(new[] { GraphChangeKind.RouteChanged }, kinds);
+        Assert.Single(graph.Routes);
+    }
+
+    [Fact]
+    public void SetRouteMap_Empty_RemovesRoute_SameMap_NoEvent()
+    {
+        var graph = new AudioGraph();
+        var source = graph.AddNode("Вход", NodeKind.Source);
+        var sink = graph.AddNode("Выход", NodeKind.Sink);
+        graph.AddRoute(source.Id, sink.Id, out _);
+
+        var kinds = new List<GraphChangeKind>();
+        graph.Changed += (_, e) => kinds.Add(e.Kind);
+
+        graph.SetRouteMap(source.Id, sink.Id, ChannelMap.Direct); // как есть — без события
+        Assert.Empty(kinds);
+
+        graph.SetRouteMap(source.Id, sink.Id, new ChannelMap(0));
+        Assert.Equal(new[] { GraphChangeKind.RouteRemoved }, kinds);
+        Assert.Empty(graph.Routes);
+    }
+
+    [Fact]
     public void RemoveNode_RemovesAttachedRoutes()
     {
         var graph = new AudioGraph();

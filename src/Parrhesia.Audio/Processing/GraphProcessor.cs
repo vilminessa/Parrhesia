@@ -131,7 +131,7 @@ public sealed class GraphProcessor : IDisposable
 
         foreach (var edge in snapshot.Edges)
         {
-            if (edge.To != node.Id || !edge.Enabled)
+            if (edge.To != node.Id || !edge.Enabled || edge.Map.IsEmpty)
             {
                 continue;
             }
@@ -141,7 +141,19 @@ public sealed class GraphProcessor : IDisposable
                 continue;
             }
 
-            Accumulate(span, from.AsSpan(0, samples), edge.Gain);
+            var source = from.AsSpan(0, samples);
+            if (edge.Map.Bits == ChannelMap.Direct.Bits)
+            {
+                // Стерео-пара по прямой — данные лежат в буфере сплошняком.
+                Accumulate(span, source, edge.Gain);
+            }
+            else
+            {
+                foreach (var (fromChannel, toChannel) in edge.Map.Pairs())
+                {
+                    AccumulateChannel(span, toChannel, source, fromChannel, edge.Gain);
+                }
+            }
         }
 
         ApplyNodeStage(node, span);
@@ -161,6 +173,39 @@ public sealed class GraphProcessor : IDisposable
             for (var i = 0; i < target.Length; i++)
             {
                 target[i] += source[i] * gain;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Складывает один канал источника в один канал назначения.
+    /// Буферы interleaved: [L0 R0 L1 R1 ...], шаг по кадру = число каналов.
+    /// </summary>
+    private void AccumulateChannel(
+        Span<float> target,
+        int targetChannel,
+        ReadOnlySpan<float> source,
+        int sourceChannel,
+        float gain)
+    {
+        if (sourceChannel >= _channels || targetChannel >= _channels)
+        {
+            return;
+        }
+
+        var frames = target.Length / _channels;
+        if (gain == 1f)
+        {
+            for (var frame = 0; frame < frames; frame++)
+            {
+                target[(frame * _channels) + targetChannel] += source[(frame * _channels) + sourceChannel];
+            }
+        }
+        else
+        {
+            for (var frame = 0; frame < frames; frame++)
+            {
+                target[(frame * _channels) + targetChannel] += source[(frame * _channels) + sourceChannel] * gain;
             }
         }
     }

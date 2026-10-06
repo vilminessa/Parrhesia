@@ -28,7 +28,7 @@ internal sealed class GraphSnapshot
             .Select(n => new NodeInfo(n.Id, n.Kind, n.Gain, graph.IsEffectivelyMuted(n)))
             .ToArray();
         var edges = graph.Routes
-            .Select(r => new EdgeInfo(r.FromId, r.ToId, r.Gain, r.Enabled))
+            .Select(r => new EdgeInfo(r.FromId, r.ToId, r.Gain, r.Enabled, r.Map))
             .ToArray();
 
         return new GraphSnapshot(TopologicalOrder(nodes, edges), edges);
@@ -93,4 +93,4 @@ internal sealed class GraphSnapshot
 
 internal sealed record NodeInfo(Guid Id, NodeKind Kind, float Gain, bool Muted);
 
-internal sealed record EdgeInfo(Guid From, Guid To, float Gain, bool Enabled);
+internal sealed record EdgeInfo(Guid From, Guid To, float Gain, bool Enabled, ChannelMap Map);
