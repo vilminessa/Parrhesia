@@ -109,13 +109,17 @@ internal sealed class NodeElement : Border
             Child = bodyContent,
         };
 
-        var inPanel = BuildPortColumn(_inPorts, isInput: true);
-        var outPanel = BuildPortColumn(_outPorts, isInput: false);
-
         var grid = new Grid();
         grid.Children.Add(body);
-        grid.Children.Add(inPanel);
-        grid.Children.Add(outPanel);
+        if (node.HasInput)
+        {
+            grid.Children.Add(BuildPortColumn(_inPorts, isInput: true));
+        }
+
+        if (node.HasOutput)
+        {
+            grid.Children.Add(BuildPortColumn(_outPorts, isInput: false));
+        }
 
         _root = new Border
         {

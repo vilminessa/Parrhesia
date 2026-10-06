@@ -880,8 +880,16 @@ public partial class GraphView : UserControl
         {
             for (var channel = ChannelMap.Left; channel <= ChannelMap.Right; channel++)
             {
-                Consider(element.InputPortCenter(channel), element, output: false, channel);
-                Consider(element.OutputPortCenter(channel), element, output: true, channel);
+                // Порты рисуются только со стороны, которую поддерживает тип узла.
+                if (element.Node.HasInput)
+                {
+                    Consider(element.InputPortCenter(channel), element, output: false, channel);
+                }
+
+                if (element.Node.HasOutput)
+                {
+                    Consider(element.OutputPortCenter(channel), element, output: true, channel);
+                }
             }
         }
 
