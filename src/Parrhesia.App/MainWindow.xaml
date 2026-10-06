@@ -99,8 +99,7 @@
                                Description="Канальные полосы, фейдеры и метры — раздел в разработке." />
       </TabItem>
       <TabItem Header="Схема">
-        <views:PlaceholderView Title="Схема"
-                               Description="Редактор маршрутизации: ноды и кабели — раздел в разработке." />
+        <views:GraphView />
       </TabItem>
       <TabItem Header="Устройства">
         <views:PlaceholderView Title="Устройства"

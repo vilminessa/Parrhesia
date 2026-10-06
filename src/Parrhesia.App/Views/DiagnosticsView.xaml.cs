@@ -36,7 +36,12 @@ public partial class DiagnosticsView : UserControl
 
         for (var i = 0; i < MeterCount; i++)
         {
-            var meter = new LedMeterControl { Margin = new Thickness(3, 2, 3, 2) };
+            var meter = new LedMeterControl
+            {
+                Margin = new Thickness(3, 2, 3, 2),
+                Width = 20,
+                HorizontalAlignment = HorizontalAlignment.Center,
+            };
             _meters.Add(meter);
             Meters.Children.Add(meter);
 

@@ -1,0 +1,27 @@
+<UserControl x:Class="Parrhesia.App.Views.GraphView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Focusable="True"
+             MouseWheel="OnMouseWheel"
+             MouseDown="OnMouseDown"
+             MouseMove="OnMouseMove"
+             MouseUp="OnMouseUp"
+             PreviewKeyDown="OnKeyDown"
+             PreviewKeyUp="OnKeyUp">
+  <Grid x:Name="Viewport" ClipToBounds="True" Background="{DynamicResource Brush.Deep}">
+    <Canvas x:Name="World" />
+
+    <Border HorizontalAlignment="Left"
+            VerticalAlignment="Bottom"
+            Margin="14"
+            Background="{DynamicResource Brush.Panel}"
+            BorderBrush="{DynamicResource Brush.Stroke}"
+            BorderThickness="1"
+            CornerRadius="6"
+            Padding="11,7">
+      <TextBlock Text="Колесо — масштаб · Пробел или средняя кнопка — панорама · Del — удалить · Esc — снять выделение"
+                 FontSize="11"
+                 Foreground="{DynamicResource Brush.TextDim}" />
+    </Border>
+  </Grid>
+</UserControl>
