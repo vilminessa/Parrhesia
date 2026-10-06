@@ -13,4 +13,8 @@
     <UseWPF>true</UseWPF>
   </PropertyGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="Parrhesia.App.Tests" />
+  </ItemGroup>
+
 </Project>

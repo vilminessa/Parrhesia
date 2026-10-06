@@ -199,12 +199,17 @@ internal sealed class NodeElement : Border
         if (_inColumn is not null)
         {
             _grid.Children.Remove(_inColumn);
+            // Важно: отсоединяем порты от старой панели — иначе повторное
+            // добавление тех же кружков в новую колонку бросает
+            // InvalidOperationException («элемент уже имеет родителя»).
+            _inColumn.Children.Clear();
             _inColumn = null;
         }
 
         if (_outColumn is not null)
         {
             _grid.Children.Remove(_outColumn);
+            _outColumn.Children.Clear();
             _outColumn = null;
         }
 
@@ -374,8 +379,11 @@ internal sealed class NodeElement : Border
         for (var channel = 0; channel < channelCount; channel++)
         {
             var port = ports[channel];
+            var channelName = channel < Node.ChannelNames.Length
+                ? Node.ChannelNames[channel]
+                : (channel + 1).ToString();
             port.ToolTip = Expanded
-                ? $"{sideName} {Node.ChannelNames[channel]} (канал {channel + 1})"
+                ? $"{sideName} {channelName} (канал {channel + 1})"
                 : $"{sideName}: все каналы ({Node.ChannelCount})";
             port.Margin = channel < channelCount - 1
                 ? new Thickness(0, 0, 0, 8)
