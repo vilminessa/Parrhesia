@@ -21,6 +21,8 @@ public static class GraphSerializer
         Converters = { new JsonStringEnumConverter() },
         AllowTrailingCommas = true,
         ReadCommentHandling = JsonCommentHandling.Skip,
+        // Кириллица в файлах как есть — файлы читаются человеком.
+        Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
     };
 
     public static string Serialize(AudioGraph graph)
