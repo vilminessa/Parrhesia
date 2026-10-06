@@ -190,7 +190,10 @@ public partial class ProfileStripView : UserControl
         if (!AppServices.Profiles.SwitchTo(profile, out var error))
         {
             MessageBox.Show(error, "Профиль", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
         }
+
+        System.Diagnostics.Trace.WriteLine($"[Профиль] → {profile.Name}");
     }
 
     private void RenameFlow(Profile profile)
