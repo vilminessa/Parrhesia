@@ -18,5 +18,8 @@ public sealed class Route
 
     public bool Enabled { get; internal set; } = true;
 
-    public override string ToString() => $"{FromId:N} -> {ToId:N} (gain {Gain:0.###})";
+    /// <summary>Какие пары каналов соединены. По умолчанию стерео-пара L→L, R→R.</summary>
+    public ChannelMap Map { get; internal set; } = ChannelMap.Direct;
+
+    public override string ToString() => $"{FromId:N} -> {ToId:N} [{Map}] (gain {Gain:0.###})";
 }

@@ -122,6 +122,122 @@ public class AudioGraphTests
     }
 
     [Fact]
+    public void AddRoute_Default_HasDirectChannelMap()
+    {
+        var graph = new AudioGraph();
+        var source = graph.AddNode("Вход", NodeKind.Source);
+        var bus = graph.AddNode("Шина", NodeKind.Bus);
+
+        graph.AddRoute(source.Id, bus.Id, out var route);
+
+        Assert.Equal(ChannelMap.Direct, route!.Map);
+    }
+
+    [Fact]
+    public void AddRoute_WithChannel_CreatesRouteWithSinglePair()
+    {
+        var graph = new AudioGraph();
+        var source = graph.AddNode("Вход", NodeKind.Source);
+        var sink = graph.AddNode("Выход", NodeKind.Sink);
+
+        var error = graph.AddRoute(source.Id, fromChannel: ChannelMap.Left, sink.Id, toChannel: ChannelMap.Right, out var route);
+
+        Assert.Equal(RouteError.None, error);
+        Assert.Equal(ChannelMap.Pair(ChannelMap.Left, ChannelMap.Right), route!.Map);
+        Assert.Single(graph.Routes);
+    }
+
+    [Fact]
+    public void AddRoute_WithChannel_ExtendsExistingRouteMap()
+    {
+        var graph = new AudioGraph();
+        var source = graph.AddNode("Вход", NodeKind.Source);
+        var sink = graph.AddNode("Выход", NodeKind.Sink);
+        graph.AddRoute(source.Id, sink.Id, out var route);
+
+        GraphChange? change = null;
+        graph.Changed += (_, e) => change = e;
+
+        // Повторное добавление той же пары — идемпотентно, без события.
+        Assert.Equal(RouteError.None, graph.AddRoute(source.Id, 0, sink.Id, 0, out var same));
+        Assert.Same(route, same);
+        Assert.Null(change);
+
+        // Новая пара расширяет карту.
+        Assert.Equal(RouteError.None, graph.AddRoute(source.Id, 0, sink.Id, 1, out _));
+        Assert.True(route!.Map.Has(0, 0));
+        Assert.True(route.Map.Has(0, 1));
+        Assert.Equal(GraphChangeKind.RouteChanged, change?.Kind);
+        Assert.Single(graph.Routes);
+    }
+
+    [Fact]
+    public void AddRoute_WithChannel_StillValidatesTopology()
+    {
+        var graph = new AudioGraph();
+        var source = graph.AddNode("Вход", NodeKind.Source);
+        var otherSource = graph.AddNode("Вход2", NodeKind.Source);
+        var sink = graph.AddNode("Выход", NodeKind.Sink);
+
+        Assert.Equal(RouteError.NoOutputPort, graph.AddRoute(sink.Id, 1, source.Id, 0, out _));
+        Assert.Equal(RouteError.NoInputPort, graph.AddRoute(source.Id, 0, otherSource.Id, 1, out _));
+        Assert.Empty(graph.Routes);
+    }
+
+    [Fact]
+    public void AddRoute_InvalidChannel_Throws()
+    {
+        var graph = new AudioGraph();
+        var source = graph.AddNode("Вход", NodeKind.Source);
+        var sink = graph.AddNode("Выход", NodeKind.Sink);
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => graph.AddRoute(source.Id, 2, sink.Id, 0, out _));
+    }
+
+    [Fact]
+    public void SetRouteChannel_DisablingOne_KeepsRoute_WithMonoMap()
+    {
+        var graph = new AudioGraph();
+        var source = graph.AddNode("Вход", NodeKind.Source);
+        var sink = graph.AddNode("Выход", NodeKind.Sink);
+        graph.AddRoute(source.Id, sink.Id, out var route);
+
+        GraphChange? change = null;
+        graph.Changed += (_, e) => change = e;
+        graph.SetRouteChannel(source.Id, sink.Id, ChannelMap.Left, ChannelMap.Left, enabled: false);
+
+        Assert.Equal(ChannelMap.Pair(ChannelMap.Right, ChannelMap.Right), route!.Map);
+        Assert.Equal(GraphChangeKind.RouteChanged, change?.Kind);
+        Assert.Single(graph.Routes);
+    }
+
+    [Fact]
+    public void SetRouteChannel_DisablingLastPair_RemovesRoute()
+    {
+        var graph = new AudioGraph();
+        var source = graph.AddNode("Вход", NodeKind.Source);
+        var sink = graph.AddNode("Выход", NodeKind.Sink);
+        graph.AddRoute(source.Id, sink.Id, out _);
+
+        GraphChange? change = null;
+        graph.Changed += (_, e) => change = e;
+        graph.SetRouteChannel(source.Id, sink.Id, ChannelMap.Left, ChannelMap.Left, enabled: false);
+        graph.SetRouteChannel(source.Id, sink.Id, ChannelMap.Right, ChannelMap.Right, enabled: false);
+
+        Assert.Empty(graph.Routes);
+        Assert.Equal(GraphChangeKind.RouteRemoved, change?.Kind);
+    }
+
+    [Fact]
+    public void SetRouteChannel_UnknownRoute_Throws()
+    {
+        var graph = new AudioGraph();
+
+        Assert.Throws<ArgumentException>(() =>
+            graph.SetRouteChannel(Guid.NewGuid(), Guid.NewGuid(), 0, 0, enabled: false));
+    }
+
+    [Fact]
     public void RemoveNode_RemovesAttachedRoutes()
     {
         var graph = new AudioGraph();

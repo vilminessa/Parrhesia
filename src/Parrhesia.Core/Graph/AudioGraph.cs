@@ -121,6 +121,67 @@ public sealed class AudioGraph
         return RouteError.None;
     }
 
+    /// <summary>
+    /// Добавляет маршрут с конкретной парой каналов (0 = L, 1 = R).
+    /// Если маршрут уже есть — пара добавляется в его карту (идемпотентно).
+    /// </summary>
+    public RouteError AddRoute(Guid fromId, int fromChannel, Guid toId, int toChannel, out Route? route)
+    {
+        // Валидация каналов раньше любых проверок: плохой индекс — ошибка программиста.
+        _ = ChannelMap.Pair(fromChannel, toChannel);
+
+        var existing = FindRoute(fromId, toId);
+        if (existing is not null)
+        {
+            route = existing;
+            var updated = existing.Map.With(fromChannel, toChannel, enabled: true);
+            if (updated != existing.Map)
+            {
+                existing.Map = updated;
+                Raise(GraphChangeKind.RouteChanged, route: existing);
+            }
+
+            return RouteError.None;
+        }
+
+        var error = ValidateRoute(fromId, toId);
+        if (error != RouteError.None)
+        {
+            route = null;
+            return error;
+        }
+
+        route = new Route(fromId, toId) { Map = ChannelMap.Pair(fromChannel, toChannel) };
+        _routes.Add(route);
+        Raise(GraphChangeKind.RouteAdded, route: route);
+        return RouteError.None;
+    }
+
+    /// <summary>
+    /// Включает/выключает пару каналов на маршруте. Выключение последней пары
+    /// удаляет маршрут целиком (событие <see cref="GraphChangeKind.RouteRemoved"/>).
+    /// </summary>
+    public void SetRouteChannel(Guid fromId, Guid toId, int fromChannel, int toChannel, bool enabled)
+    {
+        var route = FindRoute(fromId, toId) ??
+            throw new ArgumentException("Маршрут не найден.", nameof(toId));
+
+        var updated = route.Map.With(fromChannel, toChannel, enabled);
+        if (updated == route.Map)
+        {
+            return;
+        }
+
+        if (updated.IsEmpty)
+        {
+            RemoveRoute(fromId, toId);
+            return;
+        }
+
+        route.Map = updated;
+        Raise(GraphChangeKind.RouteChanged, route: route);
+    }
+
     public bool RemoveRoute(Guid fromId, Guid toId)
     {
         var route = FindRoute(fromId, toId);
