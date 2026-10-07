@@ -38,4 +38,10 @@ public interface IAudioEngine : IDisposable
     /// вызов при работающем движке меняет только монитор, тракт не перезапускается.
     /// </summary>
     void SetMonitorDevice(string? deviceId);
+
+    /// <summary>
+    /// Явная частота движка (null — авто-выбор: настройка → 48k при виртуальном снике →
+    /// mix реального выхода → 48k). Смена при работающем движке перезапускает тракт.
+    /// </summary>
+    void SetSampleRate(int? configuredRate);
 }

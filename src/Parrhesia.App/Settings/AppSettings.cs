@@ -15,6 +15,12 @@ public sealed class AppSettings
     /// </summary>
     public string MonitorDeviceId { get; set; } = string.Empty;
 
+    /// <summary>
+    /// Частота движка: "auto" (по умолчанию) либо 44100/48000/88200/96000.
+    /// Разбор — EngineFormat.ParseSetting; невалидное значение деградирует в "auto".
+    /// </summary>
+    public string EngineSampleRate { get; set; } = "auto";
+
     private static string FilePath =>
         Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),

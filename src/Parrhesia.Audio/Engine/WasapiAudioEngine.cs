@@ -35,15 +35,19 @@ public sealed class WasapiAudioEngine : IAudioEngine
 
     private readonly List<SourceBinding> _sources = [];
 
-    private WasapiPlayer? _player;
+    private readonly List<WasapiPlayer> _players = [];
     private DriverFeed? _feed;
     private VirtualSinkPump? _pump;
-    private MMDevice? _sinkDevice;
+    private readonly List<MMDevice> _sinkDevices = [];
     private Guid _sinkId;
     private string? _sinkName;
+    private string[] _sinkNames = [];
     private int _sampleRate;
     private int _channels;
     private bool _running;
+
+    /// <summary>Явная частота движка из настройки; null — авто-выбор (см. EngineFormat).</summary>
+    private int? _configuredSampleRate;
 
     /// <summary>Общий замок всех RT-потребителей GraphProcessor (помпа + монитор).</summary>
     private readonly object _renderGate = new();
@@ -134,77 +138,169 @@ public sealed class WasapiAudioEngine : IAudioEngine
     {
         try
         {
-            var sink = _graph.Nodes.FirstOrDefault(n => n.Kind == NodeKind.Sink && n.DeviceId is not null);
-            if (sink is null)
+            // 1. Планы назначений: все сники с валидной привязкой (loopback как выход запрещён).
+            var plans = new List<SinkPlan>();
+            foreach (var node in _graph.Nodes)
+            {
+                if (node.Kind != NodeKind.Sink || node.DeviceId is null)
+                {
+                    continue;
+                }
+
+                if (!DeviceSpec.TryParse(node.DeviceId, out var spec) || spec.Loopback)
+                {
+                    LogMessage(EngineLogLevel.Warning, $"Недопустимая привязка назначения «{node.DeviceId}»");
+                    continue;
+                }
+
+                plans.Add(new SinkPlan(node.Id, node.Name, spec));
+            }
+
+            if (plans.Count == 0)
             {
                 LogMessage(EngineLogLevel.Warning, "Нет назначения с привязанным устройством — движок не запущен");
                 return;
             }
 
-            if (!DeviceSpec.TryParse(sink.DeviceId, out var sinkSpec) || sinkSpec.Loopback)
+            // 2. Открытие: виртуал → фид (физически один), реальные → устройство + игрок.
+            //    Отказ одного назначения не валит остальные.
+            var opened = new List<OpenedSink>();
+            var skipped = 0;
+            foreach (var plan in plans)
             {
-                LogMessage(EngineLogLevel.Warning, $"Недопустимая привязка назначения «{sink.DeviceId}»");
+                if (plan.Spec.Target == DeviceSpecTarget.Virtual)
+                {
+                    if (_feed is not null)
+                    {
+                        LogMessage(EngineLogLevel.Warning, $"Виртуальный вывод уже подключён — «{plan.Name}» пропущен");
+                        skipped++;
+                        continue;
+                    }
+
+                    try
+                    {
+                        var feed = new DriverFeed();
+                        feed.Open(); // бросает исключение, если драйвер не установлен
+                        _feed = feed;
+                        opened.Add(new OpenedSink(plan, null, null));
+                    }
+                    catch (Exception ex)
+                    {
+                        skipped++;
+                        LogMessage(EngineLogLevel.Error, $"Назначение «{plan.Name}»: {ex.Message}");
+                    }
+
+                    continue;
+                }
+
+                if (!TryResolveDevice(plan.Spec, DataFlow.Render, out var device))
+                {
+                    skipped++;
+                    continue;
+                }
+
+                try
+                {
+                    var player = new WasapiPlayerBuilder()
+                        .WithDevice(device)
+                        .WithSharedMode()
+                        .WithEventSync()
+                        .WithLatency(OutputLatencyMs)
+                        .Build();
+
+                    _players.Add(player);
+                    _sinkDevices.Add(device);
+                    opened.Add(new OpenedSink(plan, device, player));
+                }
+                catch (Exception ex)
+                {
+                    device.Dispose();
+                    skipped++;
+                    LogMessage(EngineLogLevel.Error, $"Назначение «{plan.Name}»: {ex.Message}");
+                }
+            }
+
+            if (opened.Count == 0)
+            {
+                _feed?.Dispose();
+                _feed = null;
+                LogMessage(EngineLogLevel.Warning, "Ни одно назначение не открылось — движок не запущен");
                 return;
             }
 
-            WaveFormat engineFormat;
-            Action startStreaming;
-            MMDevice? sinkDevice = null;
+            // 3. Формат движка: float32/2к; частота — настройка или авто (см. EngineFormat).
+            //    Реальные выходы получают блок в формате движка — частоту/каналы
+            //    доделывает WASAPI (shared, AutoConvertPcm).
+            var hasVirtual = opened.Any(o => o.Plan.Spec.Target == DeviceSpecTarget.Virtual);
+            var firstRealMix = opened.FirstOrDefault(o => o.Player is not null)?.Player?.DeviceMixFormat.SampleRate;
+            var engineFormat = WaveFormat.CreateIeeeFloatWaveFormat(
+                EngineFormat.Resolve(_configuredSampleRate, hasVirtual, firstRealMix),
+                EngineFormat.Channels);
 
-            if (sinkSpec.Target == DeviceSpecTarget.Virtual)
+            // 4. Сборка выходов: каждый тянет свой блок, все сериализованы общим замком.
+            var startStreaming = new List<Action>();
+            foreach (var sink in opened)
             {
-                // Виртуальный вывод: граф гонит блоки в драйвер \\.\ParrhesiaFeed.
-                engineFormat = WaveFormat.CreateIeeeFloatWaveFormat(DriverFeed.Rate, DriverFeed.Channels);
-                var feed = new DriverFeed();
-                feed.Open(); // бросает исключение, если драйвер не установлен
-                var provider = new SerializedWaveProvider(
-                    new GraphWaveProvider(_processor, sink.Id, engineFormat),
-                    _renderGate);
-                var pump = new VirtualSinkPump(provider, feed);
-                _feed = feed;
-                _pump = pump;
-                startStreaming = pump.Start;
-                _sinkName = "Parrhesia Out (виртуальный)";
-            }
-            else
-            {
-                if (!TryResolveDevice(sinkSpec, DataFlow.Render, out sinkDevice))
+                IWaveProvider provider = new GraphWaveProvider(_processor, sink.Plan.NodeId, engineFormat);
+
+                if (sink.Plan.Spec.Target == DeviceSpecTarget.Virtual &&
+                    (engineFormat.SampleRate != DriverFeed.Rate || engineFormat.Channels != DriverFeed.Channels))
                 {
-                    return;
+                    // Настройка задала частоту ≠ 48k, а фид требует канон — адаптируем сами.
+                    var adapter = SourceFormatAdapter.Create(
+                        engineFormat.SampleRate,
+                        engineFormat.Channels,
+                        DriverFeed.Rate,
+                        DriverFeed.Channels);
+                    if (adapter is not null)
+                    {
+                        provider = new AdaptedWaveProvider(provider, adapter);
+                    }
                 }
 
-                var player = new WasapiPlayerBuilder()
-                    .WithDevice(sinkDevice)
-                    .WithSharedMode()
-                    .WithEventSync()
-                    .WithLatency(OutputLatencyMs)
-                    .Build();
-
-                var mix = player.DeviceMixFormat;
-                engineFormat = WaveFormat.CreateIeeeFloatWaveFormat(mix.SampleRate, mix.Channels);
-                var provider = new SerializedWaveProvider(
-                    new GraphWaveProvider(_processor, sink.Id, engineFormat),
-                    _renderGate);
-                player.Init(provider);
-
-                _player = player;
-                _sinkDevice = sinkDevice;
-                _sinkName = sinkDevice.FriendlyName;
-                startStreaming = player.Play;
+                provider = new SerializedWaveProvider(provider, _renderGate);
+                if (sink.Plan.Spec.Target == DeviceSpecTarget.Virtual)
+                {
+                    var pump = new VirtualSinkPump(provider, _feed!);
+                    _pump = pump;
+                    startStreaming.Add(pump.Start);
+                }
+                else
+                {
+                    sink.Player!.Init(provider);
+                    startStreaming.Add(sink.Player.Play);
+                }
             }
 
-            _sinkId = sink.Id;
-            _sinkIsVirtual = sinkSpec.Target == DeviceSpecTarget.Virtual;
+            // 5. Идентичность выхода: для монитора и статуса приоритет — виртуальный сник.
+            var primary = opened.FirstOrDefault(o => o.Plan.Spec.Target == DeviceSpecTarget.Virtual) ?? opened[0];
+            _sinkId = primary.Plan.NodeId;
+            _sinkIsVirtual = hasVirtual;
             _sampleRate = engineFormat.SampleRate;
             _channels = engineFormat.Channels;
+            _sinkNames = opened.Select(Describe).ToArray();
+            _sinkName = Describe(primary);
 
             // Цепочки слотов: загрузка/подготовка плагинов под формат движка
             // (max-блок100 мс — больше обоих путей вывода: player50 мс, помпа10 мс).
             _slotChains.Prepare(engineFormat.SampleRate, engineFormat.SampleRate / 10, engineFormat.Channels);
 
-            OpenSources(engineFormat, sinkDevice);
+            var sinkRenderIds = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var sink in opened)
+            {
+                if (sink.Device is not null)
+                {
+                    sinkRenderIds.Add(sink.Device.ID);
+                }
+            }
 
-            startStreaming();
+            OpenSources(engineFormat, sinkRenderIds);
+
+            foreach (var start in startStreaming)
+            {
+                start();
+            }
+
             StartMonitorIfConfigured();
             foreach (var source in _sources.ToArray())
             {
@@ -234,7 +330,9 @@ public sealed class WasapiAudioEngine : IAudioEngine
             _statsTimer = new Timer(_ => LogStatsIfChanged(), null, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5));
             LogMessage(
                 EngineLogLevel.Info,
-                $"Движок запущен: {_sampleRate} Гц, выход «{_sinkName}», источников {_sources.Count}");
+                $"Движок запущен: {_sampleRate} Гц, выходов {_sinkNames.Length} ({string.Join(", ", _sinkNames)}), " +
+                $"источников {_sources.Count}" +
+                (skipped > 0 ? $", назначений пропущено {skipped}" : string.Empty));
             StatusChanged?.Invoke(this, EventArgs.Empty);
             _ = ResetStatsLater();
         }
@@ -245,7 +343,13 @@ public sealed class WasapiAudioEngine : IAudioEngine
         }
     }
 
-    private void OpenSources(WaveFormat engineFormat, MMDevice? sinkDevice)
+    /// <summary>Человекочитаемое имя выхода для статуса.</summary>
+    private static string Describe(OpenedSink sink) =>
+        sink.Plan.Spec.Target == DeviceSpecTarget.Virtual
+            ? "Parrhesia Out (виртуальный)"
+            : sink.Device?.FriendlyName ?? sink.Plan.Name;
+
+    private void OpenSources(WaveFormat engineFormat, IReadOnlySet<string> sinkRenderIds)
     {
         foreach (var node in _graph.Nodes)
         {
@@ -265,7 +369,7 @@ public sealed class WasapiAudioEngine : IAudioEngine
                 continue;
             }
 
-            if (sinkDevice is not null && spec.Loopback && device.ID == sinkDevice.ID)
+            if (spec.Loopback && sinkRenderIds.Contains(device.ID))
             {
                 LogMessage(
                     EngineLogLevel.Warning,
@@ -484,6 +588,31 @@ public sealed class WasapiAudioEngine : IAudioEngine
     }
 
     /// <summary>
+    /// Задаёт явную частоту движка (null — авто-выбор, см. <see cref="EngineFormat"/>).
+    /// При работающем движке смена частоты = перезапуск тракта: кольца, слоты плагинов
+    /// и формат устройств пересобираются заново.
+    /// </summary>
+    public void SetSampleRate(int? configuredRate)
+    {
+        var normalized = configuredRate is int rate && EngineFormat.IsSupportedRate(rate) ? (int?)rate : null;
+        lock (_gate)
+        {
+            if (_configuredSampleRate == normalized)
+            {
+                return;
+            }
+
+            _configuredSampleRate = normalized;
+            if (!_running)
+            {
+                return;
+            }
+
+            Restart("сменилась частота движка");
+        }
+    }
+
+    /// <summary>
     /// Переключает устройство мониторинга. При работающем движке перезапускается
     /// только монитор-плеер — источники, помпа и ядро не трогаются (вкл/выкл
     /// не должно ронять тракт).
@@ -635,13 +764,16 @@ public sealed class WasapiAudioEngine : IAudioEngine
             }
         }
 
-        try
+        foreach (var player in _players)
         {
-            _player?.Stop();
-        }
-        catch
-        {
-            // Устройство могло исчезнуть.
+            try
+            {
+                player.Stop();
+            }
+            catch
+            {
+                // Устройство могло исчезнуть — не мешаем остановке остальных.
+            }
         }
 
         try
@@ -666,16 +798,25 @@ public sealed class WasapiAudioEngine : IAudioEngine
         _sources.Clear();
         _statsTimer?.Dispose();
         _statsTimer = null;
-        _player?.Dispose();
-        _player = null;
+        foreach (var player in _players)
+        {
+            player.Dispose();
+        }
+
+        _players.Clear();
         _pump?.Dispose();
         _pump = null;
         _feed?.Dispose();
         _feed = null;
-        _sinkDevice?.Dispose();
-        _sinkDevice = null;
+        foreach (var device in _sinkDevices)
+        {
+            device.Dispose();
+        }
+
+        _sinkDevices.Clear();
         _sinkId = Guid.Empty;
         _sinkName = null;
+        _sinkNames = [];
         _sampleRate = 0;
         _channels = 0;
         _running = false;
@@ -787,6 +928,7 @@ public sealed class WasapiAudioEngine : IAudioEngine
         {
             MonitorName = _monitorName,
             MonitorActive = _monitorPlayer is not null,
+            SinkNames = _sinkNames,
         };
     }
 
@@ -939,6 +1081,15 @@ public sealed class WasapiAudioEngine : IAudioEngine
 
         return Math.Max(result, 4096);
     }
+
+    /// <summary>План назначения: узел-сник и разобранная привязка устройства.</summary>
+    private sealed record SinkPlan(Guid NodeId, string Name, DeviceSpec Spec);
+
+    /// <summary>
+    /// Успешно открытое назначение. У виртуального нет устройства и игрока —
+    /// там фид (<see cref="_feed"/>) и помпа, создаваемые на шаге сборки.
+    /// </summary>
+    private sealed record OpenedSink(SinkPlan Plan, MMDevice? Device, WasapiPlayer? Player);
 
     /// <summary>Привязка источника: поток записи, кольцо в формате движка и адаптер формата.</summary>
     private sealed class SourceBinding(

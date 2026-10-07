@@ -26,4 +26,7 @@ public sealed record EngineStatus(
 
     /// <summary>Монитор-плеер сейчас играет параллельно основному выходу.</summary>
     public bool MonitorActive { get; init; }
+
+    /// <summary>Все открытые выходы (мультисинки); пусто — движок остановлен.</summary>
+    public IReadOnlyList<string> SinkNames { get; init; } = [];
 }
