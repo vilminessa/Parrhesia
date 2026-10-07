@@ -1,0 +1,36 @@
+# Быстрый гейт: сборка нативного CLAP-тест-плагина и полный dotnet test
+# на каждый push в dev/main и на pull request. Теговые полосы (beta/release)
+# живут отдельно - .github/workflows/beta.yml и release.yml; структуру полос
+# держит вместе tools/check-workflows.ps1.
+name: ci
+
+on:
+  push:
+    branches: ["dev", "main"]
+  pull_request:
+    branches: ["dev", "main"]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: dotnet test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: "10.0.x"
+      - name: Нативный CLAP-тест-плагин (vswhere + cl)
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $vs) { throw "MSVC не найден (vswhere)" }
+          $vcvars = Join-Path $vs 'VC\Auxiliary\Build\vcvars64.bat'
+          New-Item -ItemType Directory -Force tests\Parrhesia.Plugins.Native\out | Out-Null
+          cmd /c "call `"$vcvars`" >nul && cl /nologo /LD /O2 /W3 /TC /I src\Parrhesia.Plugins\vendor\clap\include tests\Parrhesia.Plugins.Native\test-plugin.c /Fotests\Parrhesia.Plugins.Native\out\ /Fetests\Parrhesia.Plugins.Native\out\test-plugin.dll"
+          if ($LASTEXITCODE -ne 0) { throw "сборка нативного тест-плагина провалена" }
+      - name: dotnet test (полный гейт)
+        run: dotnet test Parrhesia.slnx --nologo

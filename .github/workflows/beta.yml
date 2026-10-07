@@ -1,0 +1,271 @@
+# Полоса dev: бета-пререлиз по тегу b* (версия берётся из тега - коммитов с бампом
+# не нужно). Тег обязан входить в dev, публикация как GitHub Pre-release.
+# Стабильная полоса (v*, релиз из main) живёт отдельно - .github/workflows/release.yml;
+# структуру файлов держит вместе tools/check-workflows.ps1 (парность полос).
+# Версию вшивает dotnet publish -p:Version* (рабочее дерево не правится),
+# локальные сборки показывают 0.0.0-dev из Directory.Build.props.
+# Пробный запуск: workflow_dispatch (ветка вручную) - пройдут verify и build,
+# публикация и провенанс выполняются только на тегах.
+name: beta
+
+on:
+  push:
+    tags: ["b*"]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: проверки перед сборкой
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # полная история нужна гардам «тег в dev»: merge-base --is-ancestor
+          # на shallow-клоне не видит общей истории тега и ветки
+          fetch-depth: 0
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: "10.0.x"
+      - name: Линт release.yml и beta.yml (пиннинг, парность)
+        shell: pwsh
+        run: ./tools/check-workflows.ps1
+      - name: Формат тега (b1.2.7.41)
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF_NAME" =~ ^b[0-9]+(\.[0-9]+){2,3}$ ]]; then
+            echo "tag $GITHUB_REF_NAME ok - version will be stamped by dotnet publish"
+          else
+            echo "::error::tag $GITHUB_REF_NAME has wrong format; expected b1.2.7.41"
+            exit 1
+          fi
+      - name: Тег b указывает на коммит из dev
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          if git merge-base --is-ancestor "$GITHUB_SHA" origin/dev; then
+            echo "tag $GITHUB_REF_NAME is reachable from origin/dev - ok"
+          else
+            echo "::error::tag $GITHUB_REF_NAME is not in dev; push the commit to dev, then move the tag."
+            exit 1
+          fi
+      - name: Нативный CLAP-тест-плагин (vswhere + cl)
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $vs) { throw "MSVC не найден (vswhere)" }
+          $vcvars = Join-Path $vs 'VC\Auxiliary\Build\vcvars64.bat'
+          New-Item -ItemType Directory -Force tests\Parrhesia.Plugins.Native\out | Out-Null
+          cmd /c "call `"$vcvars`" >nul && cl /nologo /LD /O2 /W3 /TC /I src\Parrhesia.Plugins\vendor\clap\include tests\Parrhesia.Plugins.Native\test-plugin.c /Fotests\Parrhesia.Plugins.Native\out\ /Fetests\Parrhesia.Plugins.Native\out\test-plugin.dll"
+          if ($LASTEXITCODE -ne 0) { throw "сборка нативного тест-плагина провалена" }
+      - name: dotnet test (полный гейт)
+        run: dotnet test Parrhesia.slnx --nologo
+
+  build:
+    name: сборка приложения
+    needs: verify
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: "10.0.x"
+      - name: Версия из тега (без коммитов в git)
+        # вшивает версию прямо в dotnet publish (-p:Version*) - в репозиторий
+        # ничего не коммитится; на dispatch тега нет и остаётся 0.0.0-dev
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        run: |
+          $ver = $env:GITHUB_REF_NAME.TrimStart('b')
+          "PARRHESIA_VERSION=$ver" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Сборка приложения (self-contained, версия вшивается)
+        shell: pwsh
+        run: |
+          $stamp = @()
+          if ($env:PARRHESIA_VERSION) {
+            $stamp = @(
+              "-p:Version=$env:PARRHESIA_VERSION",
+              "-p:FileVersion=$env:PARRHESIA_VERSION",
+              "-p:InformationalVersion=$env:PARRHESIA_VERSION+$($env:GITHUB_SHA.Substring(0, 7))"
+            )
+          }
+          dotnet publish src/Parrhesia.App/Parrhesia.App.csproj -c Release -r win-x64 --self-contained true -o out/Parrhesia @stamp
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+      - name: Проверка версии в артефакте
+        shell: pwsh
+        run: |
+          $info = [System.Diagnostics.FileVersionInfo]::GetVersionInfo((Resolve-Path 'out/Parrhesia/Parrhesia.App.exe'))
+          Write-Host "FileVersion=$($info.FileVersion) InformationalVersion=$($info.InformationalVersion)"
+          if ($env:PARRHESIA_VERSION -and $info.FileVersion -ne $env:PARRHESIA_VERSION) {
+            Write-Host "::error::FileVersion $($info.FileVersion) не совпал с тегом $($env:PARRHESIA_VERSION)"
+            exit 1
+          }
+      - name: ZIP и чексумма (формат sha256sum, base64 - для SLSA)
+        id: hash
+        shell: pwsh
+        run: |
+          $name = if ($env:GITHUB_REF_TYPE -eq 'tag') { "Parrhesia-$($env:GITHUB_REF_NAME)-win-x64.zip" } else { 'Parrhesia-snapshot-win-x64.zip' }
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Compress-Archive -Path out/Parrhesia/* -DestinationPath "dist/$name" -Force
+          $size = (Get-Item "dist/$name").Length
+          Write-Host "$name $size bytes"
+          # нижняя граница - защита от пустой/обрезанной сборки (self-contained ~60 МБ)
+          if ($size -lt 30MB) {
+            Write-Host "::error::артефакт слишком мал: $size"
+            exit 1
+          }
+          $hash = (Get-FileHash "dist/$name" -Algorithm SHA256).Hash.ToLower()
+          $b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8("$hash  $name`n"))
+          "digests=$b64" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: Parrhesia-app
+          path: dist/*.zip
+          if-no-files-found: error
+          retention-days: 5
+
+  build-driver:
+    name: сборка виртуального драйвера
+    needs: verify
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: VS Build Tools 2022 (C++ build tools)
+        # канон установки - driver/README.md; build.bat жёстко ищет BuildTools 2022
+        shell: pwsh
+        run: |
+          winget install --id Microsoft.VisualStudio.2022.BuildTools -e --accept-source-agreements --accept-package-agreements --disable-interactivity --override "--add Microsoft.VisualStudio.Workload.VCTools --includeRecommended --quiet --wait"
+          if ($LASTEXITCODE -ne 0) { Write-Host "::error::winget BuildTools: $LASTEXITCODE"; exit 1 }
+      - name: WDK 10.0.26100
+        shell: pwsh
+        run: |
+          winget install --id Microsoft.WindowsWDK.10.0.26100 -e --accept-source-agreements --accept-package-agreements --disable-interactivity
+          if ($LASTEXITCODE -ne 0) { Write-Host "::error::winget WDK: $LASTEXITCODE"; exit 1 }
+      - name: Регистрация тулсета WindowsKernelModeDriver10.0
+        shell: pwsh
+        run: powershell -ExecutionPolicy Bypass -File driver/register-toolset.ps1
+      - name: Сборка драйвера (build.bat)
+        working-directory: driver
+        run: ./build.bat
+      - name: Проверка пакета
+        shell: pwsh
+        run: |
+          foreach ($f in @('driver/x64/Release/package/VirtualAudioDriver.sys', 'driver/x64/Release/package/VirtualAudioDriver.inf')) {
+            if (-not (Test-Path $f)) { Write-Host "::error::нет $f"; exit 1 }
+          }
+      - name: ZIP драйвера (структура установщика)
+        shell: pwsh
+        run: |
+          $name = if ($env:GITHUB_REF_TYPE -eq 'tag') { "ParrhesiaDriver-$($env:GITHUB_REF_NAME)-x64.zip" } else { 'ParrhesiaDriver-snapshot-x64.zip' }
+          New-Item -ItemType Directory -Force dist | Out-Null
+          # структура как в driver/: install.bat ждёт x64\Release\package рядом
+          Compress-Archive -Path driver/x64, driver/install.bat, driver/uninstall.bat -DestinationPath "dist/$name" -Force
+          $size = (Get-Item "dist/$name").Length
+          Write-Host "$name $size bytes"
+          if ($size -lt 100KB) { Write-Host "::error::артефакт драйвера слишком мал: $size"; exit 1 }
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: Parrhesia-driver
+          path: dist/*.zip
+          if-no-files-found: error
+          retention-days: 5
+
+  digests:
+    name: чексуммы артефактов
+    needs: [build, build-driver]
+    runs-on: ubuntu-latest
+    outputs:
+      digests: ${{ steps.hash.outputs.digests }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          path: artifacts
+          merge-multiple: true
+      - id: hash
+        name: SHA256SUMS (формат sha256sum, base64 - для SLSA)
+        run: |
+          cd artifacts
+          sha256sum *.zip > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+          echo "digests=$(base64 -w0 SHA256SUMS.txt)" >> "$GITHUB_OUTPUT"
+
+  publish:
+    name: публикация артефактов в релиз
+    needs: [build, build-driver, digests]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Чексуммы
+        working-directory: dist
+        run: sha256sum *.zip > SHA256SUMS.txt
+      - name: Создать/обновить релиз тега
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd dist
+          notes="Бета-сборка из dev ($GITHUB_REF_NAME). Автоматическая сборка (CI). Провенанс SLSA прикладывается отдельным джобом."
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" *.zip SHA256SUMS.txt --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" *.zip SHA256SUMS.txt --repo "$GITHUB_REPOSITORY" \
+              --title "$GITHUB_REF_NAME" \
+              --notes "$notes" \
+              --prerelease
+          fi
+
+  generator-generic-ossf-slsa3-publish:
+    name: SLSA-провенанс
+    needs: [digests, publish]
+    # на теге ждём успеха публикации, на dispatch публикация пропущена -
+    # генерация провенанса всё равно должна пройти (проба конвейера)
+    if: always() && (needs.publish.result == 'success' || needs.publish.result == 'skipped')
+    permissions:
+      id-token: write
+      contents: write
+      actions: read
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0
+    with:
+      base64-subjects: "${{ needs.digests.outputs.digests }}"
+      # на теге - в релиз, на dispatch - просто артефакт рана (проба конвейера)
+      upload-assets: ${{ startsWith(github.ref, 'refs/tags/') }}
+
+  verify-attestation:
+    name: проверка подписи
+    needs: generator-generic-ossf-slsa3-publish
+    # интота-бандл подписывается в ассеты релиза (upload-assets) - на теге
+    # сверяем его с zip; на dispatch ассетов релиза нет - пропускаем
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Скачать артефакты и провенанс из релиза
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            -p '*.zip' -p '*.intoto.jsonl' --clobber
+      - name: gh attestation verify (bundle из релиза)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # бандл - sigstore + provenance v0.2, подписант - reusable workflow
+        # генератора: без этих флагов gh ищет v1 в реестре и даёт 404
+        run: |
+          bundle=$(ls ./*.intoto.jsonl | head -n1)
+          for f in ./*.zip; do
+            gh attestation verify "$f" \
+              --bundle "$bundle" \
+              --repo "$GITHUB_REPOSITORY" \
+              --predicate-type https://slsa.dev/provenance/v0.2 \
+              --signer-repo slsa-framework/slsa-github-generator
+          done
