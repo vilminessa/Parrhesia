@@ -982,10 +982,149 @@ public partial class GraphView : UserControl
             UpdateGainText(NodeGainText, db);
             NodeMuteBox.IsChecked = node.Mute;
             NodeSoloBox.IsChecked = node.Solo;
+
+            // Слоты эффектов — только у шин.
+            SlotsSection.Visibility = node.Kind == NodeKind.Bus ? Visibility.Visible : Visibility.Collapsed;
+            if (node.Kind == NodeKind.Bus)
+            {
+                RebuildSlotRows(node);
+            }
         }
         finally
         {
             _syncing = false;
+        }
+    }
+
+    // ===== Слоты-вставки эффектов =====
+
+    private void RebuildSlotRows(AudioNode node)
+    {
+        SlotsHost.Children.Clear();
+        for (var i = 0; i < node.Slots.Count; i++)
+        {
+            var index = i;
+            var slot = node.Slots[i];
+
+            var row = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Margin = new Thickness(0, 2, 0, 0),
+            };
+
+            var enable = new CheckBox
+            {
+                IsChecked = slot.Enabled,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 0, 6, 0),
+                ToolTip = "Слот включён (без него — проход)",
+            };
+            enable.Checked += (_, _) => SetSlotEnabled(node, index, true);
+            enable.Unchecked += (_, _) => SetSlotEnabled(node, index, false);
+            row.Children.Add(enable);
+
+            var title = new TextBlock
+            {
+                Text = string.IsNullOrEmpty(slot.Name)
+                    ? System.IO.Path.GetFileNameWithoutExtension(slot.Path)
+                    : slot.Name,
+                ToolTip = slot.Path + " · " + slot.PluginId,
+                VerticalAlignment = VerticalAlignment.Center,
+                MaxWidth = 120,
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                Margin = new Thickness(0, 0, 6, 0),
+                Opacity = slot.Enabled ? 1.0 : 0.5,
+            };
+            row.Children.Add(title);
+
+            row.Children.Add(BuildSlotButton("↑", "Выше", index > 0, (_, _) => MoveSlot(node, index, -1)));
+            row.Children.Add(BuildSlotButton("↓", "Ниже", index < node.Slots.Count - 1, (_, _) => MoveSlot(node, index, +1)));
+            row.Children.Add(BuildSlotButton("✕", "Убрать", true, (_, _) => RemoveSlot(node, index)));
+
+            SlotsHost.Children.Add(row);
+        }
+    }
+
+    private static Button BuildSlotButton(string content, string tooltip, bool enabled, RoutedEventHandler onClick)
+    {
+        var button = new Button
+        {
+            Content = content,
+            ToolTip = tooltip,
+            IsEnabled = enabled,
+            Width = 22,
+            Height = 20,
+            Padding = new Thickness(0),
+            Margin = new Thickness(2, 0, 0, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        button.Click += onClick;
+        return button;
+    }
+
+    private void SetSlotEnabled(AudioNode node, int index, bool enabled)
+    {
+        if (_syncing)
+        {
+            return;
+        }
+
+        _graph.SetSlotEnabled(node.Id, index, enabled);
+    }
+
+    private void MoveSlot(AudioNode node, int index, int delta)
+    {
+        if (_syncing)
+        {
+            return;
+        }
+
+        var target = index + delta;
+        if (target < 0 || target >= node.Slots.Count)
+        {
+            return;
+        }
+
+        _graph.MoveSlot(node.Id, index, target);
+    }
+
+    private void RemoveSlot(AudioNode node, int index)
+    {
+        if (_syncing)
+        {
+            return;
+        }
+
+        _graph.RemoveSlot(node.Id, index);
+    }
+
+    private void OnAddSlotClick(object sender, RoutedEventArgs e)
+    {
+        if (_syncing)
+        {
+            return;
+        }
+
+        if (_selectedNode is not { } element ||
+            _graph.FindNode(element.Node.Id) is not { } node ||
+            node.Kind != NodeKind.Bus)
+        {
+            return;
+        }
+
+        var picker = new PluginPickerWindow
+        {
+            Owner = Window.GetWindow(this),
+        };
+        if (picker.ShowDialog() == true && picker.Selected is { } descriptor)
+        {
+            _graph.AddSlot(node.Id, new PluginSlot
+            {
+                Format = descriptor.Format,
+                Path = descriptor.Path,
+                PluginId = descriptor.PluginId,
+                Name = descriptor.Name,
+            });
         }
     }
 

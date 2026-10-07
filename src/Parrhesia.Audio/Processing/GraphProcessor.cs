@@ -59,8 +59,9 @@ public sealed class GraphProcessor : IDisposable
 
     /// <summary>
     /// Атомарно публикует цепочку плагинов узла: RT-поток читает свежий
-    /// массив со следующего блока. Старые экземпляры освобождаются с
-    /// отложенным грейсом (500 мс) — RT мог ещё держать ссылку.
+    /// массив со следующего блока. Выгружается с отложенным грейсом (500 мс)
+    /// только то, чего НЕТ в новой цепочке — ре-публикация тех же экземпляров
+    /// (каждый graph.Changed) не должна их убивать; RT мог ещё держать ссылку.
     /// </summary>
     public void SetSlotChain(Guid nodeId, IAudioPlugin?[] chain)
     {
@@ -73,28 +74,31 @@ public sealed class GraphProcessor : IDisposable
         }
 
         holder.Plugins = chain;
-        if (previous.Length > 0)
+        foreach (var old in previous)
         {
-            _ = Task.Delay(500).ContinueWith(
-                _ =>
-                {
-                    foreach (var plugin in previous)
-                    {
-                        try
-                        {
-                            plugin?.Dispose();
-                        }
-                        catch
-                        {
-                            // Ошибка деструктора плагина не должна валить процесс.
-                        }
-                    }
-                },
-                CancellationToken.None,
-                TaskContinuationOptions.None,
-                TaskScheduler.Default);
+            if (old is not null && Array.IndexOf(chain, old) < 0)
+            {
+                ScheduleDispose(old);
+            }
         }
     }
+
+    private static void ScheduleDispose(IAudioPlugin plugin) =>
+        _ = Task.Delay(500).ContinueWith(
+            _ =>
+            {
+                try
+                {
+                    plugin.Dispose();
+                }
+                catch
+                {
+                    // Ошибка деструктора плагина не должна валить процесс.
+                }
+            },
+            CancellationToken.None,
+            TaskContinuationOptions.None,
+            TaskScheduler.Default);
 
     /// <summary>Суммарная латентность активной цепочки узла (в кадрах).</summary>
     public int ChainLatency(Guid nodeId)

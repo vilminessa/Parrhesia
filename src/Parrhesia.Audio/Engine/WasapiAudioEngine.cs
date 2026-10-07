@@ -72,6 +72,8 @@ public sealed class WasapiAudioEngine : IAudioEngine
 
     public float GetPeak(Guid nodeId) => _processor.GetPeak(nodeId);
 
+    public void CollectPluginStates() => _slotChains.CollectStates();
+
     public void Start()
     {
         lock (_gate)

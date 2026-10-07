@@ -164,6 +164,55 @@ public sealed class SlotChainManager : IDisposable
         }
     }
 
+    /// <summary>
+    /// Снимает state живых плагинов в модель (вызывается перед сохранением
+    /// профиля). Изменения, равные текущим, не поднимают Changed — без
+    /// лишних пересчётов и лишних автосейвов.
+    /// </summary>
+    public void CollectStates()
+    {
+        lock (_gate)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            foreach (var node in _graph.Nodes)
+            {
+                if (node.Kind != NodeKind.Bus || !_states.TryGetValue(node.Id, out var state))
+                {
+                    continue;
+                }
+
+                var slots = node.Slots;
+                for (var i = 0; i < slots.Count && i < state.Instances.Count; i++)
+                {
+                    var instance = state.Instances[i];
+                    if (instance is null)
+                    {
+                        continue;
+                    }
+
+                    try
+                    {
+                        var bytes = instance.GetState();
+                        if (bytes is null || bytes.SequenceEqual(slots[i].State ?? []))
+                        {
+                            continue;
+                        }
+
+                        _graph.SetSlotState(node.Id, i, bytes);
+                    }
+                    catch
+                    {
+                        // Плагин может отказаться от state — не критично.
+                    }
+                }
+            }
+        }
+    }
+
     // ===== Внутреннее =====
 
     private sealed class NodeState

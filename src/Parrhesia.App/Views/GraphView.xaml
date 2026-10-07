@@ -236,6 +236,19 @@
                         Unchecked="OnNodeSoloChanged" />
             </StackPanel>
 
+            <!-- Слоты-вставки эффектов (только шины) -->
+            <StackPanel x:Name="SlotsSection" Visibility="Collapsed">
+              <TextBlock Text="Эффекты"
+                         FontSize="11"
+                         Foreground="{DynamicResource Brush.TextFaint}"
+                         Margin="0,12,0,4" />
+              <StackPanel x:Name="SlotsHost" />
+              <Button Content="+ Эффект…"
+                      HorizontalAlignment="Left"
+                      Margin="0,6,0,0"
+                      Click="OnAddSlotClick" />
+            </StackPanel>
+
             <Button Content="Удалить узел"
                     HorizontalAlignment="Left"
                     Margin="0,16,0,0"

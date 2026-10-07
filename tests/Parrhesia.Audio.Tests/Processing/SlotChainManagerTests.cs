@@ -110,6 +110,46 @@ public class SlotChainManagerTests
     }
 
     [Fact]
+    public async Task Republish_OnBenignGraphChange_DoesNotDisposeLiveInstances()
+    {
+        // Регрессия: SetSlotChain при каждом Changed публикует новый массив
+        // с ТЕМИ ЖЕ инстансами — выгрузка старого массива целиком убивала
+        // бы плагины через500 мс после любой правки гейна.
+        var (graph, _, bus, _) = BuildGraph();
+        using var processor = new GraphProcessor(graph);
+        var factory = new FakeFactory();
+        using var manager = new SlotChainManager(graph, processor, factory.Create);
+        graph.AddSlot(bus.Id, new PluginSlot { Path = "a.clap", PluginId = "a" });
+
+        graph.SetNodeGain(bus.Id, 0.5f); // безобидная правка → Changed → ре-публикация
+
+        await Task.Delay(700);
+        Assert.False(factory.Instances[0].Disposed);
+    }
+
+    [Fact]
+    public async Task CollectStates_WritesPluginStateIntoModel()
+    {
+        var (graph, _, bus, _) = BuildGraph();
+        using var processor = new GraphProcessor(graph);
+        var factory = new FakeFactory { State = [7, 7, 7] };
+        using var manager = new SlotChainManager(graph, processor, factory.Create);
+        graph.AddSlot(bus.Id, new PluginSlot { Path = "a.clap", PluginId = "a" });
+
+        var changes = 0;
+        void Count(object? _, GraphChange e) => changes++;
+        graph.Changed += Count;
+
+        manager.CollectStates();
+        Assert.Equal(new byte[] { 7, 7, 7 }, bus.Slots[0].State);
+
+        // Повторный снимок с теми же байтами — без новых событий Changed.
+        var before = changes;
+        manager.CollectStates();
+        Assert.Equal(before, changes);
+    }
+
+    [Fact]
     public void ReplaceWith_KeepsInstancesByIdentity()
     {
         // Переключение профилей (ReplaceWith сохраняет id узлов) не должно
@@ -162,10 +202,12 @@ public class SlotChainManagerTests
         public int Created { get; private set; }
         public List<FakePlugin> Instances { get; } = [];
 
+        public byte[]? State { get; set; }
+
         public IAudioPlugin Create(PluginSlot slot)
         {
             Created++;
-            var plugin = new FakePlugin(slot.Path);
+            var plugin = new FakePlugin(slot.Path) { State = State };
             Instances.Add(plugin);
             return plugin;
         }
@@ -179,6 +221,7 @@ public class SlotChainManagerTests
         public bool Disposed { get; private set; }
         public int SampleRate { get; private set; }
         public int MaxBlock { get; private set; }
+        public byte[]? State { get; set; }
 
         public void Prepare(int sampleRate, int maxBlockFrames, int channels)
         {
@@ -195,11 +238,9 @@ public class SlotChainManagerTests
             }
         }
 
-        public byte[]? GetState() => null;
+        public byte[]? GetState() => State;
 
-        public void SetState(byte[]? state)
-        {
-        }
+        public void SetState(byte[]? state) => State = state;
 
         public void Dispose() => Disposed = true;
     }

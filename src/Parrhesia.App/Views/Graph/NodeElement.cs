@@ -55,6 +55,7 @@ internal sealed class NodeElement : Border
 
     private readonly Border _bypassBadge;
     private readonly Border _muteBadge;
+    private readonly Border _fxBadge;
 
     public NodeElement(AudioNode node)
     {
@@ -87,6 +88,7 @@ internal sealed class NodeElement : Border
 
         _bypassBadge = BuildBadge("B", () => ToggleBypassRequested?.Invoke(Node));
         _muteBadge = BuildBadge("M", () => ToggleMuteRequested?.Invoke(Node));
+        _fxBadge = BuildFxBadge();
 
         var kindLabel = new TextBlock
         {
@@ -100,10 +102,12 @@ internal sealed class NodeElement : Border
         var header = new DockPanel { LastChildFill = true };
         DockPanel.SetDock(kindDot, Dock.Left);
         DockPanel.SetDock(kindLabel, Dock.Right);
+        DockPanel.SetDock(_fxBadge, Dock.Right);
         DockPanel.SetDock(_bypassBadge, Dock.Right);
         DockPanel.SetDock(_muteBadge, Dock.Right);
         header.Children.Add(kindDot);
         header.Children.Add(kindLabel);
+        header.Children.Add(_fxBadge);
         header.Children.Add(_bypassBadge);
         header.Children.Add(_muteBadge);
         header.Children.Add(_title);
@@ -293,11 +297,25 @@ internal sealed class NodeElement : Border
         }
     }
 
-    /// <summary>Состояния бейджей: B — обход (циан), M — мьют (красный).</summary>
+    /// <summary>Состояния бейджей: B — обход (циан), M — мьют (красный), FX — счётчик слотов.</summary>
     private void UpdateBadges()
     {
         ApplyBadgeState(_bypassBadge, Node.Bypassed, "Brush.Cyan", "#FF35D0C8");
         ApplyBadgeState(_muteBadge, Node.Mute, "Brush.Danger", "#FFFF5A52");
+        UpdateFxBadge();
+    }
+
+    private void UpdateFxBadge()
+    {
+        var count = Node.Slots.Count;
+        var visible = Node.Kind == NodeKind.Bus && count > 0;
+        _fxBadge.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+        if (visible && _fxBadge.Child is TextBlock label)
+        {
+            label.Text = count == 1 ? "FX" : $"FX{count}";
+        }
+
+        ApplyBadgeState(_fxBadge, visible, "Brush.Accent", "#FFFFB020");
     }
 
     private static void ApplyBadgeState(Border badge, bool active, string activeBrushKey, string fallback)
@@ -312,6 +330,34 @@ internal sealed class NodeElement : Border
                 ? ResolveBrush("Brush.Deep", "#FF0B0D10")
                 : ResolveBrush("Brush.TextFaint", "#FF5C6472");
         }
+    }
+
+    private Border BuildFxBadge()
+    {
+        var badge = new Border
+        {
+            MinWidth = 16,
+            Height = 15,
+            Padding = new Thickness(3, 0, 3, 0),
+            CornerRadius = new CornerRadius(3),
+            BorderThickness = new Thickness(1),
+            BorderBrush = ResolveBrush("Brush.Stroke", "#FF262B33"),
+            Background = Brushes.Transparent,
+            Margin = new Thickness(4, 0, 0, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+            Visibility = Visibility.Collapsed,
+            Child = new TextBlock
+            {
+                Text = "FX",
+                FontSize = 9,
+                FontWeight = FontWeights.SemiBold,
+                Foreground = ResolveBrush("Brush.TextFaint", "#FF5C6472"),
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+            },
+        };
+        ToolTipService.SetToolTip(badge, "Эффекты в шине");
+        return badge;
     }
 
     private Border BuildBadge(string label, Action onClick)

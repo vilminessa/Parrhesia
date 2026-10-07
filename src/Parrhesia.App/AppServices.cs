@@ -54,9 +54,16 @@ public static class AppServices
         _autosaveTimer.Tick += (_, _) =>
         {
             _autosaveTimer.Stop();
-            Profiles.SaveActive();
+            SaveActiveProfile();
         };
         Graph.Changed += OnGraphChanged;
+    }
+
+    /// <summary>Снимок state плагинов в модель + запись активного профиля.</summary>
+    private static void SaveActiveProfile()
+    {
+        Engine?.CollectPluginStates();
+        Profiles.SaveActive();
     }
 
     public static void StartEngine()
@@ -75,7 +82,7 @@ public static class AppServices
     {
         Graph.Changed -= OnGraphChanged;
         _autosaveTimer?.Stop();
-        Profiles?.SaveActive();
+        SaveActiveProfile();
         Engine?.Dispose();
         Devices?.Dispose();
     }

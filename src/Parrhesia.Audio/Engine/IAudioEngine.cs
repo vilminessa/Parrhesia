@@ -24,4 +24,10 @@ public interface IAudioEngine : IDisposable
     void Start();
 
     void Stop();
+
+    /// <summary>
+    /// Снимает состояние плагинов (слоты шин) в модель графа — вызывать
+    /// перед сохранением профиля, чтобы параметры пережили перезапуск.
+    /// </summary>
+    void CollectPluginStates();
 }
