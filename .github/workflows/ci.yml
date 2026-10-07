@@ -30,7 +30,7 @@ jobs:
           if (-not $vs) { throw "MSVC не найден (vswhere)" }
           $vcvars = Join-Path $vs 'VC\Auxiliary\Build\vcvars64.bat'
           New-Item -ItemType Directory -Force tests\Parrhesia.Plugins.Native\out | Out-Null
-          cmd /c "call `"$vcvars`" >nul && cl /nologo /LD /O2 /W3 /TC /I src\Parrhesia.Plugins\vendor\clap\include tests\Parrhesia.Plugins.Native\test-plugin.c /Fotests\Parrhesia.Plugins.Native\out\ /Fetests\Parrhesia.Plugins.Native\out\test-plugin.dll"
+          cmd /c "call `"$vcvars`" >nul && cl /nologo /LD /O2 /W3 /TC /I src\Parrhesia.Plugins\vendor\clap\include tests\Parrhesia.Plugins.Native\test-plugin.c /Fotests\Parrhesia.Plugins.Native\out\ /Fetests\Parrhesia.Plugins.Native\out\test-plugin.dll /link user32.lib"
           if ($LASTEXITCODE -ne 0) { throw "сборка нативного тест-плагина провалена" }
       - name: dotnet test (полный гейт)
         run: dotnet test Parrhesia.slnx --nologo
