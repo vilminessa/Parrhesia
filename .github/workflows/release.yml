@@ -98,7 +98,7 @@ jobs:
       - name: Проверка версии в артефакте
         shell: pwsh
         run: |
-          $info = [System.Diagnostics.FileVersionInfo]::GetVersionInfo((Resolve-Path 'out/Parrhesia/Parrhesia.App.exe'))
+          $info = [System.Diagnostics.FileVersionInfo]::GetVersionInfo((Resolve-Path 'out/Parrhesia/Parrhesia.App.dll'))
           Write-Host "FileVersion=$($info.FileVersion) InformationalVersion=$($info.InformationalVersion)"
           if ($env:PARRHESIA_VERSION -and $info.FileVersion -ne $env:PARRHESIA_VERSION) {
             Write-Host "::error::FileVersion $($info.FileVersion) не совпал с тегом $($env:PARRHESIA_VERSION)"
@@ -119,7 +119,7 @@ jobs:
             exit 1
           }
           $hash = (Get-FileHash "dist/$name" -Algorithm SHA256).Hash.ToLower()
-          $b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8("$hash  $name`n"))
+          $b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("$hash  $name`n"))
           "digests=$b64" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
@@ -162,11 +162,18 @@ jobs:
         run: |
           $name = if ($env:GITHUB_REF_TYPE -eq 'tag') { "ParrhesiaDriver-$($env:GITHUB_REF_NAME)-x64.zip" } else { 'ParrhesiaDriver-snapshot-x64.zip' }
           New-Item -ItemType Directory -Force dist | Out-Null
-          # структура как в driver/: install.bat ждёт x64\Release\package рядом
-          Compress-Archive -Path driver/x64, driver/install.bat, driver/uninstall.bat -DestinationPath "dist/$name" -Force
+          # структура как в driver/: install.bat ждёт x64\Release\package рядом;
+          # промежуточные obj/pdb из x64 не увозим - только пакет установки
+          $stage = 'stage'
+          Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force "$stage/x64/Release" | Out-Null
+          Copy-Item driver/x64/Release/package "$stage/x64/Release/package" -Recurse
+          Copy-Item driver/install.bat, driver/uninstall.bat $stage
+          Compress-Archive -Path "$stage/*" -DestinationPath "dist/$name" -Force
           $size = (Get-Item "dist/$name").Length
           Write-Host "$name $size bytes"
-          if ($size -lt 100KB) { Write-Host "::error::артефакт драйвера слишком мал: $size"; exit 1 }
+          # нижняя граница против пустого пакета: sys+inf+cat сжимаются в ~20-40 КБ
+          if ($size -lt 10KB) { Write-Host "::error::артефакт драйвера слишком мал: $size"; exit 1 }
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: Parrhesia-driver
