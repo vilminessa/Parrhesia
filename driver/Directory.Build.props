@@ -1,0 +1,28 @@
+<Project>
+  <!--
+    Ранняя инициализация WDK-свойств для сборки драйвера напрямую MSBuild
+    (без полной интеграции WDK + Visual Studio, которая не выполнена для Build Tools).
+
+    1) WDKContentRoot/WDKBuildFolder/WDKBinRoot — корни WDK.
+    2) DDKPlatform — иначе DDK_LIB_PATH и аналогичные собираются без архитектуры.
+    3) DesignTime WDK.props — определяет KM_IncludePath/CRT_IncludePath/KMDF_INC_PATH/...
+       (без него WindowsDriver.KernelMode.props пишет в IncludePath пустые пути
+       и компилятор не находит portcls.h).
+    4) WindowsDriver.Default.props — LatestTargetVersion, TargetPlatformVersion_*,
+       константы _NT_TARGET_VERSION_* (через OSTargets), гейты Matching*Present.
+  -->
+  <PropertyGroup>
+    <WDKContentRoot Condition="'$(WDKContentRoot)' == ''">C:\Program Files (x86)\Windows Kits\10\</WDKContentRoot>
+    <WDKBuildFolder Condition="'$(WDKBuildFolder)' == ''">10.0.26100.0</WDKBuildFolder>
+    <WDKBinRoot Condition="'$(WDKBinRoot)' == ''">$(WDKContentRoot)bin\10.0.26100.0\</WDKBinRoot>
+    <DDKPlatform Condition="'$(DDKPlatform)' == '' and '$(Platform)' == 'x64'">x64</DDKPlatform>
+    <DDKPlatform Condition="'$(DDKPlatform)' == '' and '$(Platform)' == 'Win32'">x86</DDKPlatform>
+    <DDKPlatform Condition="'$(DDKPlatform)' == '' and '$(Platform)' == 'ARM64'">arm64</DDKPlatform>
+  </PropertyGroup>
+
+  <Import Project="$(WDKContentRoot)DesignTime\CommonConfiguration\Neutral\WDK\$(WDKBuildFolder)\WDK.props"
+          Condition="Exists('$(WDKContentRoot)DesignTime\CommonConfiguration\Neutral\WDK\$(WDKBuildFolder)\WDK.props')" />
+
+  <Import Project="$(WDKContentRoot)build\$(WDKBuildFolder)\WindowsDriver.Default.props"
+          Condition="Exists('$(WDKContentRoot)build\$(WDKBuildFolder)\WindowsDriver.Default.props')" />
+</Project>

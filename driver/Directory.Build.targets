@@ -1,0 +1,11 @@
+<Project>
+  <!-- Диагностика сборки драйвера: печатает ключевые свойства путей перед компиляцией. -->
+  <Target Name="ParrhesiaDriverDiagnostics" BeforeTargets="ClCompile">
+    <Message Importance="high" Text="[DRV-DIAG] DriverType='$(DriverType)' DDKPlatform='$(DDKPlatform)' TargetPlatformVersion='$(TargetPlatformVersion)'" />
+    <Message Importance="high" Text="[DRV-DIAG] KM_IncludePath='$(KM_IncludePath)'" />
+    <Message Importance="high" Text="[DRV-DIAG] CRT_IncludePath='$(CRT_IncludePath)'" />
+    <Message Importance="high" Text="[DRV-DIAG] IncludePath='$(IncludePath)'" />
+    <Message Importance="high" Text="[DRV-DIAG] AddIncDir='%(ClCompile.AdditionalIncludeDirectories)'" />
+    <Message Importance="high" Text="[DRV-DIAG] IsKernelModeToolset='$(IsKernelModeToolset)' WDKContentRoot='$(WDKContentRoot)' WDKBuildFolder='$(WDKBuildFolder)'" />
+  </Target>
+</Project>
