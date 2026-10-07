@@ -52,16 +52,18 @@ jobs:
             echo "::error::tag $GITHUB_REF_NAME is not in main; push the commit to main, then move the tag."
             exit 1
           fi
-      - name: Нативный CLAP-тест-плагин (vswhere + cl)
+      - name: Нативные тест-плагины (bat: CLAP + VST3 + шим)
         shell: pwsh
         run: |
-          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-          $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
-          if (-not $vs) { throw "MSVC не найден (vswhere)" }
-          $vcvars = Join-Path $vs 'VC\Auxiliary\Build\vcvars64.bat'
-          New-Item -ItemType Directory -Force tests\Parrhesia.Plugins.Native\out | Out-Null
-          cmd /c "call `"$vcvars`" >nul && cl /nologo /LD /O2 /W3 /TC /I src\Parrhesia.Plugins\vendor\clap\include tests\Parrhesia.Plugins.Native\test-plugin.c /Fotests\Parrhesia.Plugins.Native\out\ /Fetests\Parrhesia.Plugins.Native\out\test-plugin.dll /link user32.lib"
-          if ($LASTEXITCODE -ne 0) { throw "сборка нативного тест-плагина провалена" }
+          $bats = @(
+            'tests\Parrhesia.Plugins.Native\build-test-plugin.bat',
+            'tests\Parrhesia.Plugins.Native\vst3-test-plugin\build-vst3-test-plugin.bat',
+            'src\Parrhesia.Plugins\native\vst3-shim\build-vst3-shim.bat'
+          )
+          foreach ($b in $bats) {
+            cmd /c $b
+            if ($LASTEXITCODE -ne 0) { throw "сборка нативных артефактов провалена: $b" }
+          }
       - name: dotnet test (полный гейт)
         run: dotnet test Parrhesia.slnx --nologo
 
