@@ -1087,6 +1087,7 @@ public partial class GraphView : UserControl
         else
         {
             choices.Add(new("По умолчанию (вывод)", DeviceSpec.DefaultRender));
+            choices.Add(new("Parrhesia Out (виртуальный)", DeviceSpec.VirtualParrhesia));
             foreach (var device in AppServices.Devices.GetDevices(DeviceFlow.Render))
             {
                 choices.Add(new(device.Name, device.Id));

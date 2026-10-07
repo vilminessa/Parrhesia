@@ -22,6 +22,7 @@ Abstract:
 #include "definitions.h"
 #include "endpoints.h"
 #include "minipairs.h"
+#include "feed.h"
 
 typedef void (*fnPcDriverUnload) (PDRIVER_OBJECT);
 fnPcDriverUnload gPCDriverUnloadRoutine = NULL;
@@ -104,6 +105,11 @@ Environment:
         goto Done;
     }
     
+    //
+    // Parrhesia feed: снять control-устройство до выгрузки PortCls.
+    //
+    Feed_Cleanup();
+
     //
     // Invoke first the port unload.
     //
@@ -345,6 +351,18 @@ Return Value:
     //
     gPCDriverUnloadRoutine = DriverObject->DriverUnload;
     DriverObject->DriverUnload = DriverUnload;
+
+    //
+    // Parrhesia feed: control-устройство \\.\ParrhesiaFeed.
+    // Ошибка не фатальна — без фида захват просто отдаёт тишину.
+    //
+    {
+        NTSTATUS feedStatus = Feed_Initialize(DriverObject);
+        if (!NT_SUCCESS(feedStatus))
+        {
+            DPF(D_ERROR, ("Feed_Initialize failed, status = %X (продолжаем без фида)", feedStatus));
+        }
+    }
 
     //
     // All done.

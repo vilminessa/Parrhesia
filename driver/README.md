@@ -70,6 +70,15 @@ msbuild VirtualAudioDriver.sln
 ## Статус
 
 - [x] Сборка `.sys` + тестовая подпись пакета (чисто,0 ошибок).
-- [ ] Имена endpoints под Parrhesia («Parrhesia In/Out»).
-- [ ] Передача микшера в драйвер (замена ToneGenerator) и loopback-вход.
-- [ ] Интеграция с движком Parrhesia (WasapiAudioEngine).
+- [x] Имена endpoints: «Parrhesia In» (рендер) / «Parrhesia Out» (захват);
+      HW-ID пока `ROOT\VirtualAudioDriver` (смена при разделении инстансов, М2).
+- [x] Передача микшера в драйвер: control-устройство `\\.\ParrhesiaFeed`
+      (IOCTL_PFEED_WRITE/GET_STATS), кольцевой буфер256 КБ, единственный
+      читатель-поток (claim на KSSTATE_RUN), формат-гард (PCM32@48k,
+      иначе тишина + лог). Замена тишины в `WriteBytes` чтением из фида.
+- [x] User mode: `DriverFeed` + `VirtualSinkPump` (10 мс, дрейф-компенсация),
+      ветка `virtual:parrhesia` в `WasapiAudioEngine.StartCore`.
+- [ ] Loopback-вход «Parrhesia In» → движок (привязка через UI, эндпоинт
+      появится после установки — Э0).
+- [ ] Тестовая установка и сквозной прогон (testsigning, гейт пользователя).
+- [ ] Динамические инстансы In/Out (М2, спайк).

@@ -4,6 +4,7 @@ namespace Parrhesia.Audio.Engine;
 /// Разбор DeviceId узла графа. Форматы:
 /// "default:capture" / "default:render" — устройство по умолчанию;
 /// "loopback:default" / "loopback:&lt;MMDeviceId&gt;" — захват того, что играет на устройстве вывода;
+/// "virtual:parrhesia" — виртуальный вывод Parrhesia (драйвер \\.\ParrhesiaFeed);
 /// "&lt;MMDeviceId&gt;" — конкретный endpoint.
 /// </summary>
 public readonly record struct DeviceSpec(bool Loopback, DeviceSpecTarget Target, string DeviceId)
@@ -11,6 +12,7 @@ public readonly record struct DeviceSpec(bool Loopback, DeviceSpecTarget Target,
     public const string DefaultCapture = "default:capture";
     public const string DefaultRender = "default:render";
     public const string DefaultLoopback = "loopback:default";
+    public const string VirtualParrhesia = "virtual:parrhesia";
 
     public static bool TryParse(string? deviceId, out DeviceSpec spec)
     {
@@ -38,6 +40,12 @@ public readonly record struct DeviceSpec(bool Loopback, DeviceSpecTarget Target,
             return true;
         }
 
+        if (deviceId == VirtualParrhesia)
+        {
+            spec = new DeviceSpec(false, DeviceSpecTarget.Virtual, string.Empty);
+            return true;
+        }
+
         if (deviceId.StartsWith("loopback:", StringComparison.Ordinal))
         {
             var id = deviceId["loopback:".Length..];
@@ -60,6 +68,7 @@ public readonly record struct DeviceSpec(bool Loopback, DeviceSpecTarget Target,
         { Loopback: true, Target: DeviceSpecTarget.ById } => "loopback:" + DeviceId,
         { Target: DeviceSpecTarget.DefaultCapture } => "default:capture",
         { Target: DeviceSpecTarget.DefaultRender } => "default:render",
+        { Target: DeviceSpecTarget.Virtual } => VirtualParrhesia,
         _ => DeviceId,
     };
 }
@@ -69,4 +78,5 @@ public enum DeviceSpecTarget
     DefaultCapture,
     DefaultRender,
     ById,
+    Virtual,
 }

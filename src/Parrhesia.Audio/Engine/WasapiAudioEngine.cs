@@ -35,6 +35,8 @@ public sealed class WasapiAudioEngine : IAudioEngine
     private readonly List<SourceBinding> _sources = [];
 
     private WasapiPlayer? _player;
+    private DriverFeed? _feed;
+    private VirtualSinkPump? _pump;
     private MMDevice? _sinkDevice;
     private Guid _sinkId;
     private string? _sinkName;
@@ -44,6 +46,8 @@ public sealed class WasapiAudioEngine : IAudioEngine
     private string[] _bindings = [];
     private Timer? _statsTimer;
     private long _lastLoggedUnderflow;
+    private ulong _lastFeedDropped;
+    private ulong _lastFeedUnderrun;
     private bool _disposed;
 
     public WasapiAudioEngine(AudioGraph graph, IDeviceService deviceService)
@@ -129,33 +133,55 @@ public sealed class WasapiAudioEngine : IAudioEngine
                 return;
             }
 
-            if (!TryResolveDevice(sinkSpec, DataFlow.Render, out var sinkDevice))
+            WaveFormat engineFormat;
+            Action startStreaming;
+            MMDevice? sinkDevice = null;
+
+            if (sinkSpec.Target == DeviceSpecTarget.Virtual)
             {
-                return;
+                // Виртуальный вывод: граф гонит блоки в драйвер \\.\ParrhesiaFeed.
+                engineFormat = WaveFormat.CreateIeeeFloatWaveFormat(DriverFeed.Rate, DriverFeed.Channels);
+                var feed = new DriverFeed();
+                feed.Open(); // бросает исключение, если драйвер не установлен
+                var provider = new GraphWaveProvider(_processor, sink.Id, engineFormat);
+                var pump = new VirtualSinkPump(provider, feed);
+                _feed = feed;
+                _pump = pump;
+                startStreaming = pump.Start;
+                _sinkName = "Parrhesia Out (виртуальный)";
+            }
+            else
+            {
+                if (!TryResolveDevice(sinkSpec, DataFlow.Render, out sinkDevice))
+                {
+                    return;
+                }
+
+                var player = new WasapiPlayerBuilder()
+                    .WithDevice(sinkDevice)
+                    .WithSharedMode()
+                    .WithEventSync()
+                    .WithLatency(OutputLatencyMs)
+                    .Build();
+
+                var mix = player.DeviceMixFormat;
+                engineFormat = WaveFormat.CreateIeeeFloatWaveFormat(mix.SampleRate, mix.Channels);
+                var provider = new GraphWaveProvider(_processor, sink.Id, engineFormat);
+                player.Init(provider);
+
+                _player = player;
+                _sinkDevice = sinkDevice;
+                _sinkName = sinkDevice.FriendlyName;
+                startStreaming = player.Play;
             }
 
-            var player = new WasapiPlayerBuilder()
-                .WithDevice(sinkDevice)
-                .WithSharedMode()
-                .WithEventSync()
-                .WithLatency(OutputLatencyMs)
-                .Build();
-
-            var mix = player.DeviceMixFormat;
-            var engineFormat = WaveFormat.CreateIeeeFloatWaveFormat(mix.SampleRate, mix.Channels);
-            var provider = new GraphWaveProvider(_processor, sink.Id, engineFormat);
-            player.Init(provider);
-
-            _player = player;
-            _sinkDevice = sinkDevice;
             _sinkId = sink.Id;
-            _sinkName = sinkDevice.FriendlyName;
             _sampleRate = engineFormat.SampleRate;
             _channels = engineFormat.Channels;
 
             OpenSources(engineFormat, sinkDevice);
 
-            _player.Play();
+            startStreaming();
             foreach (var source in _sources)
             {
                 source.StartTimestamp = Stopwatch.GetTimestamp();
@@ -166,6 +192,8 @@ public sealed class WasapiAudioEngine : IAudioEngine
             _running = true;
             _bindings = CaptureBindings();
             _lastLoggedUnderflow = 0;
+            _lastFeedDropped = 0;
+            _lastFeedUnderrun = 0;
             _statsTimer = new Timer(_ => LogStatsIfChanged(), null, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5));
             LogMessage(
                 EngineLogLevel.Info,
@@ -180,7 +208,7 @@ public sealed class WasapiAudioEngine : IAudioEngine
         }
     }
 
-    private void OpenSources(WaveFormat engineFormat, MMDevice sinkDevice)
+    private void OpenSources(WaveFormat engineFormat, MMDevice? sinkDevice)
     {
         foreach (var node in _graph.Nodes)
         {
@@ -200,7 +228,7 @@ public sealed class WasapiAudioEngine : IAudioEngine
                 continue;
             }
 
-            if (spec.Loopback && device.ID == sinkDevice.ID)
+            if (sinkDevice is not null && spec.Loopback && device.ID == sinkDevice.ID)
             {
                 LogMessage(
                     EngineLogLevel.Warning,
@@ -288,6 +316,15 @@ public sealed class WasapiAudioEngine : IAudioEngine
             // Устройство могло исчезнуть.
         }
 
+        try
+        {
+            _pump?.Stop();
+        }
+        catch
+        {
+            // Фид мог закрыться — не мешаем остальной очистке.
+        }
+
         _processor.ClearInputs();
 
         foreach (var source in _sources)
@@ -301,6 +338,10 @@ public sealed class WasapiAudioEngine : IAudioEngine
         _statsTimer = null;
         _player?.Dispose();
         _player = null;
+        _pump?.Dispose();
+        _pump = null;
+        _feed?.Dispose();
+        _feed = null;
         _sinkDevice?.Dispose();
         _sinkDevice = null;
         _sinkId = Guid.Empty;
@@ -459,6 +500,32 @@ public sealed class WasapiAudioEngine : IAudioEngine
         {
             underflow += source.Ring.UnderrunSamples;
             overflow += source.Ring.OverflowSamples;
+        }
+
+        // Счётчики ядро-фида (виртуальный вывод): дельта за период.
+        if (_feed is not null)
+        {
+            try
+            {
+                if (_feed.TryGetStats(out var feedStats))
+                {
+                    var dropDelta = feedStats.DroppedBytes - _lastFeedDropped;
+                    var quietDelta = feedStats.UnderrunBytes - _lastFeedUnderrun;
+                    _lastFeedDropped = feedStats.DroppedBytes;
+                    _lastFeedUnderrun = feedStats.UnderrunBytes;
+                    if (dropDelta != 0 || quietDelta != 0)
+                    {
+                        LogMessage(
+                            EngineLogLevel.Info,
+                            $"фида дельта: сброс {dropDelta} Б (переполнение), тишина {quietDelta} Б (недостача); " +
+                            $"всего сброс {feedStats.DroppedBytes} Б");
+                    }
+                }
+            }
+            catch
+            {
+                // Фид мог закрыться — статистика не критична.
+            }
         }
 
         if (underflow == _lastLoggedUnderflow)

@@ -217,31 +217,11 @@ KSDATAFORMAT_WAVEFORMATEXTENSIBLE MicArrayPinSupportedDeviceFormats[] =
 static
 MODE_AND_DEFAULT_FORMAT MicArrayPinSupportedDeviceModes[] =
 {
-    // If you only have one signal processing mode (e.g., RAW),
-    // you can list each supported format under it.
+    // Дефолт фида (Parrhesia feed) = formats[0] = PCM32@48k stereo.
+    // Остальные форматы таблицы в режимах не перечислены — их не выберут.
     {
         STATIC_AUDIO_SIGNALPROCESSINGMODE_RAW,
         &MicArrayPinSupportedDeviceFormats[0].DataFormat
-    },
-    {
-        STATIC_AUDIO_SIGNALPROCESSINGMODE_RAW,
-        &MicArrayPinSupportedDeviceFormats[1].DataFormat
-    },
-    {
-        STATIC_AUDIO_SIGNALPROCESSINGMODE_RAW,
-        &MicArrayPinSupportedDeviceFormats[2].DataFormat
-    },
-    {
-        STATIC_AUDIO_SIGNALPROCESSINGMODE_RAW,
-        &MicArrayPinSupportedDeviceFormats[3].DataFormat
-    },
-    {
-        STATIC_AUDIO_SIGNALPROCESSINGMODE_RAW,
-        &MicArrayPinSupportedDeviceFormats[4].DataFormat
-    },
-    {
-        STATIC_AUDIO_SIGNALPROCESSINGMODE_RAW,
-        &MicArrayPinSupportedDeviceFormats[5].DataFormat
     },
 };
 

@@ -85,6 +85,9 @@ protected:
     ULONG                       m_ulPin;
     BOOLEAN                     m_bCapture;
     BOOLEAN                     m_bUnregisterStream;
+    // Parrhesia feed: поток-читатель фида и совместимость его формата.
+    BOOLEAN                     m_FeedClaimed = FALSE;
+    BOOLEAN                     m_FeedFormatOk = FALSE;
     ULONG                       m_ulDmaBufferSize;
     BYTE*                       m_pDmaBuffer;
     ULONG                       m_ulNotificationsPerBuffer;

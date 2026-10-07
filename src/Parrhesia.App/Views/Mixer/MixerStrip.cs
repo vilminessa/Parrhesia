@@ -10,10 +10,10 @@ using Parrhesia.Core.Graph;
 namespace Parrhesia.App.Views.Mixer;
 
 /// <summary>
-/// РџРѕР»РѕСЃР° РјРёРєС€РµСЂР° РґР»СЏ РѕРґРЅРѕРіРѕ СѓР·Р»Р°: С†РІРµС‚-Р°РєС†РµРЅС‚ С‚РёРїР°, РёРјСЏ (РґРІРѕР№РЅРѕР№ РєР»РёРє вЂ”
-/// РїРµСЂРµРёРјРµРЅРѕРІР°РЅРёРµ), РєСЂСѓРїРЅС‹Р№ LED-РјРµС‚СЂ СЃ РїРёРє-С…РѕР»РґРѕРј, РІРµСЂС‚РёРєР°Р»СЊРЅС‹Р№ С„РµР№РґРµСЂ
-/// РІ РґР‘, РєРЅРѕРїРєРё M/S/B Рё РїРѕРґРїРёСЃСЊ СѓСЃС‚СЂРѕР№СЃС‚РІР°.
-/// Р’РёР·СѓР°Р» Рё СЃРѕР±С‹С‚РёСЏ вЂ” СЃС‚СЂРёРї СЃР°Рј РіСЂР°С„ РЅРµ С‚СЂРѕРіР°РµС‚, СЂРµС€Р°РµС‚ MixerView.
+/// Полоса микшера для одного узла: цвет-акцент типа, имя (двойной клик —
+/// переименование), крупный LED-метр с пик-холдом, вертикальный фейдер
+/// в дБ, кнопки M/S/B и подпись устройства.
+/// Визуал и события — стрип сам граф не трогает, решает MixerView.
 /// </summary>
 internal sealed class MixerStrip : Border
 {
@@ -45,7 +45,7 @@ internal sealed class MixerStrip : Border
         VerticalAlignment = VerticalAlignment.Top;
         Margin = new Thickness(0, 0, 10, 0);
 
-        // РђРєС†РµРЅС‚РЅР°СЏ РїРѕР»РѕСЃР° РїРѕ С‚РёРїСѓ СѓР·Р»Р°.
+        // Акцентная полоса по типу узла.
         var accent = new Border
         {
             Height = 3,
@@ -156,10 +156,10 @@ internal sealed class MixerStrip : Border
 
     public Slider Fader { get; }
 
-    /// <summary>Р”РІРѕР№РЅРѕР№ РєР»РёРє РїРѕ РёРјРµРЅРё.</summary>
+    /// <summary>Двойной клик по имени.</summary>
     public event Action<MixerStrip>? RenameRequested;
 
-    /// <summary>РџРљРњ в†’ СѓРґР°Р»РёС‚СЊ.</summary>
+    /// <summary>ПКМ → удалить.</summary>
     public event Action<MixerStrip>? DeleteRequested;
 
     public event Action<MixerStrip>? MuteToggled;
@@ -168,10 +168,10 @@ internal sealed class MixerStrip : Border
 
     public event Action<MixerStrip>? BypassToggled;
 
-    /// <summary>Р¤РµР№РґРµСЂ РґРІРёРіР°РµС‚СЃСЏ (Р»РёРЅРµР№РЅС‹Р№ РіРµР№РЅ).</summary>
+    /// <summary>Фейдер двигается (линейный гейн).</summary>
     public event Action<MixerStrip, float>? GainChanged;
 
-    /// <summary>РћР±РЅРѕРІР»РµРЅРёРµ РёР· РјРѕРґРµР»Рё: РёРјСЏ, РґР‘, СЃРѕСЃС‚РѕСЏРЅРёСЏ РєРЅРѕРїРѕРє, СѓСЃС‚СЂРѕР№СЃС‚РІРѕ.</summary>
+    /// <summary>Обновление из модели: имя, дБ, состояния кнопок, устройство.</summary>
     public void RefreshFromNode()
     {
         _nameText.Text = Node.Name;
@@ -195,7 +195,7 @@ internal sealed class MixerStrip : Border
         ApplyStates();
     }
 
-    /// <summary>РњРµС‚СЂ СЃРѕ Р·РЅР°С‡РµРЅРёРµРј (0..1) Рё РїРёРє-С…РѕР»РґРѕРј.</summary>
+    /// <summary>Метр со значением (0..1) и пик-холдом.</summary>
     public void UpdateMeter(float value01, double now, double dt)
     {
         if (value01 >= _peak)
@@ -241,9 +241,9 @@ internal sealed class MixerStrip : Border
             FontWeight = FontWeights.SemiBold,
             ToolTip = label switch
             {
-                "M" => "Mute вЂ” РїРѕР»РЅРѕРµ РїРµСЂРµРєСЂС‹С‚РёРµ",
-                "S" => "Solo вЂ” СЃР»С‹С€РЅРѕ С‚РѕР»СЊРєРѕ СЌС‚РѕС‚ РєР°РЅР°Р»",
-                _ => "Bypass вЂ” РѕР±С…РѕРґ: СЃРёРіРЅР°Р» СЃРєРІРѕР·СЊ Р±РµР· РіРµР№РЅР°",
+                "M" => "Mute — полное перекрытие",
+                "S" => "Solo — слышно только этот канал",
+                _ => "Bypass — обход: сигнал сквозь без гейна",
             },
         };
         button.Click += onClick;
@@ -254,10 +254,10 @@ internal sealed class MixerStrip : Border
     {
         var menu = new ContextMenu { Placement = PlacementMode.MousePoint, MinWidth = 160 };
 
-        var rename = new MenuItem { Header = "РџРµСЂРµРёРјРµРЅРѕРІР°С‚СЊ" };
+        var rename = new MenuItem { Header = "Переименовать" };
         rename.Click += (_, _) => RenameRequested?.Invoke(this);
 
-        var delete = new MenuItem { Header = "РЈРґР°Р»РёС‚СЊ" };
+        var delete = new MenuItem { Header = "Удалить" };
         delete.Click += (_, _) => DeleteRequested?.Invoke(this);
 
         menu.Items.Add(rename);
@@ -307,24 +307,29 @@ internal sealed class MixerStrip : Border
     private static string FormatDb(float gain)
     {
         var db = Decibels.ToDb(gain);
-        return float.IsNegativeInfinity(db) ? "в€’в€ћ РґР‘" : db.ToString("0.0") + " РґР‘";
+        return float.IsNegativeInfinity(db) ? "−∞ дБ" : db.ToString("0.0") + " дБ";
     }
 
     private static string DescribeDevice(AudioNode node)
     {
         if (node.DeviceId is null)
         {
-            return "СѓСЃС‚СЂРѕР№СЃС‚РІРѕ РЅРµ РїСЂРёРІСЏР·Р°РЅРѕ";
+            return "устройство не привязано";
+        }
+
+        if (node.DeviceId == "virtual:parrhesia")
+        {
+            return "виртуальный: Parrhesia Out";
         }
 
         if (node.DeviceId == "default:capture" || node.DeviceId == "default:render")
         {
-            return "РїРѕ СѓРјРѕР»С‡Р°РЅРёСЋ";
+            return "по умолчанию";
         }
 
         if (node.DeviceId == "loopback:default")
         {
-            return "loopback: РїРѕ СѓРјРѕР»С‡Р°РЅРёСЋ";
+            return "loopback: по умолчанию";
         }
 
         var id = node.DeviceId.StartsWith("loopback:", StringComparison.Ordinal)

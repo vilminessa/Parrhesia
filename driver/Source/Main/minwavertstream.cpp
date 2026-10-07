@@ -1,9 +1,11 @@
 #include "definitions.h"
 #include <limits.h>
 #include <ks.h>
+#include <ksmedia.h>
 #include "endpoints.h"
 #include "minwavert.h"
 #include "minwavertstream.h"
+#include "feed.h"
 #define MINWAVERTSTREAM_POOLTAG 'SRWM'
 
 #pragma warning (disable : 4127)
@@ -33,6 +35,14 @@ Return Value:
 --*/
 {
     PAGED_CODE();
+
+    // Parrhesia feed: отпустить фид, если поток всё ещё владеет.
+    if (m_FeedClaimed)
+    {
+        g_Feed.Release(this);
+        m_FeedClaimed = FALSE;
+    }
+
     if (NULL != m_pMiniport)
     {
     
@@ -1177,6 +1187,13 @@ NTSTATUS CMiniportWaveRTStream::SetState
     switch (State_)
     {
         case KSSTATE_STOP:
+            // Parrhesia feed: остановка потока отпускает фид.
+            if (m_FeedClaimed)
+            {
+                g_Feed.Release(this);
+                m_FeedClaimed = FALSE;
+            }
+
             if (m_KsState == KSSTATE_ACQUIRE)
             {
                 // Acquire stream resources
@@ -1214,6 +1231,13 @@ NTSTATUS CMiniportWaveRTStream::SetState
             
         case KSSTATE_PAUSE:
 
+            // Parrhesia feed: пауза тоже отпускает фид (чтение — только в RUN).
+            if (m_FeedClaimed)
+            {
+                g_Feed.Release(this);
+                m_FeedClaimed = FALSE;
+            }
+
             if (m_KsState > KSSTATE_PAUSE)
             {
                 //
@@ -1247,6 +1271,34 @@ NTSTATUS CMiniportWaveRTStream::SetState
             break;
 
         case KSSTATE_RUN:
+            // Parrhesia feed: поток захвата захватывает фид (единственный
+            // читатель) и проверяет формат против канонического — иначе
+            // захват будет отдавать тишину.
+            if (m_bCapture)
+            {
+                m_FeedClaimed = g_Feed.TryClaim(this);
+                if (m_FeedClaimed)
+                {
+                    m_FeedFormatOk =
+                        m_pWfExt != NULL &&
+                        m_pWfExt->Format.wFormatTag == WAVE_FORMAT_EXTENSIBLE &&
+                        m_pWfExt->Format.nSamplesPerSec == PFEED_RATE &&
+                        m_pWfExt->Format.nChannels == PFEED_CHANNELS &&
+                        m_pWfExt->Format.wBitsPerSample == PFEED_BITS &&
+                        m_pWfExt->Samples.wValidBitsPerSample == PFEED_BITS &&
+                        InlineIsEqualGUID(m_pWfExt->SubFormat, KSDATAFORMAT_SUBTYPE_PCM);
+                    if (!m_FeedFormatOk)
+                    {
+                        DPF(
+                            D_ERROR,
+                            ("[Feed] формат потока ≠ фид (%u Гц/%u бит/тег %u) — тишина",
+                             m_pWfExt ? m_pWfExt->Format.nSamplesPerSec : 0,
+                             m_pWfExt ? m_pWfExt->Format.wBitsPerSample : 0,
+                             m_pWfExt ? m_pWfExt->Format.wFormatTag : 0));
+                    }
+                }
+            }
+
             // Start DMA
             LARGE_INTEGER ullPerfCounterTemp;
             ullPerfCounterTemp = KeQueryPerformanceCounter(&m_ullPerformanceCounterFrequency);
@@ -1413,8 +1465,16 @@ ByteDisplacement - # of bytes to process.
     {
         ULONG runWrite = min(ByteDisplacement, m_ulDmaBufferSize - bufferOffset);
         
-        // Instead of generating a tone, just output silence
-        RtlZeroMemory(m_pDmaBuffer + bufferOffset, runWrite);
+        if (m_FeedClaimed && m_FeedFormatOk)
+        {
+            // Данные из Parrhesia feed (нехватка = тишина внутри Read).
+            g_Feed.Read(m_pDmaBuffer + bufferOffset, runWrite);
+        }
+        else
+        {
+            // Фид не занят или формат потока несовместим — тишина.
+            RtlZeroMemory(m_pDmaBuffer + bufferOffset, runWrite);
+        }
            	
         bufferOffset = (bufferOffset + runWrite) % m_ulDmaBufferSize;
         ByteDisplacement -= runWrite;

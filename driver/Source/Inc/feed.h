@@ -1,0 +1,98 @@
+/*++
+
+Module Name:
+
+    feed.h
+
+Abstract:
+
+    Parrhesia Feed — кольцевой буфер приёма PCM для виртуального микрофона
+    (Parrhesia Out). User mode пишет через IOCTL_PFEED_WRITE (METHOD_BUFFERED),
+    поток захвата читает в WriteBytes вместо генерации тишины.
+
+    Канонический формат фида: 48000 Гц, 2 канала, PCM signed 32-bit
+    (MicArrayPinDataRangesRawStream: MICARRAY_RAW_* = PCM32@48k;
+    дефолтный формат пина = MicArrayPinSupportedDeviceFormats[0]).
+    Pump в user mode конвертирует float графа в Int32 перед записью.
+
+--*/
+
+#ifndef _PARRHESIA_FEED_H_
+#define _PARRHESIA_FEED_H_
+
+// Канонический формат (дублируется в C#: Parrhesia.Audio DriverFeed).
+#define PFEED_RATE          48000
+#define PFEED_CHANNELS      2
+#define PFEED_BITS          32
+#define PFEED_FRAME_BYTES   (PFEED_CHANNELS * (PFEED_BITS / 8))   // 8
+#define PFEED_BYTES_PER_SEC (PFEED_RATE * PFEED_FRAME_BYTES)       // 384000
+#define PFEED_RING_BYTES    (1u << 18)                             // 256 КБ ≈ 0.68 с
+
+#define PFEED_DEVICE_NAME   L"\\Device\\ParrhesiaFeed"
+#define PFEED_SYMLINK_NAME  L"\\DosDevices\\ParrhesiaFeed"
+#define PFEED_USER_PATH     "\\\\.\\ParrhesiaFeed"
+
+#define PFEED_DEVICE_TYPE   FILE_DEVICE_UNKNOWN
+
+#define IOCTL_PFEED_WRITE      CTL_CODE(PFEED_DEVICE_TYPE, 0x800, METHOD_BUFFERED, FILE_WRITE_DATA)
+#define IOCTL_PFEED_GET_STATS  CTL_CODE(PFEED_DEVICE_TYPE, 0x801, METHOD_BUFFERED, FILE_READ_DATA)
+
+// Статистика фида. Поля LONG — volatile-счётчики выравнивания под C#-маппинг.
+typedef struct _PFEED_STATS
+{
+    ULONGLONG WrittenBytes;    // принято от user mode
+    ULONGLONG DeliveredBytes;  // отдано потоку захвата
+    ULONGLONG DroppedBytes;    // отброшено: кольцо заполнено
+    ULONGLONG UnderrunBytes;   // отдано тишины: данных не хватило
+    LONG      ReaderActive;    // 1 — поток захвата держит фид
+    LONG      FormatMismatch;  // 1 — формат потока не совпал с каноническим
+} PFEED_STATS, *PPFEED_STATS;
+
+class CParrhesiaFeed
+{
+public:
+    // Конструктора нет намеренно: глобальные объекты с пользовательским
+    // конструктором требуют .CRT-секции (LNK4210 — ошибка для драйверов).
+    // Инициализация — в Init().
+
+    NTSTATUS Init();
+    void     Free();
+
+    // Приём блока от user mode (PASSIVE_LEVEL). Длина должна быть кратна кадру.
+    void Write(_In_reads_bytes_(len) const BYTE *src, _In_ ULONG len);
+
+    // Выдача блока потоку захвата (≤ DISPATCH_LEVEL). При нехватке — тишина.
+    void Read(_Out_writes_bytes_(len) BYTE *dst, _In_ ULONG len);
+
+    // Захват фида потоком: TRUE — поток может читать (владелец один).
+    BOOLEAN TryClaim(_In_ const void *owner);
+    void     Release(_In_ const void *owner);
+
+    void GetStats(_Out_ PPFEED_STATS stats);
+
+    BOOLEAN IsClaimedBy(_In_ const void *owner);
+
+private:
+    KSPIN_LOCK          m_Lock;
+    BYTE               *m_Buffer;
+    ULONGLONG           m_WritePos;    // монотонные позиции в байтах
+    ULONGLONG           m_ReadPos;
+    ULONGLONG           m_Written;
+    ULONGLONG           m_Delivered;
+    ULONGLONG           m_Dropped;
+    ULONGLONG           m_Underrun;
+    const void         *m_Owner;
+    LONG                m_FormatMismatch;
+};
+
+extern CParrhesiaFeed g_Feed;
+
+// Создаёт control-устройство \\.\ParrhesiaFeed и заворачивает dispatch
+// (CREATE/CLOSE/CLEANUP/DEVICE_CONTROL) с сохранением обработчиков PortCls
+// для остальных device object'ов. Ошибка не фатальна (фид просто не готов).
+NTSTATUS Feed_Initialize(_In_ PDRIVER_OBJECT DriverObject);
+
+// Удаляет symlink/device и освобождает кольцо. Вызывается из DriverUnload.
+void Feed_Cleanup();
+
+#endif // _PARRHESIA_FEED_H_
