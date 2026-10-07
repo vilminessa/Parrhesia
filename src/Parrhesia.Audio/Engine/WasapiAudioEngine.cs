@@ -191,11 +191,24 @@ public sealed class WasapiAudioEngine : IAudioEngine
             OpenSources(engineFormat, sinkDevice);
 
             startStreaming();
-            foreach (var source in _sources)
+            foreach (var source in _sources.ToArray())
             {
                 source.StartTimestamp = Stopwatch.GetTimestamp();
                 source.FirstDataLogged = false;
-                source.Recorder.StartRecording();
+                try
+                {
+                    source.Recorder.StartRecording();
+                }
+                catch (Exception ex)
+                {
+                    // Один неудачный источник не должен ронять весь тракт (раньше исключение
+                    // уходило в общий catch StartCore и валило запуск): сначала фолбэк
+                    // на формат устройства, затем отключение источника.
+                    if (!TryStartAtDeviceFormat(source, engineFormat, ex))
+                    {
+                        DisableSource(source, $"не удалось открыть поток: {ex.Message}");
+                    }
+                }
             }
 
             _running = true;
@@ -256,26 +269,57 @@ public sealed class WasapiAudioEngine : IAudioEngine
             }
 
             var recorder = builder.Build();
+
+            // Ресемплер вместо прежнего скипа: несовпадение формата больше не отключает
+            // источник (44.1k-источник при движке 48k теперь звучит, а не пропускается).
+            SourceFormatAdapter? adapter = null;
             if (!IsSameFormat(recorder.WaveFormat, engineFormat))
             {
-                LogMessage(
-                    EngineLogLevel.Error,
-                    $"Источник «{node.Name}»: формат {recorder.WaveFormat} ≠ {engineFormat}; источник пропущен");
-                recorder.Dispose();
-                device.Dispose();
-                continue;
+                if (!IsFloat32(recorder.WaveFormat))
+                {
+                    // Единственная оставшаяся причина скипа: байты не разобрать как float32.
+                    LogMessage(
+                        EngineLogLevel.Error,
+                        $"Источник «{node.Name}»: формат {recorder.WaveFormat.Encoding}/{recorder.WaveFormat.BitsPerSample} бит " +
+                        "не поддерживается (нужен float32); источник пропущен");
+                    recorder.Dispose();
+                    device.Dispose();
+                    continue;
+                }
+
+                adapter = SourceFormatAdapter.Create(
+                    recorder.WaveFormat.SampleRate,
+                    recorder.WaveFormat.Channels,
+                    engineFormat.SampleRate,
+                    engineFormat.Channels);
+
+                if (adapter is not null)
+                {
+                    LogMessage(
+                        EngineLogLevel.Info,
+                        $"Источник «{node.Name}»: формат {recorder.WaveFormat.SampleRate} Гц/{recorder.WaveFormat.Channels} к ≠ " +
+                        $"движку {engineFormat.SampleRate} Гц/{engineFormat.Channels} к — адаптация включена");
+                }
             }
 
             var capacity = NextPowerOfTwo((int)(engineFormat.SampleRate * engineFormat.Channels * RingSeconds));
-            var binding = new SourceBinding(node.Id, node.Name, recorder, new SampleRing(capacity), device);
-            recorder.DataAvailable += (data, flags, _, _) => OnCaptureData(binding, data, flags);
+            var binding = new SourceBinding(
+                node.Id,
+                node.Name,
+                recorder,
+                new SampleRing(capacity),
+                device,
+                adapter,
+                spec.Loopback);
+            Attach(binding);
             _processor.SetInput(node.Id, binding.Ring);
             _sources.Add(binding);
 
             LogMessage(
                 EngineLogLevel.Info,
                 $"Источник «{node.Name}»: {recorder.WaveFormat.SampleRate} Гц, {recorder.WaveFormat.Channels} к " +
-                $"({(spec.Loopback ? "loopback" : "захват")}, {node.DeviceId})");
+                $"({(spec.Loopback ? "loopback" : "захват")}, {node.DeviceId})" +
+                (adapter is null ? string.Empty : " → ресемплер включён"));
         }
     }
 
@@ -290,15 +334,164 @@ public sealed class WasapiAudioEngine : IAudioEngine
                 $"«{binding.Name}»: первые данные через {delayMs:0} мс");
         }
 
+        var source = MemoryMarshal.Cast<byte, float>(data);
+        var adapter = binding.Adapter;
+
         if (flags.HasFlag(AudioClientBufferFlags.Silent))
         {
-            var samples = data.Length / sizeof(float);
-            Span<float> zeros = samples <= 16384 ? stackalloc float[samples] : new float[samples];
-            binding.Ring.Write(zeros);
+            var samples = source.Length;
+            if (adapter is null)
+            {
+                Span<float> zeros = samples <= 16384 ? stackalloc float[samples] : new float[samples];
+                binding.Ring.Write(zeros);
+                return;
+            }
+
+            // Тишина идёт через адаптер тем же числом сэмплов источника: фаза ресемплера
+            // обязана продвинуться как при реальном сигнале, иначе частота «уплывёт».
+            if (binding.SourceScratch.Length < samples)
+            {
+                binding.SourceScratch = new float[samples];
+            }
+            else
+            {
+                binding.SourceScratch.AsSpan(0, samples).Clear();
+            }
+
+            WriteAdapted(binding, binding.SourceScratch.AsSpan(0, samples), adapter!);
             return;
         }
 
-        binding.Ring.Write(MemoryMarshal.Cast<byte, float>(data));
+        if (adapter is null)
+        {
+            binding.Ring.Write(source);
+            return;
+        }
+
+        WriteAdapted(binding, source, adapter);
+    }
+
+    /// <summary>Прогоняет блок источника через адаптер и кладёт результат в кольцо (формат движка).</summary>
+    private void WriteAdapted(SourceBinding binding, ReadOnlySpan<float> source, SourceFormatAdapter adapter)
+    {
+        var needed = adapter.MaxDestinationSamples(source.Length);
+        if (binding.OutputScratch.Length < needed)
+        {
+            binding.OutputScratch = new float[needed];
+        }
+
+        var written = adapter.Process(source, binding.OutputScratch);
+        binding.Ring.Write(binding.OutputScratch.AsSpan(0, written));
+    }
+
+    /// <summary>Вешает обработчики потока на рекордер (создание и фолбэк-переоткрытие).</summary>
+    private void Attach(SourceBinding binding)
+    {
+        binding.Recorder.DataAvailable += (data, flags, _, _) => OnCaptureData(binding, data, flags);
+        binding.Recorder.RecordingStopped += (_, args) => OnRecordingStopped(binding, args);
+    }
+
+    /// <summary>
+    /// Отказ потока после старта: помечаем источник неактивным (без изменения списка из
+    /// RT-потока) и объясняем причину в логе. Тракт продолжает работать.
+    /// </summary>
+    private void OnRecordingStopped(SourceBinding binding, StoppedEventArgs args)
+    {
+        if (args.Exception is null)
+        {
+            // Штатная остановка при Cleanup — не событие.
+            return;
+        }
+
+        binding.Failed = true;
+        LogMessage(
+            EngineLogLevel.Error,
+            $"Источник «{binding.Name}»: запись остановлена: {args.Exception.Message}");
+    }
+
+    /// <summary>
+    /// Фолбэк открытия источника: WASAPI не принял формат движка — переоткрываем поток
+    /// в mix-формате устройства (shared-режим принимает его всегда) и ресемплим у себя.
+    /// </summary>
+    private bool TryStartAtDeviceFormat(SourceBinding binding, WaveFormat engineFormat, Exception error)
+    {
+        try
+        {
+            binding.Recorder.Dispose();
+
+            var builder = new WasapiRecorderBuilder()
+                .WithDevice(binding.Device)
+                .WithEventSync();
+            if (binding.Loopback)
+            {
+                builder = builder.WithLoopbackCapture();
+            }
+
+            var recorder = builder.Build();
+            SourceFormatAdapter? adapter;
+            if (IsSameFormat(recorder.WaveFormat, engineFormat))
+            {
+                adapter = null;
+            }
+            else if (!IsFloat32(recorder.WaveFormat))
+            {
+                recorder.Dispose();
+                return false;
+            }
+            else
+            {
+                adapter = SourceFormatAdapter.Create(
+                    recorder.WaveFormat.SampleRate,
+                    recorder.WaveFormat.Channels,
+                    engineFormat.SampleRate,
+                    engineFormat.Channels);
+            }
+
+            binding.Recorder = recorder;
+            binding.Adapter = adapter;
+            Attach(binding);
+            recorder.StartRecording();
+
+            LogMessage(
+                EngineLogLevel.Warning,
+                $"Источник «{binding.Name}»: формат движка не принят ({error.Message}) — переоткрыт на " +
+                $"{recorder.WaveFormat.SampleRate} Гц/{recorder.WaveFormat.Channels} к" +
+                (adapter is null ? string.Empty : ", ресемплер включён"));
+            return true;
+        }
+        catch (Exception ex)
+        {
+            LogMessage(
+                EngineLogLevel.Error,
+                $"Источник «{binding.Name}»: фолбэк на формат устройства не удался: {ex.Message}");
+            return false;
+        }
+    }
+
+    /// <summary>Отключает источник, который не удалось открыть: освобождает поток и убирает вход.</summary>
+    private void DisableSource(SourceBinding binding, string reason)
+    {
+        try
+        {
+            binding.Recorder.Dispose();
+        }
+        catch
+        {
+            // Устройство могло исчезнуть — главное убрать источник из тракта.
+        }
+
+        try
+        {
+            binding.Device.Dispose();
+        }
+        catch
+        {
+            // Не мешает отключению.
+        }
+
+        _sources.Remove(binding);
+        _processor.SetInput(binding.NodeId, null);
+        LogMessage(EngineLogLevel.Error, $"Источник «{binding.Name}» отключён: {reason}");
     }
 
     private void Cleanup()
@@ -448,13 +641,20 @@ public sealed class WasapiAudioEngine : IAudioEngine
 
         long underruns = 0;
         long overflows = 0;
+        var active = 0;
         foreach (var source in _sources)
         {
+            if (source.Failed)
+            {
+                continue;
+            }
+
+            active++;
             underruns += source.Ring.UnderrunSamples;
             overflows += source.Ring.OverflowSamples;
         }
 
-        return new EngineStatus(true, _sampleRate, _channels, _sinkName, _sources.Count, underruns, overflows);
+        return new EngineStatus(true, _sampleRate, _channels, _sinkName, active, underruns, overflows);
     }
 
     private async Task ResetStatsLater()
@@ -475,6 +675,11 @@ public sealed class WasapiAudioEngine : IAudioEngine
             long overflow = 0;
             foreach (var source in _sources)
             {
+                if (source.Failed)
+                {
+                    continue;
+                }
+
                 underflow += source.Ring.UnderrunSamples;
                 overflow += source.Ring.OverflowSamples;
             }
@@ -507,6 +712,11 @@ public sealed class WasapiAudioEngine : IAudioEngine
         long overflow = 0;
         foreach (var source in _sources)
         {
+            if (source.Failed)
+            {
+                continue;
+            }
+
             underflow += source.Ring.UnderrunSamples;
             overflow += source.Ring.OverflowSamples;
         }
@@ -570,6 +780,22 @@ public sealed class WasapiAudioEngine : IAudioEngine
         };
     }
 
+    /// <summary>Формат записывается как 32-бит float — иначе байты не разобрать как сэмплы.</summary>
+    private static bool IsFloat32(WaveFormat format)
+    {
+        if (format.BitsPerSample != 32)
+        {
+            return false;
+        }
+
+        return format.Encoding switch
+        {
+            WaveFormatEncoding.IeeeFloat => true,
+            WaveFormatEncoding.Extensible => format is WaveFormatExtensible ext && ext.SubFormat == IeeeFloatSubFormat,
+            _ => false,
+        };
+    }
+
     private static int NextPowerOfTwo(int value)
     {
         var result = 1;
@@ -581,16 +807,44 @@ public sealed class WasapiAudioEngine : IAudioEngine
         return Math.Max(result, 4096);
     }
 
-    private sealed record SourceBinding(
-        Guid NodeId,
-        string Name,
-        WasapiRecorder Recorder,
-        SampleRing Ring,
-        MMDevice Device)
+    /// <summary>Привязка источника: поток записи, кольцо в формате движка и адаптер формата.</summary>
+    private sealed class SourceBinding(
+        Guid nodeId,
+        string name,
+        WasapiRecorder recorder,
+        SampleRing ring,
+        MMDevice device,
+        SourceFormatAdapter? adapter,
+        bool loopback)
     {
+        public Guid NodeId { get; } = nodeId;
+
+        public string Name { get; } = name;
+
+        public SampleRing Ring { get; } = ring;
+
+        public MMDevice Device { get; } = device;
+
+        public bool Loopback { get; } = loopback;
+
+        /// <summary>Текущий поток записи (меняется при фолбэке на формат устройства).</summary>
+        public WasapiRecorder Recorder { get; set; } = recorder;
+
+        /// <summary>Адаптер формата источника; null — данные уже в формате движка.</summary>
+        public SourceFormatAdapter? Adapter { get; set; } = adapter;
+
+        /// <summary>Поток умер после старта: источник неактивен, его статистику не считаем.</summary>
+        public volatile bool Failed;
+
         /// <summary>Монотонные тики старта записи — для замера задержки первых данных.</summary>
         public long StartTimestamp;
 
         public bool FirstDataLogged;
+
+        /// <summary>Нули в формате источника для тишинных пакетов (адаптерный путь).</summary>
+        public float[] SourceScratch = [];
+
+        /// <summary>Буфер вывода адаптера — уже в формате движка.</summary>
+        public float[] OutputScratch = [];
     }
 }
