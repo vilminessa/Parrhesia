@@ -1,6 +1,7 @@
 using Parrhesia.Core.Graph;
 using Parrhesia.Plugins;
 using Parrhesia.Plugins.Clap;
+using Parrhesia.Plugins.Vst3;
 
 namespace Parrhesia.Audio.Processing;
 
@@ -36,9 +37,17 @@ public sealed class SlotChainManager : IDisposable
     {
         _graph = graph ?? throw new ArgumentNullException(nameof(graph));
         _processor = processor ?? throw new ArgumentNullException(nameof(processor));
-        _factory = factory ?? (slot => ClapLoader.Load(slot.Path, slot.PluginId));
+        _factory = factory ?? LoadPluginByFormat;
         _graph.Changed += OnGraphChanged;
     }
+
+    /// <summary>Дефолтная фабрика: формат слота определяет хост (CLAP/VST3).</summary>
+    private static IAudioPlugin LoadPluginByFormat(PluginSlot slot) => slot.Format switch
+    {
+        PluginFormat.Clap => ClapLoader.Load(slot.Path, slot.PluginId),
+        PluginFormat.Vst3 => Vst3Loader.Load(slot.Path, slot.PluginId),
+        _ => throw new PluginLoadException($"Неизвестный формат плагина: {slot.Format}"),
+    };
 
     /// <summary>
     /// Запоминает формат движка и готовит (в т.ч. новые) экземпляры;

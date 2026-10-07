@@ -129,18 +129,13 @@ public sealed class PluginPickerWindow : Window
         {
             var result = await Task.Run(() => new PluginScanner().Scan(useCache: useCache));
 
-            // VST3 добавим на этапе V4 (нужен SDK) — пока только CLAP.
             _all = result.Plugins
-                .Where(p => p.Format == PluginFormat.Clap)
                 .OrderBy(p => p.Name, StringComparer.CurrentCultureIgnoreCase)
                 .ToList();
 
-            var note = result.Plugins.Any(p => p.Format == PluginFormat.Vst3)
-                ? " VST3 будут доступны на этапе V4."
-                : string.Empty;
             _status.Text =
                 $"Найдено: {_all.Count} (из кэша: {result.FromCache}, загружено: {result.Loaded}), " +
-                $"ошибок: {result.Errors.Count}.{note}";
+                $"ошибок: {result.Errors.Count}.";
             ApplyFilter();
         }
         catch (Exception ex)

@@ -23,11 +23,15 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- Тестовый CLAP-плагин: собрать tests\Parrhesia.Plugins.Native\build-test-plugin.bat -->
+    <!-- Тестовые плагины: CLAP — build-test-plugin.bat, VST3 — vst3-test-plugin\build-vst3-test-plugin.bat -->
     <None Include="..\Parrhesia.Plugins.Native\out\test-plugin.dll"
           Link="test-plugin.dll"
           CopyToOutputDirectory="PreserveNewest"
           Condition="Exists('..\Parrhesia.Plugins.Native\out\test-plugin.dll')" />
+    <None Include="..\Parrhesia.Plugins.Native\vst3-test-plugin\out\test-plugin-vst3.dll"
+          Link="test-plugin-vst3.dll"
+          CopyToOutputDirectory="PreserveNewest"
+          Condition="Exists('..\Parrhesia.Plugins.Native\vst3-test-plugin\out\test-plugin-vst3.dll')" />
   </ItemGroup>
 
 </Project>

@@ -57,8 +57,6 @@ struct Instance
     Vst::IAudioProcessor* processor = nullptr; // ручной refcount (queryInterface)
     Vst::ProcessContext context {};
     Vst::HostProcessData processData;
-    std::vector<float> scratchIn;
-    std::vector<float> scratchOut;
     double sampleRate = 48000.0;
     int maxBlock = 0;
     int channels = 0;
@@ -285,7 +283,10 @@ int __cdecl Pv3Prepare (void* raw, double sampleRate, int maxBlockFrames, int ch
         return Fail ("setActive(true) не прошёл");
     }
 
-    if (instance->processor->setProcessing (true) != kResultOk)
+    // Спецификация: kNotImplemented от setProcessing допустим (так делает
+    // база SingleComponentEffect) — хост обязан его принимать.
+    const tresult processingResult = instance->processor->setProcessing (true);
+    if (processingResult != kResultOk && processingResult != kNotImplemented)
     {
         instance->component->setActive (false);
         return Fail ("setProcessing(true) не прошёл");
@@ -298,38 +299,22 @@ int __cdecl Pv3Prepare (void* raw, double sampleRate, int maxBlockFrames, int ch
         return Fail ("HostProcessData::prepare не прошёл");
     }
 
-    instance->sampleRate = sampleRate;
-    instance->maxBlock = maxBlockFrames;
-    instance->channels = channels;
-    instance->scratchIn.assign (static_cast<size_t>(maxBlockFrames) * channels, 0.f);
-    instance->scratchOut.assign (static_cast<size_t>(maxBlockFrames) * channels, 0.f);
-
-    // Планарные слайсы: канал ch → [ch * maxBlockFrames].
-    if (instance->processData.numInputs > 0 && instance->processData.inputs[0].numChannels >= channels)
-    {
-        for (int ch = 0; ch < channels; ch++)
-        {
-            instance->processData.inputs[0].channelBuffers32[ch] =
-                instance->scratchIn.data () + static_cast<size_t>(ch) * maxBlockFrames;
-        }
-    }
-    else
+    // ВАЖНО: указатели каналов НЕ трогаем — HostProcessData владеет своими
+    // буферами и освобождает их через delete[] (правка указателей = крэш
+    // в unprepare). Работаем с его планарными буферами напрямую.
+    if (instance->processData.numInputs < 1 || instance->processData.inputs[0].numChannels < channels)
     {
         return Fail ("Нет главной входной аудио-шины");
     }
 
-    if (instance->processData.numOutputs > 0 && instance->processData.outputs[0].numChannels >= channels)
-    {
-        for (int ch = 0; ch < channels; ch++)
-        {
-            instance->processData.outputs[0].channelBuffers32[ch] =
-                instance->scratchOut.data () + static_cast<size_t>(ch) * maxBlockFrames;
-        }
-    }
-    else
+    if (instance->processData.numOutputs < 1 || instance->processData.outputs[0].numChannels < channels)
     {
         return Fail ("Нет главной выходной аудио-шины");
     }
+
+    instance->sampleRate = sampleRate;
+    instance->maxBlock = maxBlockFrames;
+    instance->channels = channels;
 
     memset (&instance->context, 0, sizeof (instance->context));
     instance->context.sampleRate = sampleRate;
@@ -363,18 +348,25 @@ int __cdecl Pv3Process (void* raw, float* interleaved, int frames)
     }
 
     const int channels = instance->channels;
+    auto& inputBus = instance->processData.inputs[0];
+    auto& outputBus = instance->processData.outputs[0];
 
-    // interleaved → planar (вход).
+    // interleaved → планарные буферы HostProcessData (вход) + тишина на выходе.
     for (int ch = 0; ch < channels; ch++)
     {
-        float* target = instance->scratchIn.data () + static_cast<size_t>(ch) * instance->maxBlock;
-        for (int frame = 0; frame < frames; frame++)
+        float* inChannel = inputBus.channelBuffers32[ch];
+        float* outChannel = outputBus.channelBuffers32[ch];
+        if (inChannel == nullptr || outChannel == nullptr)
         {
-            target[frame] = interleaved[frame * channels + ch];
+            return Fail ("Буфер канала не выделен");
         }
 
-        float* outTarget = instance->scratchOut.data () + static_cast<size_t>(ch) * instance->maxBlock;
-        memset (outTarget, 0, static_cast<size_t>(frames) * sizeof (float));
+        for (int frame = 0; frame < frames; frame++)
+        {
+            inChannel[frame] = interleaved[frame * channels + ch];
+        }
+
+        memset (outChannel, 0, static_cast<size_t>(frames) * sizeof (float));
     }
 
     instance->processData.numSamples = frames;
@@ -385,10 +377,10 @@ int __cdecl Pv3Process (void* raw, float* interleaved, int frames)
         return Fail ("IAudioProcessor::process вернул ошибку");
     }
 
-    // planar → interleaved (выход).
+    // планарные буферы → interleaved (выход).
     for (int ch = 0; ch < channels; ch++)
     {
-        const float* source = instance->scratchOut.data () + static_cast<size_t>(ch) * instance->maxBlock;
+        const float* source = outputBus.channelBuffers32[ch];
         for (int frame = 0; frame < frames; frame++)
         {
             interleaved[frame * channels + ch] = source[frame];

@@ -189,23 +189,18 @@ public:
 protected:
     void processAudio (float** in, float** out, int32 channels, int32 frames) override
     {
-        for (int32 ch = 0; ch < channels && ch < MAX_CHANNELS; ch++)
+        // Позиция общая для каналов и продвигается ПО КАДРУ.
+        for (int32 i = 0; i < frames; i++)
         {
-            float* source = in[ch];
-            float* target = out[ch];
-            float* ring = m_ring[ch];
-            for (int32 i = 0; i < frames; i++)
+            const int32 position = m_position;
+            for (int32 ch = 0; ch < channels && ch < MAX_CHANNELS; ch++)
             {
-                const float delayed = ring[m_position];
-                ring[m_position] = source[i];
-                target[i] = delayed;
+                const float delayed = m_ring[ch][position];
+                m_ring[ch][position] = in[ch][i];
+                out[ch][i] = delayed;
             }
-        }
 
-        m_position++;
-        if (m_position >= LATENCY_FRAMES)
-        {
-            m_position = 0;
+            m_position = (position + 1 >= LATENCY_FRAMES) ? 0 : position + 1;
         }
     }
 
