@@ -14,6 +14,7 @@ internal static class Clap
     public const string ExtState = "clap.state";
     public const string ExtLatency = "clap.latency";
     public const string ExtGui = "clap.gui";
+    public const string ExtParams = "clap.params";
     public const string ExtThreadCheck = "clap.thread-check";
     public const string ExtHostLatency = "clap.latency";
 
@@ -21,10 +22,21 @@ internal static class Clap
 
     public const uint AudioPortIsMain = 1 << 0;
 
+    // События (events.h): ядро-пространство и тип PARAM_VALUE.
+    public const ushort CoreEventSpaceId = 0;
+    public const ushort EventTypeParamValue = 5;
+
+    // Флаги clap_param_info (params.h).
+    public const uint ParamIsStepped = 1 << 0;
+    public const uint ParamIsHidden = 1 << 2;
+    public const uint ParamIsReadonly = 1 << 3;
+    public const uint ParamIsEnum = 1 << 16;
+
     public const int ProcessError = 0;
     public const int ProcessContinue = 1;
 
     public const int NameSize = 256;
+    public const int PathSize = 1024;
 }
 
 // ===== Структуры (байт-в-байт по заголовкам CLAP1.2.10) =====
@@ -199,6 +211,54 @@ internal unsafe struct ClapAudioPortInfo
     public uint InPlacePair;
 }
 
+/// <summary>clap_event_header_t: size, time, space_id, type, flags (16 байт).</summary>
+[StructLayout(LayoutKind.Sequential)]
+internal struct ClapEventHeader
+{
+    public uint Size;
+    public uint Time;
+    public ushort SpaceId;
+    public ushort Type;
+    public uint Flags;
+}
+
+/// <summary>
+/// clap_event_param_value_t — точный layout events.h (явные смещения:
+/// header@0, param_id@16, cookie@24, note_id@32, port@36, channel@38,
+/// key@40, value@48; размер56).
+/// </summary>
+[StructLayout(LayoutKind.Explicit)]
+internal struct ClapEventParamValue
+{
+    public const int EventSize = 56;
+
+    [FieldOffset(0)] public ClapEventHeader Header;
+    [FieldOffset(16)] public uint ParamId;
+    [FieldOffset(24)] public IntPtr Cookie;
+    [FieldOffset(32)] public int NoteId;
+    [FieldOffset(36)] public short PortIndex;
+    [FieldOffset(38)] public short Channel;
+    [FieldOffset(40)] public short Key;
+    [FieldOffset(48)] public double Value;
+}
+
+/// <summary>
+/// clap_param_info_t: id, flags, cookie, name[256], module[1024],
+/// min/max/default (1320 байт).
+/// </summary>
+[StructLayout(LayoutKind.Sequential)]
+internal unsafe struct ClapParamInfo
+{
+    public uint Id;
+    public uint Flags;
+    public IntPtr Cookie;
+    public fixed byte Name[Clap.NameSize];
+    public fixed byte Module[Clap.PathSize];
+    public double Min;
+    public double Max;
+    public double Default;
+}
+
 // ===== Делегаты (все cdecl; bool — I1, это байтовый C bool) =====
 
 internal static class ClapDelegates
@@ -289,6 +349,26 @@ internal static class ClapDelegates
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     [return: MarshalAs(UnmanagedType.I1)]
     public delegate bool OutputEventsTryPush(IntPtr list, IntPtr evt);
+
+    // ===== params (clap.params) =====
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    public delegate uint ParamsCount(IntPtr plugin);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    public delegate bool ParamsGetInfo(IntPtr plugin, uint index, IntPtr info);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    public delegate bool ParamsGetValue(IntPtr plugin, uint id, out double value);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    public delegate bool ParamsValueToText(IntPtr plugin, uint id, double value, IntPtr buffer, uint capacity);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    public delegate void ParamsFlush(IntPtr plugin, IntPtr inEvents, IntPtr outEvents);
 
     // ===== GUI (clap.gui) =====
 

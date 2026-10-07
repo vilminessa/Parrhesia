@@ -9,8 +9,11 @@ namespace Parrhesia.Plugins.Clap;
 /// clap.thread-check). Буферы планарные, аллоцируются в Prepare — в Process
 /// аллокаций нет.
 /// </summary>
-internal sealed unsafe class ClapPlugin : IAudioPlugin, IPluginEditor
+internal sealed unsafe class ClapPlugin : IAudioPlugin, IPluginEditor, IPluginParameters
 {
+    /// <summary>Ёмкость кольца param-событий (UI → аудио-поток).</summary>
+    private const int ParamEventCapacity = 64;
+
     private readonly ClapModule _module;
     private readonly string _path;
     private readonly IntPtr _plugin;
@@ -48,6 +51,16 @@ internal sealed unsafe class ClapPlugin : IAudioPlugin, IPluginEditor
     private readonly IntPtr _extState;
     private readonly IntPtr _extLatency;
     private readonly IntPtr _extGui;
+    private readonly IntPtr _extParams;
+
+    // ===== Параметры: кольцо событий UI → аудио-поток (SPSC под локом производителя) =====
+    private readonly object _paramGate = new();
+    private readonly IntPtr _paramEventBuf; // неуправляемый слот-буфер ParamEventCapacity × EventSize
+    private int _evtHead;                   // потреблено (пишет только аудио-поток/main-flush)
+    private int _evtTail;                   // записано (пишет производитель под _paramGate)
+    private int _evtBatchStart;             // снимок очереди на время Process/flush
+    private int _evtBatchCount;
+    private PluginParameter[]? _paramCache;
 
     // GUI-состояние редактора.
     private IntPtr _guiApiString;
@@ -149,6 +162,8 @@ internal sealed unsafe class ClapPlugin : IAudioPlugin, IPluginEditor
         _hostLatencyPtr = Marshal.AllocHGlobal(Marshal.SizeOf<ClapHostLatency>());
         Marshal.StructureToPtr(hostLatency, _hostLatencyPtr, false);
 
+        _paramEventBuf = Marshal.AllocHGlobal(ParamEventCapacity * ClapEventParamValue.EventSize);
+
         var host = new ClapHost
         {
             Version = new ClapVersion
@@ -195,11 +210,16 @@ internal sealed unsafe class ClapPlugin : IAudioPlugin, IPluginEditor
             _extState = GetPluginExtension(Clap.ExtState);
             _extLatency = GetPluginExtension(Clap.ExtLatency);
             _extGui = GetPluginExtension(Clap.ExtGui);
+            _extParams = GetPluginExtension(Clap.ExtParams);
 
             _channels = ValidateStereoPorts();
 
-            _inputEventsSize = _ => 0;
-            _inputEventsGet = (_, _) => IntPtr.Zero;
+            _inputEventsSize = _ => (uint)_evtBatchCount;
+            _inputEventsGet = (_, index) =>
+            {
+                var slot = (_evtBatchStart + (int)index) % ParamEventCapacity;
+                return _paramEventBuf + slot * ClapEventParamValue.EventSize;
+            };
             _outputEventsTryPush = (_, _) => true;
             _streamWrite = StreamWrite;
             _streamRead = StreamRead;
@@ -327,7 +347,9 @@ internal sealed unsafe class ClapPlugin : IAudioPlugin, IPluginEditor
             OutEvents = _outEventsPtr,
         };
 
+        PrepareEventBatch();
         var status = _process(_plugin, (IntPtr)(&process));
+        AdvanceEventBatch();
         if (status == Clap.ProcessError)
         {
             ProcessErrors++;
@@ -422,6 +444,246 @@ internal sealed unsafe class ClapPlugin : IAudioPlugin, IPluginEditor
         {
             Marshal.FreeHGlobal(streamPtr);
             handle.Free();
+        }
+    }
+
+    // ===== IPluginParameters (clap.params) =====
+
+    public IReadOnlyList<PluginParameter> GetParameters()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (_paramCache is not null)
+        {
+            return _paramCache;
+        }
+
+        if (_extParams == IntPtr.Zero)
+        {
+            _paramCache = [];
+            return _paramCache;
+        }
+
+        var countFn = Marshal.GetDelegateForFunctionPointer<ClapDelegates.ParamsCount>(
+            Marshal.ReadIntPtr(_extParams, 0));
+        var getInfo = Marshal.GetDelegateForFunctionPointer<ClapDelegates.ParamsGetInfo>(
+            Marshal.ReadIntPtr(_extParams, 8));
+
+        var count = countFn(_plugin);
+        var list = new List<PluginParameter>(checked((int)count));
+        var infoPtr = Marshal.AllocHGlobal(Marshal.SizeOf<ClapParamInfo>());
+        try
+        {
+            for (uint i = 0; i < count; i++)
+            {
+                if (!getInfo(_plugin, i, infoPtr))
+                {
+                    continue;
+                }
+
+                var info = Marshal.PtrToStructure<ClapParamInfo>(infoPtr);
+
+                // name@16, module@272 (Sequential: id4+flags4+cookie8).
+                var name = Marshal.PtrToStringUTF8(infoPtr + 16) ?? $"param {info.Id}";
+                var module = Marshal.PtrToStringUTF8(infoPtr + 16 + Clap.NameSize) ?? string.Empty;
+
+                list.Add(new PluginParameter(
+                    unchecked((int)info.Id),
+                    name,
+                    module,
+                    info.Min,
+                    info.Max,
+                    info.Default,
+                    IsStepped: (info.Flags & (Clap.ParamIsStepped | Clap.ParamIsEnum)) != 0,
+                    IsReadOnly: (info.Flags & Clap.ParamIsReadonly) != 0,
+                    IsHidden: (info.Flags & Clap.ParamIsHidden) != 0));
+            }
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(infoPtr);
+        }
+
+        _paramCache = [.. list];
+        return _paramCache;
+    }
+
+    public double GetParameterValue(int id)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (_extParams == IntPtr.Zero)
+        {
+            return 0;
+        }
+
+        var get = Marshal.GetDelegateForFunctionPointer<ClapDelegates.ParamsGetValue>(
+            Marshal.ReadIntPtr(_extParams, 16));
+        return get(_plugin, unchecked((uint)id), out var value) ? value : 0;
+    }
+
+    public void SetParameterValue(int id, double value)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (_extParams == IntPtr.Zero)
+        {
+            return;
+        }
+
+        var parameter = FindParameter(id);
+        if (parameter is null || parameter.IsReadOnly)
+        {
+            return;
+        }
+
+        value = Math.Clamp(value, parameter.Min, parameter.Max);
+        if (parameter.IsStepped)
+        {
+            value = Math.Truncate(value);
+        }
+
+        if (!TryEnqueueParamEvent(unchecked((uint)id), value))
+        {
+            return; // кольцо переполнено — значение дойдёт при следующей установке
+        }
+
+        if (!_active)
+        {
+            // Спецификация CLAP: пока плагин неактивен, flush зовётся с main-thread.
+            FlushPendingEvents();
+        }
+    }
+
+    public string FormatParameterValue(int id, double value)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (_extParams != IntPtr.Zero)
+        {
+            var toText = Marshal.GetDelegateForFunctionPointer<ClapDelegates.ParamsValueToText>(
+                Marshal.ReadIntPtr(_extParams, 24));
+            var buffer = Marshal.AllocHGlobal(256);
+            try
+            {
+                if (toText(_plugin, unchecked((uint)id), value, buffer, 256))
+                {
+                    return Marshal.PtrToStringUTF8(buffer) ?? value.ToString("0.###");
+                }
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(buffer);
+            }
+        }
+
+        return value.ToString("0.###");
+    }
+
+    private PluginParameter? FindParameter(int id)
+    {
+        foreach (var parameter in GetParameters())
+        {
+            if (parameter.Id == id)
+            {
+                return parameter;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>Кладёт событие в кольцо (UI-поток; единственный производитель).</summary>
+    private bool TryEnqueueParamEvent(uint paramId, double value)
+    {
+        lock (_paramGate)
+        {
+            var tail = Volatile.Read(ref _evtTail);
+            var head = Volatile.Read(ref _evtHead);
+            if (tail - head >= ParamEventCapacity)
+            {
+                return false;
+            }
+
+            var slot = tail % ParamEventCapacity;
+            var evt = (ClapEventParamValue*)(_paramEventBuf + slot * ClapEventParamValue.EventSize);
+            *evt = new ClapEventParamValue
+            {
+                Header = new ClapEventHeader
+                {
+                    Size = (uint)ClapEventParamValue.EventSize,
+                    Time = 0,
+                    Type = Clap.EventTypeParamValue,
+                    SpaceId = Clap.CoreEventSpaceId,
+                    Flags = 0,
+                },
+                ParamId = paramId,
+                Cookie = IntPtr.Zero,
+                NoteId = -1,
+                PortIndex = -1,
+                Channel = -1,
+                Key = -1,
+                Value = value,
+            };
+
+            Volatile.Write(ref _evtTail, tail + 1);
+            return true;
+        }
+    }
+
+    /// <summary>Снимок очереди перед Process/flush: батч не меняется до Advance.</summary>
+    private void PrepareEventBatch()
+    {
+        var tail = Volatile.Read(ref _evtTail);
+        _evtBatchStart = _evtHead;
+        _evtBatchCount = Math.Min(tail - _evtHead, ParamEventCapacity);
+    }
+
+    private void AdvanceEventBatch()
+    {
+        _evtHead += _evtBatchCount;
+        Volatile.Write(ref _evtHead, _evtHead);
+        _evtBatchCount = 0;
+    }
+
+    /// <summary>Доставка очереди через params.flush (только пока плагин неактивен).</summary>
+    private void FlushPendingEvents()
+    {
+        PrepareEventBatch();
+        if (_evtBatchCount == 0)
+        {
+            return;
+        }
+
+        try
+        {
+            var flush = Marshal.GetDelegateForFunctionPointer<ClapDelegates.ParamsFlush>(
+                Marshal.ReadIntPtr(_extParams, 40));
+            var inEvents = new ClapInputEvents
+            {
+                Ctx = IntPtr.Zero,
+                Size = Marshal.GetFunctionPointerForDelegate(_inputEventsSize),
+                Get = Marshal.GetFunctionPointerForDelegate(_inputEventsGet),
+            };
+            var outEvents = new ClapOutputEvents
+            {
+                Ctx = IntPtr.Zero,
+                TryPush = Marshal.GetFunctionPointerForDelegate(_outputEventsTryPush),
+            };
+
+            var inPtr = Marshal.AllocHGlobal(Marshal.SizeOf<ClapInputEvents>());
+            var outPtr = Marshal.AllocHGlobal(Marshal.SizeOf<ClapOutputEvents>());
+            try
+            {
+                Marshal.StructureToPtr(inEvents, inPtr, false);
+                Marshal.StructureToPtr(outEvents, outPtr, false);
+                flush(_plugin, inPtr, outPtr);
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(inPtr);
+                Marshal.FreeHGlobal(outPtr);
+            }
+        }
+        finally
+        {
+            AdvanceEventBatch();
         }
     }
 
@@ -791,6 +1053,11 @@ internal sealed unsafe class ClapPlugin : IAudioPlugin, IPluginEditor
         if (_hostPtr != IntPtr.Zero)
         {
             Marshal.FreeHGlobal(_hostPtr);
+        }
+
+        if (_paramEventBuf != IntPtr.Zero)
+        {
+            Marshal.FreeHGlobal(_paramEventBuf);
         }
 
         ClapUtf8.Free(_namePtr);
