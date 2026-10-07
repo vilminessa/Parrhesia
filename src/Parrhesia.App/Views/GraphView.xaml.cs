@@ -843,7 +843,12 @@ public partial class GraphView : UserControl
         _syncingMode = true;
         try
         {
-            var mastering = MasteringModeButton.IsChecked == true;
+            // Режим определяется по НАЖАТОЙ кнопке (sender), а не по галке
+            // соседней: при клике по «Однонодовый» из состояния «Мастеринг»
+            // соседняя галка ещё не снята — чтение по ней давало обратный
+            // режим и гасило только что нажатую кнопку.
+            var mastering = ReferenceEquals(sender, MasteringModeButton);
+
             // Режим ровно один: снимаем галку с противоположного (без рекурсии).
             if (mastering)
             {
