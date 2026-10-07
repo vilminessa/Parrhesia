@@ -1,8 +1,11 @@
+using System.Globalization;
 using System.Windows;
 using System.Windows.Controls;
 using Parrhesia.App.Controls;
 using Parrhesia.App.Rendering;
 using Parrhesia.App.Views.Mixer;
+using Parrhesia.Audio.Devices;
+using Parrhesia.Audio.Engine;
 using Parrhesia.Core.Graph;
 
 namespace Parrhesia.App.Views;
@@ -17,6 +20,9 @@ public partial class MixerView : UserControl
     private readonly Dictionary<Guid, MixerStrip> _strips = [];
     private double _statusAccum;
 
+    /// <summary>Блокировка обработчиков на время программного наполнения комбобоксов.</summary>
+    private bool _syncingUi;
+
     public MixerView()
     {
         InitializeComponent();
@@ -25,7 +31,11 @@ public partial class MixerView : UserControl
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
         AppServices.Graph.Changed += OnGraphChanged;
+        AppServices.Devices.DevicesChanged += OnDevicesChanged;
         RenderTicker.Subscribe(OnTick);
+        RefreshRateList();
+        RefreshMonitorList();
+        PushSettingsToEngine();
         RebuildStrips();
         RefreshStatus();
     }
@@ -33,8 +43,110 @@ public partial class MixerView : UserControl
     private void OnUnloaded(object sender, RoutedEventArgs e)
     {
         AppServices.Graph.Changed -= OnGraphChanged;
+        AppServices.Devices.DevicesChanged -= OnDevicesChanged;
         RenderTicker.Unsubscribe(OnTick);
     }
+
+    /// <summary>Настройки из AppSettings → движок (идемпотентно: движок не трогает то, что уже так настроено).</summary>
+    private static void PushSettingsToEngine()
+    {
+        AppServices.Engine.SetSampleRate(EngineFormat.ParseSetting(AppServices.Settings.EngineSampleRate));
+        AppServices.Engine.SetMonitorDevice(AppServices.Settings.MonitorDeviceId);
+    }
+
+    private void RefreshRateList()
+    {
+        _syncingUi = true;
+        try
+        {
+            RateCombo.Items.Clear();
+            RateCombo.Items.Add(new ComboBoxItem { Content = "Авто", Tag = null });
+            foreach (var rate in EngineFormat.Rates)
+            {
+                RateCombo.Items.Add(new ComboBoxItem { Content = FormatRate(rate), Tag = rate });
+            }
+
+            var configured = EngineFormat.ParseSetting(AppServices.Settings.EngineSampleRate);
+            SelectByTag(RateCombo, configured);
+        }
+        finally
+        {
+            _syncingUi = false;
+        }
+    }
+
+    private void RefreshMonitorList()
+    {
+        _syncingUi = true;
+        try
+        {
+            var selected = AppServices.Settings.MonitorDeviceId;
+            MonitorCombo.Items.Clear();
+            MonitorCombo.Items.Add(new ComboBoxItem { Content = "Выкл.", Tag = null });
+            foreach (var device in AppServices.Devices.GetDevices(DeviceFlow.Render))
+            {
+                MonitorCombo.Items.Add(new ComboBoxItem { Content = device.Name, Tag = device.Id });
+            }
+
+            if (SelectByTag(MonitorCombo, selected) < 0)
+            {
+                // Устройство исчезло — оставляем «Выкл.», настройку перезапишет пользователь.
+                MonitorCombo.SelectedIndex = 0;
+            }
+        }
+        finally
+        {
+            _syncingUi = false;
+        }
+    }
+
+    /// <returns>Индекс найденного элемента или −1.</returns>
+    private static int SelectByTag(ComboBox combo, object? tag)
+    {
+        for (var i = 0; i < combo.Items.Count; i++)
+        {
+            if (combo.Items[i] is ComboBoxItem item && Equals(item.Tag, tag))
+            {
+                combo.SelectedIndex = i;
+                return i;
+            }
+        }
+
+        return -1;
+    }
+
+    private static string FormatRate(int rate) =>
+        rate % 1000 == 0 ? $"{rate / 1000} кГц" : $"{rate / 1000.0:0.#} кГц";
+
+    private void OnRateChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_syncingUi)
+        {
+            return;
+        }
+
+        var tag = (RateCombo.SelectedItem as ComboBoxItem)?.Tag;
+        var rate = tag is int value ? (int?)value : null;
+        AppServices.Settings.EngineSampleRate = rate?.ToString(CultureInfo.InvariantCulture) ?? "auto";
+        AppServices.Settings.Save();
+        AppServices.Engine.SetSampleRate(rate);
+    }
+
+    private void OnMonitorChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_syncingUi)
+        {
+            return;
+        }
+
+        var deviceId = (MonitorCombo.SelectedItem as ComboBoxItem)?.Tag as string;
+        AppServices.Settings.MonitorDeviceId = deviceId ?? string.Empty;
+        AppServices.Settings.Save();
+        AppServices.Engine.SetMonitorDevice(deviceId);
+    }
+
+    private void OnDevicesChanged(object? sender, EventArgs e) =>
+        Dispatcher.InvokeAsync(() => RefreshMonitorList());
 
     private void OnGraphChanged(object? sender, GraphChange e)
     {
@@ -128,9 +240,24 @@ public partial class MixerView : UserControl
     private void RefreshStatus()
     {
         var status = AppServices.Engine.Status;
-        StatusText.Text = status.IsRunning
-            ? $"Движок: работает · {status.SampleRate} Гц · {status.Channels} к · " +
-              $"выход «{status.SinkName}» · xrun под/переп. {status.UnderrunSamples}/{status.OverflowSamples}"
-            : "Движок: остановлен";
+        if (!status.IsRunning)
+        {
+            StatusText.Text = "Движок: остановлен";
+            return;
+        }
+
+        var outputs = status.SinkNames.Count > 0
+            ? string.Join(" + ", status.SinkNames)
+            : status.SinkName;
+
+        var monitor = status.MonitorActive
+            ? $" · монитор «{status.MonitorName}»"
+            : string.IsNullOrEmpty(AppServices.Settings.MonitorDeviceId)
+                ? string.Empty
+                : " · монитор выкл.";
+
+        StatusText.Text = $"Движок: работает · {status.SampleRate} Гц · {status.Channels} к · " +
+                          $"выходы «{outputs}» · xrun под/переп. {status.UnderrunSamples}/{status.OverflowSamples}" +
+                          monitor;
     }
 }

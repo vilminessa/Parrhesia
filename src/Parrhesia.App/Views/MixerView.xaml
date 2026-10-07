@@ -10,7 +10,7 @@
       <RowDefinition Height="Auto" />
     </Grid.RowDefinitions>
 
-    <!-- Статус движка -->
+    <!-- Статус движка и настройки тракта -->
     <Border Grid.Row="0"
             Background="{DynamicResource Brush.Panel}"
             BorderBrush="{DynamicResource Brush.Stroke}"
@@ -18,12 +18,45 @@
             CornerRadius="8"
             Padding="16,10"
             Margin="0,0,0,14">
-      <TextBlock x:Name="StatusText"
-                 Text="—"
-                 FontSize="13"
-                 Foreground="{DynamicResource Brush.Text}"
-                 VerticalAlignment="Center"
-                 TextTrimming="CharacterEllipsis" />
+      <Grid>
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="*" />
+          <ColumnDefinition Width="Auto" />
+        </Grid.ColumnDefinitions>
+
+        <TextBlock x:Name="StatusText"
+                   Grid.Column="0"
+                   Text="—"
+                   FontSize="13"
+                   Foreground="{DynamicResource Brush.Text}"
+                   VerticalAlignment="Center"
+                   TextTrimming="CharacterEllipsis" />
+
+        <StackPanel Grid.Column="1"
+                    Orientation="Horizontal"
+                    VerticalAlignment="Center"
+                    Margin="16,0,0,0">
+          <TextBlock Text="Формат"
+                     FontSize="12"
+                     Foreground="{DynamicResource Brush.TextFaint}"
+                     VerticalAlignment="Center"
+                     Margin="0,0,6,0" />
+          <ComboBox x:Name="RateCombo"
+                    Width="92"
+                    SelectionChanged="OnRateChanged"
+                    ToolTip="Частота движка: авто — виртуал 48 кГц, иначе mix выхода" />
+
+          <TextBlock Text="Монитор"
+                     FontSize="12"
+                     Foreground="{DynamicResource Brush.TextFaint}"
+                     VerticalAlignment="Center"
+                     Margin="14,0,6,0" />
+          <ComboBox x:Name="MonitorCombo"
+                    Width="230"
+                    SelectionChanged="OnMonitorChanged"
+                    ToolTip="Параллельный реальный вывод потока виртуального сника" />
+        </StackPanel>
+      </Grid>
     </Border>
 
     <!-- Полосы каналов -->
