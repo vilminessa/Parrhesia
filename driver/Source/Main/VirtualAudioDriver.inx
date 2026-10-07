@@ -140,6 +140,17 @@ HKR,,DeviceType,0x10001,0x0000001D
 ; SDDL_DEVOBJ_SYS_ALL_ADM_RWX_WORLD_RWX_RES_RWX
 HKR,,Security,,"D:P(A;;GA;;;SY)(A;;GRGWGX;;;BA)(A;;GRGWGX;;;WD)(A;;GRGWGX;;;RC)"
 
+;======================================================
+; Friendly names endpoints (KSPROPERTY_PIN_NAME).
+; KS (Win10 1809+) сначала ищет строку в software key устройства:
+; по Name-GUID пина, затем по Category-GUID; при отсутствии — inbox-дефолты
+; («Speakers»/«Microphone Array» → локализованные «Динамики»/«Набор
+; микрофонов»). См. docs «Friendly Names for Audio Endpoint Devices».
+;======================================================
+HKR,MediaCategories\{DFF21CE1-F70F-11D0-B917-00A0C9223196},Name,,%EndpointNameRender%
+HKR,MediaCategories\{DFF21BE5-F70F-11D0-B917-00A0C9223196},Name,,%EndpointNameCapture%
+HKR,MediaCategories\{6AE81FF4-203E-4FE1-88AA-F2D57775CD4A},Name,,%EndpointNameCapture%
+
 
 ;======================================================
 ; WDF
@@ -191,4 +202,10 @@ VIRTUALAUDIODRIVER.WaveMicArray1.szPname="Parrhesia Out"
 VIRTUALAUDIODRIVER.TopologyMicArray1.szPname="Parrhesia Out"
 
 MicArray1CustomName= "Parrhesia Out"
+
+;; имена endpoints (KSPROPERTY_PIN_NAME → MediaCategories в software key):
+;; рендер = KSNODETYPE_SPEAKER, захват = KSNODETYPE_MICROPHONE_ARRAY
+;; (+ Name-GUID пина микрофона MICARRAY1_CUSTOM_NAME)
+EndpointNameRender="Parrhesia In"
+EndpointNameCapture="Parrhesia Out"
 
