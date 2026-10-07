@@ -60,12 +60,29 @@ msbuild VirtualAudioDriver.sln
 `VirtualAudioDriver.inf`, `virtualaudiodriver.cat`, `package.cer`
 (тестовая подпись).
 
-## Установка (требует участия пользователя)
+## Установка (Э0, требует участия пользователя)
 
-1. Тестовое подключение: `bcdedit /set testsigning on` + **перезагрузка**
-   (права администратора).
-2. `pnputil /add-driver VirtualAudioDriver.inf /install`
-3. В «Звуке» появятся endpoints драйвера.
+1. **Один раз за жизнь системы** (права администратора + перезагрузка):
+   `bcdedit /set testsigning on`
+   - если отказ из-за Secure Boot — отключите Secure Boot в UEFI
+     (или включите «test signing» иным способом);
+   - проверка: `bcdedit /enum` → Testsigning = Yes.
+2. `install.bat` **от администратора** — создаёт root-devnode через devcon
+   (пакет берётся из `x64\Release\package`). Перезагрузка НЕ требуется.
+3. В «Звуке» появляются **Parrhesia In** и **Parrhesia Out**.
+4. Удаление: `uninstall.bat` (админ) — тоже без перезагрузки.
+
+## Сценарий проверки тракта (Э1)
+
+1. Запустить Parrhesia, в инспекторе назначения выбрать
+   **«Parrhesia Out (виртуальный)»**, источнику — **«Loopback: Parrhesia In»**.
+2. В Windows выбрать **Parrhesia In** как устройство воспроизведения
+   (Параметры → Система → Звук или ПКМ по значку динамика).
+3. Запустить любое приложение со звуком — он пойдёт в Parrhesia In →
+   микшер → Parrhesia Out.
+4. Записать «Parrhesia Out» из другого приложения (Audacity/OBS) —
+   должен идти микс; в логе (`%AppData%\Parrhesia\logs\app.log`)
+   дельта фида без роста (нет сбросов/тишины).
 
 ## Статус
 
