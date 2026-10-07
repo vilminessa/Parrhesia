@@ -3,10 +3,12 @@
     <Project Path="src/Parrhesia.App/Parrhesia.App.csproj" />
     <Project Path="src/Parrhesia.Audio/Parrhesia.Audio.csproj" />
     <Project Path="src/Parrhesia.Core/Parrhesia.Core.csproj" />
+    <Project Path="src/Parrhesia.Plugins/Parrhesia.Plugins.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Parrhesia.App.Tests/Parrhesia.App.Tests.csproj" />
     <Project Path="tests/Parrhesia.Audio.Tests/Parrhesia.Audio.Tests.csproj" />
     <Project Path="tests/Parrhesia.Core.Tests/Parrhesia.Core.Tests.csproj" />
+    <Project Path="tests/Parrhesia.Plugins.Tests/Parrhesia.Plugins.Tests.csproj" />
   </Folder>
 </Solution>

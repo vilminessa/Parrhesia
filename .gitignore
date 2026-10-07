@@ -21,3 +21,6 @@ coverage*.xml
 # Локальные настройки
 *.DotSettings.user
 launchSettings.json
+
+# Артефакты сборки нативного тест-плагина
+tests/Parrhesia.Plugins.Native/out/
