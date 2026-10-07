@@ -33,7 +33,11 @@ static test_state_t *state_of(const clap_plugin_t *plugin) {
 
 static bool CLAP_ABI plug_init(const clap_plugin_t *plugin) {
     test_state_t *s = state_of(plugin);
-    memset(s, 0, sizeof(*s));
+    /* ВАЖНО: is_latency задаётся фабрикой ДО init — memset структуры целиком
+       обнулял бы его (плагин превращался в gain). Чистим только буферы. */
+    memset(s->d0, 0, sizeof(s->d0));
+    memset(s->d1, 0, sizeof(s->d1));
+    s->pos = 0;
     s->magic = STATE_MAGIC;
     return true;
 }
@@ -278,6 +282,7 @@ static const clap_plugin_t *CLAP_ABI factory_create(const clap_plugin_factory_t 
     }
 
     s->is_latency = is_latency;
+
 
     clap_plugin_t *plugin = (clap_plugin_t *)calloc(1, sizeof(clap_plugin_t));
     if (plugin == NULL) {
