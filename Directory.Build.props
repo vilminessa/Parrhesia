@@ -9,6 +9,12 @@
     <Product>Parrhesia</Product>
     <Copyright>Copyright © 2026 vilminessa</Copyright>
     <NeutralLanguage>ru-RU</NeutralLanguage>
+    <!--
+      Версия по умолчанию - для локальных/dev-сборок (футер показывает «unreleased»).
+      Релизную версию вшивает CI: dotnet publish -p:Version* из тега b*/v* -
+      коммитов с бампом версии в репозитории нет (модель Synfronia).
+    -->
+    <Version>0.0.0-dev</Version>
   </PropertyGroup>
 
 </Project>

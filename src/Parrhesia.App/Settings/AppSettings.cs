@@ -9,6 +9,18 @@ public sealed class AppSettings
     /// <summary>Режим отображения схемы: "single" (бандл) или "mastering" (по-канальные порты).</summary>
     public string GraphViewMode { get; set; } = "single";
 
+    /// <summary>
+    /// Устройство мониторинга (MMDeviceId, DeviceSpec-формат или пусто — выкл.):
+    /// реальный вывод, звучащий параллельно виртуальному снику.
+    /// </summary>
+    public string MonitorDeviceId { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Частота движка: "auto" (по умолчанию) либо 44100/48000/88200/96000.
+    /// Разбор — EngineFormat.ParseSetting; невалидное значение деградирует в "auto".
+    /// </summary>
+    public string EngineSampleRate { get; set; } = "auto";
+
     private static string FilePath =>
         Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),

@@ -32,6 +32,20 @@ public interface IAudioEngine : IDisposable
     /// </summary>
     void CollectPluginStates();
 
+    /// <summary>
+    /// Устройство мониторинга: реальный вывод, звучащий параллельно виртуальному снику
+    /// (каждый выход тянет свой блок из GraphProcessor — ядро не меняется).
+    /// null/пусто — выкл. Хранение настройки — на стороне UI (AppSettings);
+    /// вызов при работающем движке меняет только монитор, тракт не перезапускается.
+    /// </summary>
+    void SetMonitorDevice(string? deviceId);
+
+    /// <summary>
+    /// Явная частота движка (null — авто-выбор: настройка → 48k при виртуальном снике →
+    /// mix реального выхода → 48k). Смена при работающем движке перезапускает тракт.
+    /// </summary>
+    void SetSampleRate(int? configuredRate);
+
     /// <summary>Живой экземпляр слота шины (null — не загружен). UI-поток: редактор.</summary>
     IAudioPlugin? GetSlotInstance(Guid nodeId, int slotIndex);
 }
