@@ -52,6 +52,7 @@
 
       <StackPanel Grid.Column="1" Orientation="Horizontal">
         <Button Style="{StaticResource TitleBarButton}"
+                WindowChrome.IsHitTestVisibleInChrome="True"
                 Click="OnMinimizeClick"
                 ToolTip="Свернуть">
           <Path Width="10"
@@ -62,6 +63,7 @@
                 StrokeThickness="1" />
         </Button>
         <Button Style="{StaticResource TitleBarButton}"
+                WindowChrome.IsHitTestVisibleInChrome="True"
                 Click="OnMaximizeClick"
                 ToolTip="Развернуть">
           <Grid Width="10" Height="10">
@@ -81,6 +83,7 @@
           </Grid>
         </Button>
         <Button Style="{StaticResource TitleBarCloseButton}"
+                WindowChrome.IsHitTestVisibleInChrome="True"
                 Click="OnCloseClick"
                 ToolTip="Закрыть">
           <Path Width="10"

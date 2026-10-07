@@ -45,6 +45,7 @@ public sealed class WasapiAudioEngine : IAudioEngine
     private int _sampleRate;
     private int _channels;
     private bool _running;
+    private bool _restartPending;
     private string[] _bindings = [];
     private Timer? _statsTimer;
     private long _lastLoggedUnderflow;
@@ -95,6 +96,8 @@ public sealed class WasapiAudioEngine : IAudioEngine
     {
         lock (_gate)
         {
+            _restartPending = false; // ручная остановка отменяет автоповтор старта
+
             if (!_running)
             {
                 return;
@@ -192,7 +195,7 @@ public sealed class WasapiAudioEngine : IAudioEngine
             // (max-блок100 мс — больше обоих путей вывода: player50 мс, помпа10 мс).
             _slotChains.Prepare(engineFormat.SampleRate, engineFormat.SampleRate / 10, engineFormat.Channels);
 
-            OpenSources(engineFormat, sinkDevice);
+            OpenSources(engineFormat, sinkDevice, sinkSpec.Target == DeviceSpecTarget.Virtual);
 
             startStreaming();
             foreach (var source in _sources)
@@ -218,10 +221,11 @@ public sealed class WasapiAudioEngine : IAudioEngine
         {
             LogMessage(EngineLogLevel.Error, "Ошибка запуска движка: " + ex.Message);
             Cleanup();
+            ScheduleStartRetry();
         }
     }
 
-    private void OpenSources(WaveFormat engineFormat, MMDevice? sinkDevice)
+    private void OpenSources(WaveFormat engineFormat, MMDevice? sinkDevice, bool sinkIsVirtual)
     {
         foreach (var node in _graph.Nodes)
         {
@@ -246,6 +250,21 @@ public sealed class WasapiAudioEngine : IAudioEngine
                 LogMessage(
                     EngineLogLevel.Warning,
                     $"Источник «{node.Name}» захватывает то же устройство, куда идёт вывод, — это петля; источник пропущен");
+                device.Dispose();
+                continue;
+            }
+
+            // Петля через виртуальный вывод: при sink=фид наш Out-эндпоинт
+            // кормится ИЗ этого же тракта — захват его замыкает цикл
+            // (микшер → фид → Out → захват → микшер) и разгоняет переполнения.
+            // TODO(М2): определять надёжнее — по InstanceId инстанса, а не по имени.
+            if (sinkIsVirtual &&
+                device.DataFlow == DataFlow.Capture &&
+                device.FriendlyName.Contains("Parrhesia", StringComparison.OrdinalIgnoreCase))
+            {
+                LogMessage(
+                    EngineLogLevel.Warning,
+                    $"Источник «{node.Name}» захватывает собственный виртуальный вывод «{device.FriendlyName}» — это петля; источник пропущен");
                 device.Dispose();
                 continue;
             }
@@ -425,17 +444,58 @@ public sealed class WasapiAudioEngine : IAudioEngine
 
     private void Restart(string reason)
     {
-        lock (_gate)
+        // Фоном: остановка/старт WASAPI может ждать события от устройства
+        // долго (а на исчезающем — виснуть), UI-поток блокировать нельзя.
+        _restartPending = true;
+        _ = Task.Run(() =>
         {
-            if (!_running)
+            var startedAt = Stopwatch.GetTimestamp();
+            lock (_gate)
             {
-                return;
+                if (_disposed || !_running)
+                {
+                    return;
+                }
+
+                LogMessage(EngineLogLevel.Info, $"Перезапуск движка ({reason})");
+                Cleanup();
+                StartCore();
             }
 
-            LogMessage(EngineLogLevel.Info, $"Перезапуск движка ({reason})");
-            Cleanup();
-            StartCore();
+            var elapsedMs = (Stopwatch.GetTimestamp() - startedAt) * 1000 / Stopwatch.Frequency;
+            LogMessage(EngineLogLevel.Info, $"Рестарт «{reason}» занял {elapsedMs} мс");
+            StatusChanged?.Invoke(this, EventArgs.Empty);
+        });
+    }
+
+    /// <summary>
+    /// Однократный автоповтор: если старт упал после смены привязки
+    /// (типично «device disconnected» во время переназначений) — пробуем
+    /// ещё раз через2 секунды. Ошибка первичного старта не ретраится.
+    /// </summary>
+    private void ScheduleStartRetry()
+    {
+        if (!_restartPending)
+        {
+            return;
         }
+
+        _restartPending = false; // только один повтор
+        _ = Task.Delay(TimeSpan.FromSeconds(2)).ContinueWith(_ =>
+        {
+            lock (_gate)
+            {
+                if (_disposed || _running)
+                {
+                    return;
+                }
+
+                LogMessage(EngineLogLevel.Info, "Повторный запуск движка после ошибки");
+                StartCore();
+            }
+
+            StatusChanged?.Invoke(this, EventArgs.Empty);
+        });
     }
 
     private string[] CaptureBindings() =>
