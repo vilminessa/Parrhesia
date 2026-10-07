@@ -137,3 +137,29 @@ git checkout dev-agPc     :: РђРіРµРЅС‚ Pc вЂ” С„Р°Р·Р° B1 (СЂРµСЃРµРјРїР»РёРЅРі
   решения владельца (снять требование / перевести dev на PR-flow).
 - **Ветки dev-agNote / dev-agPc** — исчерпаны, к удалению после
   подтверждения владельца.
+
+## Репозиторий и зеркала (2026-10-08) [shared]
+
+- **Первичный remote — GitHub** (`origin = https://github.com/vilminessa/Parrhesia`):
+  все push'и идут только сюда (`git push origin`). Forgejo
+  (`vilmpc:3000`) — локальное зеркало, remote `forgejo` только для чтения;
+  pull-зеркало Forgejo>себя настраивает владелец в веб-интерфейсе Forgejo.
+- **Защита GitHub**: legacy-защита (required status check «dotnet test»)
+  снята — она блокировала прямой push (GH006) при процессе волн. Активен
+  ruleset `minimal-protect` на `dev`/`main`: только запрет удаления веток и
+  force-push, без status checks. Default-ветка — `main` (обновлён до `dev`,
+  fast-forward).
+- **CI** (`.github/workflows/ci.yml`): каждый push в `dev`/`main` и PR —
+  сборка трёх нативных артефактов батами (CLAP-тест-плагин,
+  VST3-тест-плагин, `parr_vst3_shim`) + полный `dotnet test`. Локальные
+  гейты волны (dotnet test + смоук + driver/build.bat) остаются источником
+  правды; CI — подтверждение. Линт полос: `tools/check-workflows.ps1`
+  (запуск через `powershell -ExecutionPolicy Bypass -File ...`).
+- **Дефекты CI, выправленные при интеграции**: `user32.lib` для GUI-функций
+  нативного CLAP-плагина; в workflow не собирались VST3-тест-плагин и шим
+  (тесты не находили `test-plugin-vst3.dll`); двоеточие в `name:` шага
+  ломало YAML (раны умирали с 0 jobs). В bat'никах добавлен vswhere-fallback
+  (нет BuildTools 2022 — например, на GitHub-runner).
+- **Токены**: в репозиторий не попадают; GitHub PAT хранится в Windows
+  Credential Manager. Рекомендуется ротация токенов, выданных в чате.
+- Ветки `dev-agNote` / `dev-agPc` — не удаляются (решение владельца).
