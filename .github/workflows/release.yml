@@ -52,7 +52,7 @@ jobs:
             echo "::error::tag $GITHUB_REF_NAME is not in main; push the commit to main, then move the tag."
             exit 1
           fi
-      - name: Нативные тест-плагины (bat: CLAP + VST3 + шим)
+      - name: "Нативные тест-плагины (bat: CLAP, VST3, шим)"
         shell: pwsh
         run: |
           $bats = @(
