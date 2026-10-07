@@ -9,7 +9,7 @@ namespace Parrhesia.Plugins.Clap;
 /// clap.thread-check). Буферы планарные, аллоцируются в Prepare — в Process
 /// аллокаций нет.
 /// </summary>
-internal sealed unsafe class ClapPlugin : IAudioPlugin
+internal sealed unsafe class ClapPlugin : IAudioPlugin, IPluginEditor
 {
     private readonly ClapModule _module;
     private readonly string _path;
@@ -47,6 +47,11 @@ internal sealed unsafe class ClapPlugin : IAudioPlugin
     private readonly IntPtr _extAudioPorts;
     private readonly IntPtr _extState;
     private readonly IntPtr _extLatency;
+    private readonly IntPtr _extGui;
+
+    // GUI-состояние редактора.
+    private IntPtr _guiApiString;
+    private bool _editorOpen;
 
     // Аудио-буферы (Prepare).
     private int _channels;
@@ -189,6 +194,7 @@ internal sealed unsafe class ClapPlugin : IAudioPlugin
             _extAudioPorts = GetPluginExtension(Clap.ExtAudioPorts);
             _extState = GetPluginExtension(Clap.ExtState);
             _extLatency = GetPluginExtension(Clap.ExtLatency);
+            _extGui = GetPluginExtension(Clap.ExtGui);
 
             _channels = ValidateStereoPorts();
 
@@ -419,6 +425,97 @@ internal sealed unsafe class ClapPlugin : IAudioPlugin
         }
     }
 
+    // ===== IPluginEditor (clap.gui; main-thread контракт) =====
+
+    public bool SupportsEditor => _extGui != IntPtr.Zero;
+
+    public bool IsOpen => _editorOpen;
+
+    private static T GuiFn<T>(IntPtr extension, int offset) =>
+        Marshal.GetDelegateForFunctionPointer<T>(Marshal.ReadIntPtr(extension, offset));
+
+    public bool Open(IntPtr hostWindow)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (_editorOpen)
+        {
+            return true;
+        }
+
+        if (_extGui == IntPtr.Zero || hostWindow == IntPtr.Zero)
+        {
+            return false;
+        }
+
+        if (!GuiFn<ClapDelegates.GuiIsApiSupported>(_extGui, 0)(_plugin, Clap.WindowApiWin32, false))
+        {
+            return false;
+        }
+
+        if (!GuiFn<ClapDelegates.GuiCreate>(_extGui, 16)(_plugin, Clap.WindowApiWin32, false))
+        {
+            return false;
+        }
+
+        // Строка api живёт до Close: плагин может сравнивать указатель в т.ч. позже.
+        _guiApiString = Marshal.StringToCoTaskMemUTF8(Clap.WindowApiWin32);
+        var window = new ClapDelegates.ClapWindowStruct
+        {
+            Api = _guiApiString,
+            Win32 = hostWindow,
+        };
+
+        if (!GuiFn<ClapDelegates.GuiSetParent>(_extGui, 80)(_plugin, ref window))
+        {
+            GuiFn<ClapDelegates.GuiDestroy>(_extGui, 24)(_plugin);
+            Marshal.FreeCoTaskMem(_guiApiString);
+            _guiApiString = IntPtr.Zero;
+            return false;
+        }
+
+        GuiFn<ClapDelegates.GuiShow>(_extGui, 104)(_plugin);
+        _editorOpen = true;
+        return true;
+    }
+
+    public void Close()
+    {
+        if (!_editorOpen)
+        {
+            return;
+        }
+
+        _editorOpen = false;
+        try
+        {
+            GuiFn<ClapDelegates.GuiDestroy>(_extGui, 24)(_plugin);
+        }
+        catch
+        {
+            // GUI-освобождение не должно ломать закрытие.
+        }
+
+        if (_guiApiString != IntPtr.Zero)
+        {
+            Marshal.FreeCoTaskMem(_guiApiString);
+            _guiApiString = IntPtr.Zero;
+        }
+    }
+
+    public (int Width, int Height) PreferredSize
+    {
+        get
+        {
+            if (!_editorOpen || _extGui == IntPtr.Zero)
+            {
+                return (0, 0);
+            }
+
+            GuiFn<ClapDelegates.GuiGetSize>(_extGui, 40)(_plugin, out var width, out var height);
+            return ((int)width, (int)height);
+        }
+    }
+
     public void Dispose()
     {
         if (_disposed)
@@ -429,6 +526,7 @@ internal sealed unsafe class ClapPlugin : IAudioPlugin
         _disposed = true;
         try
         {
+            Close(); // GUI должен уйти до destroy плагина
             if (_processing)
             {
                 _stopProcessing(_plugin);
@@ -674,6 +772,12 @@ internal sealed unsafe class ClapPlugin : IAudioPlugin
 
     private void FreeHost()
     {
+        if (_guiApiString != IntPtr.Zero)
+        {
+            Marshal.FreeCoTaskMem(_guiApiString);
+            _guiApiString = IntPtr.Zero;
+        }
+
         if (_threadCheckPtr != IntPtr.Zero)
         {
             Marshal.FreeHGlobal(_threadCheckPtr);

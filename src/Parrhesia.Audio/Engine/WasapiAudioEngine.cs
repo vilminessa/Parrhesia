@@ -6,6 +6,7 @@ using Parrhesia.Audio.Buffers;
 using Parrhesia.Audio.Devices;
 using Parrhesia.Audio.Processing;
 using Parrhesia.Core.Graph;
+using Parrhesia.Plugins;
 
 namespace Parrhesia.Audio.Engine;
 
@@ -44,6 +45,8 @@ public sealed class WasapiAudioEngine : IAudioEngine
     private int _sampleRate;
     private int _channels;
     private bool _running;
+    private bool _restartPending;
+    private string _startStage = string.Empty;
     private string[] _bindings = [];
     private Timer? _statsTimer;
     private long _lastLoggedUnderflow;
@@ -74,6 +77,9 @@ public sealed class WasapiAudioEngine : IAudioEngine
 
     public void CollectPluginStates() => _slotChains.CollectStates();
 
+    public IAudioPlugin? GetSlotInstance(Guid nodeId, int slotIndex) =>
+        _slotChains.GetSlotInstance(nodeId, slotIndex);
+
     public void Start()
     {
         lock (_gate)
@@ -91,6 +97,8 @@ public sealed class WasapiAudioEngine : IAudioEngine
     {
         lock (_gate)
         {
+            _restartPending = false; // ручная остановка отменяет автоповтор старта
+
             if (!_running)
             {
                 return;
@@ -123,6 +131,7 @@ public sealed class WasapiAudioEngine : IAudioEngine
 
     private void StartCore()
     {
+        _startStage = "инициализация";
         try
         {
             var sink = _graph.Nodes.FirstOrDefault(n => n.Kind == NodeKind.Sink && n.DeviceId is not null);
@@ -138,6 +147,8 @@ public sealed class WasapiAudioEngine : IAudioEngine
                 return;
             }
 
+            _startStage = $"назначение «{sink.DeviceId}»";
+
             WaveFormat engineFormat;
             Action startStreaming;
             MMDevice? sinkDevice = null;
@@ -145,6 +156,7 @@ public sealed class WasapiAudioEngine : IAudioEngine
             if (sinkSpec.Target == DeviceSpecTarget.Virtual)
             {
                 // Виртуальный вывод: граф гонит блоки в драйвер \\.\ParrhesiaFeed.
+                _startStage = "виртуальный вывод (ParrhesiaFeed)";
                 engineFormat = WaveFormat.CreateIeeeFloatWaveFormat(DriverFeed.Rate, DriverFeed.Channels);
                 var feed = new DriverFeed();
                 feed.Open(); // бросает исключение, если драйвер не установлен
@@ -162,6 +174,7 @@ public sealed class WasapiAudioEngine : IAudioEngine
                     return;
                 }
 
+                _startStage = $"вывод «{sinkDevice.FriendlyName}» ({sink.DeviceId})";
                 var player = new WasapiPlayerBuilder()
                     .WithDevice(sinkDevice)
                     .WithSharedMode()
@@ -188,8 +201,10 @@ public sealed class WasapiAudioEngine : IAudioEngine
             // (max-блок100 мс — больше обоих путей вывода: player50 мс, помпа10 мс).
             _slotChains.Prepare(engineFormat.SampleRate, engineFormat.SampleRate / 10, engineFormat.Channels);
 
-            OpenSources(engineFormat, sinkDevice);
+            _startStage = "источники";
+            OpenSources(engineFormat, sinkDevice, sinkSpec.Target == DeviceSpecTarget.Virtual);
 
+            _startStage = "старт вывода";
             startStreaming();
             foreach (var source in _sources)
             {
@@ -212,12 +227,13 @@ public sealed class WasapiAudioEngine : IAudioEngine
         }
         catch (Exception ex)
         {
-            LogMessage(EngineLogLevel.Error, "Ошибка запуска движка: " + ex.Message);
+            LogMessage(EngineLogLevel.Error, $"Ошибка запуска движка (этап: {_startStage}): {ex.Message}");
             Cleanup();
+            ScheduleStartRetry();
         }
     }
 
-    private void OpenSources(WaveFormat engineFormat, MMDevice? sinkDevice)
+    private void OpenSources(WaveFormat engineFormat, MMDevice? sinkDevice, bool sinkIsVirtual)
     {
         foreach (var node in _graph.Nodes)
         {
@@ -246,6 +262,22 @@ public sealed class WasapiAudioEngine : IAudioEngine
                 continue;
             }
 
+            // Петля через виртуальный вывод: при sink=фид наш Out-эндпоинт
+            // кормится ИЗ этого же тракта — захват его замыкает цикл
+            // (микшер → фид → Out → захват → микшер) и разгоняет переполнения.
+            // TODO(М2): определять надёжнее — по InstanceId инстанса, а не по имени.
+            if (sinkIsVirtual &&
+                device.DataFlow == DataFlow.Capture &&
+                device.FriendlyName.Contains("Parrhesia", StringComparison.OrdinalIgnoreCase))
+            {
+                LogMessage(
+                    EngineLogLevel.Warning,
+                    $"Источник «{node.Name}» захватывает собственный виртуальный вывод «{device.FriendlyName}» — это петля; источник пропущен");
+                device.Dispose();
+                continue;
+            }
+
+            _startStage = $"источник «{node.Name}» («{device.FriendlyName}»)";
             var builder = new WasapiRecorderBuilder()
                 .WithDevice(device)
                 .WithEventSync()
@@ -421,17 +453,58 @@ public sealed class WasapiAudioEngine : IAudioEngine
 
     private void Restart(string reason)
     {
-        lock (_gate)
+        // Фоном: остановка/старт WASAPI может ждать события от устройства
+        // долго (а на исчезающем — виснуть), UI-поток блокировать нельзя.
+        _restartPending = true;
+        _ = Task.Run(() =>
         {
-            if (!_running)
+            var startedAt = Stopwatch.GetTimestamp();
+            lock (_gate)
             {
-                return;
+                if (_disposed || !_running)
+                {
+                    return;
+                }
+
+                LogMessage(EngineLogLevel.Info, $"Перезапуск движка ({reason})");
+                Cleanup();
+                StartCore();
             }
 
-            LogMessage(EngineLogLevel.Info, $"Перезапуск движка ({reason})");
-            Cleanup();
-            StartCore();
+            var elapsedMs = (Stopwatch.GetTimestamp() - startedAt) * 1000 / Stopwatch.Frequency;
+            LogMessage(EngineLogLevel.Info, $"Рестарт «{reason}» занял {elapsedMs} мс");
+            StatusChanged?.Invoke(this, EventArgs.Empty);
+        });
+    }
+
+    /// <summary>
+    /// Однократный автоповтор: если старт упал после смены привязки
+    /// (типично «device disconnected» во время переназначений) — пробуем
+    /// ещё раз через2 секунды. Ошибка первичного старта не ретраится.
+    /// </summary>
+    private void ScheduleStartRetry()
+    {
+        if (!_restartPending)
+        {
+            return;
         }
+
+        _restartPending = false; // только один повтор
+        _ = Task.Delay(TimeSpan.FromSeconds(2)).ContinueWith(_ =>
+        {
+            lock (_gate)
+            {
+                if (_disposed || _running)
+                {
+                    return;
+                }
+
+                LogMessage(EngineLogLevel.Info, "Повторный запуск движка после ошибки");
+                StartCore();
+            }
+
+            StatusChanged?.Invoke(this, EventArgs.Empty);
+        });
     }
 
     private string[] CaptureBindings() =>

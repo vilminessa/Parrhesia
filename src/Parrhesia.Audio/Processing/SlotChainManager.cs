@@ -1,6 +1,7 @@
 using Parrhesia.Core.Graph;
 using Parrhesia.Plugins;
 using Parrhesia.Plugins.Clap;
+using Parrhesia.Plugins.Vst3;
 
 namespace Parrhesia.Audio.Processing;
 
@@ -36,9 +37,17 @@ public sealed class SlotChainManager : IDisposable
     {
         _graph = graph ?? throw new ArgumentNullException(nameof(graph));
         _processor = processor ?? throw new ArgumentNullException(nameof(processor));
-        _factory = factory ?? (slot => ClapLoader.Load(slot.Path, slot.PluginId));
+        _factory = factory ?? LoadPluginByFormat;
         _graph.Changed += OnGraphChanged;
     }
+
+    /// <summary>Дефолтная фабрика: формат слота определяет хост (CLAP/VST3).</summary>
+    private static IAudioPlugin LoadPluginByFormat(PluginSlot slot) => slot.Format switch
+    {
+        PluginFormat.Clap => ClapLoader.Load(slot.Path, slot.PluginId),
+        PluginFormat.Vst3 => Vst3Loader.Load(slot.Path, slot.PluginId),
+        _ => throw new PluginLoadException($"Неизвестный формат плагина: {slot.Format}"),
+    };
 
     /// <summary>
     /// Запоминает формат движка и готовит (в т.ч. новые) экземпляры;
@@ -164,8 +173,7 @@ public sealed class SlotChainManager : IDisposable
         }
     }
 
-    /// <summary>
-    /// Снимает state живых плагинов в модель (вызывается перед сохранением
+    /// <summary>Снимает state живых плагинов в модель (вызывается перед сохранением
     /// профиля). Изменения, равные текущим, не поднимают Changed — без
     /// лишних пересчётов и лишних автосейвов.
     /// </summary>
@@ -210,6 +218,23 @@ public sealed class SlotChainManager : IDisposable
                     }
                 }
             }
+        }
+    }
+
+    /// <summary>Живой экземпляр слота (null — слот не загружен). UI-поток, для редактора.</summary>
+    public IAudioPlugin? GetSlotInstance(Guid nodeId, int slotIndex)
+    {
+        lock (_gate)
+        {
+            if (_disposed ||
+                !_states.TryGetValue(nodeId, out var state) ||
+                slotIndex < 0 ||
+                slotIndex >= state.Instances.Count)
+            {
+                return null;
+            }
+
+            return state.Instances[slotIndex];
         }
     }
 

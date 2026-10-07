@@ -13,14 +13,6 @@ PnpLockDown = 1
 [SourceDisksFiles]
 virtualaudiodriver.sys=222
 
-[SignatureAttributes]
-virtualaudiodriver.sys=SignatureAttributes.DRM
-
-[SignatureAttributes.DRM]
-DRMLevel=1300
-
-[SignatureAttributes.PETrust]
-PETrust=true
 
 [Manufacturer]
 %MfgName%=VIRTUALAUDIODRIVER,NT$ARCH$.10.0...22000
