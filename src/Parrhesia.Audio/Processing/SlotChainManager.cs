@@ -173,8 +173,7 @@ public sealed class SlotChainManager : IDisposable
         }
     }
 
-    /// <summary>
-    /// Снимает state живых плагинов в модель (вызывается перед сохранением
+    /// <summary>Снимает state живых плагинов в модель (вызывается перед сохранением
     /// профиля). Изменения, равные текущим, не поднимают Changed — без
     /// лишних пересчётов и лишних автосейвов.
     /// </summary>
@@ -219,6 +218,23 @@ public sealed class SlotChainManager : IDisposable
                     }
                 }
             }
+        }
+    }
+
+    /// <summary>Живой экземпляр слота (null — слот не загружен). UI-поток, для редактора.</summary>
+    public IAudioPlugin? GetSlotInstance(Guid nodeId, int slotIndex)
+    {
+        lock (_gate)
+        {
+            if (_disposed ||
+                !_states.TryGetValue(nodeId, out var state) ||
+                slotIndex < 0 ||
+                slotIndex >= state.Instances.Count)
+            {
+                return null;
+            }
+
+            return state.Instances[slotIndex];
         }
     }
 

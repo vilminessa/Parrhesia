@@ -12,7 +12,10 @@
 
 #include <public.sdk/source/vst/vstsinglecomponenteffect.h>
 #include <public.sdk/source/main/pluginfactory.h>
+#include <public.sdk/source/common/pluginview.h>
 #include <pluginterfaces/vst/ivstaudioprocessor.h>
+#include <pluginterfaces/gui/iplugview.h>
+#include <windows.h>
 #include <pluginterfaces/base/ibstream.h>
 
 #include <cstring>
@@ -32,6 +35,85 @@ static const FUID kLatencyControllerUid (0x50725201, 0x4C415443, 0x434F4D52, 0x0
 
 namespace
 {
+
+//------------------------------------------------------------------------
+// Окно редактора: дочернее Win32-окно в хост-контейнере (HWND).
+//------------------------------------------------------------------------
+class TestEditorView : public CPluginView
+{
+public:
+    TestEditorView ()
+    : CPluginView (&ViewRect (0, 0, kEditorWidth, kEditorHeight))
+    {
+    }
+
+    static constexpr int kEditorWidth = 400;
+    static constexpr int kEditorHeight = 180;
+
+    tresult PLUGIN_API isPlatformTypeSupported (FIDString type) SMTG_OVERRIDE
+    {
+        return (type != nullptr && strcmp (type, kPlatformTypeHWND) == 0) ? kResultOk : kResultFalse;
+    }
+
+    tresult PLUGIN_API attached (void* parent, FIDString type) SMTG_OVERRIDE
+    {
+        if (parent == nullptr || type == nullptr || strcmp (type, kPlatformTypeHWND) != 0)
+        {
+            return kInvalidArgument;
+        }
+
+        const int width = rect.right - rect.left;
+        const int height = rect.bottom - rect.top;
+        HWND child = CreateWindowExW (
+            0, L"STATIC", L"Parrhesia Test Plugin Editor",
+            WS_CHILD | WS_BORDER,
+            0, 0, width, height,
+            static_cast<HWND> (parent), nullptr, GetModuleHandleW (nullptr), nullptr);
+        if (child == nullptr)
+        {
+            return kResultFalse;
+        }
+
+        systemWindow = child; // защищённое поле CPluginView
+        return kResultTrue;
+    }
+
+    tresult PLUGIN_API removed () SMTG_OVERRIDE
+    {
+        if (systemWindow != nullptr)
+        {
+            DestroyWindow (static_cast<HWND> (systemWindow));
+            systemWindow = nullptr;
+        }
+
+        return kResultTrue;
+    }
+
+    tresult PLUGIN_API getSize (ViewRect* size) SMTG_OVERRIDE
+    {
+        if (size == nullptr)
+        {
+            return kInvalidArgument;
+        }
+
+        *size = rect;
+        return kResultTrue;
+    }
+
+    tresult PLUGIN_API onSize (ViewRect* newSize) SMTG_OVERRIDE
+    {
+        if (newSize == nullptr || systemWindow == nullptr)
+        {
+            return kResultFalse;
+        }
+
+        setRect (*newSize);
+        MoveWindow (
+            static_cast<HWND> (systemWindow), 0, 0,
+            newSize->right - newSize->left, newSize->bottom - newSize->top, TRUE);
+        return kResultTrue;
+    }
+};
 
 //------------------------------------------------------------------------
 // Общий предок: стерео-шина, state (u32 magic), обработка через processSample().
@@ -58,6 +140,14 @@ public:
     tresult PLUGIN_API getControllerClassId (TUID /*classId*/) SMTG_OVERRIDE
     {
         return kResultFalse;
+    }
+
+    // Редактор: (IEditController::createView) — встроенное Win32-окно.
+    IPlugView* PLUGIN_API createView (FIDString name) SMTG_OVERRIDE
+    {
+        return (name != nullptr && strcmp (name, ViewType::kEditor) == 0)
+            ? new TestEditorView ()
+            : nullptr;
     }
 
     tresult PLUGIN_API process (ProcessData& data) SMTG_OVERRIDE

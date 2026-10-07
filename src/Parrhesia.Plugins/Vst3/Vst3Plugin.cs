@@ -7,9 +7,10 @@ namespace Parrhesia.Plugins.Vst3;
 /// Контракт потоков — как у <see cref="IAudioPlugin"/>: Prepare/GetState/
 /// SetState/Dispose — вне аудио-потока; Process — только аудио-поток.
 /// </summary>
-internal sealed class Vst3Plugin : IAudioPlugin
+internal sealed class Vst3Plugin : IAudioPlugin, IPluginEditor
 {
     private IntPtr _instance;
+    private bool _editorOpen;
 
     private Vst3Plugin(string classId)
     {
@@ -20,6 +21,11 @@ internal sealed class Vst3Plugin : IAudioPlugin
 
     /// <summary>Число ошибок Process (симметрия ClapPlugin).</summary>
     public long ProcessErrors { get; private set; }
+
+    /// <summary>VST3 не имеет «расширения отсутствия» — возможность выясняется в Open.</summary>
+    public bool SupportsEditor => _instance != IntPtr.Zero;
+
+    public bool IsOpen => _editorOpen;
 
     public int LatencySamples =>
         _instance == IntPtr.Zero ? 0 : Math.Max(0, Vst3Native.GetLatency(_instance));
@@ -119,7 +125,63 @@ internal sealed class Vst3Plugin : IAudioPlugin
             return;
         }
 
+        Close(); // view не должен пережить плагина (шим закрывает и в Destroy — двойной Close идемпотентен)
         Vst3Native.DestroyInstance(_instance);
         _instance = IntPtr.Zero;
+    }
+
+    // ===== IPluginEditor (IPlugView; main-thread) =====
+
+    public bool Open(IntPtr hostWindow)
+    {
+        if (_instance == IntPtr.Zero || hostWindow == IntPtr.Zero)
+        {
+            return false;
+        }
+
+        if (_editorOpen)
+        {
+            return true;
+        }
+
+        if (Vst3Native.EditorOpen(_instance, hostWindow) != 0)
+        {
+            return false;
+        }
+
+        _editorOpen = true;
+        return true;
+    }
+
+    public void Close()
+    {
+        if (!_editorOpen)
+        {
+            return;
+        }
+
+        _editorOpen = false;
+        if (_instance != IntPtr.Zero)
+        {
+            Vst3Native.EditorClose(_instance);
+        }
+    }
+
+    public (int Width, int Height) PreferredSize
+    {
+        get
+        {
+            if (!_editorOpen || _instance == IntPtr.Zero)
+            {
+                return (0, 0);
+            }
+
+            if (Vst3Native.EditorGetSize(_instance, out var width, out var height) != 0)
+            {
+                return (0, 0);
+            }
+
+            return (width, height);
+        }
     }
 }

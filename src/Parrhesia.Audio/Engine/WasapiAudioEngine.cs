@@ -6,6 +6,7 @@ using Parrhesia.Audio.Buffers;
 using Parrhesia.Audio.Devices;
 using Parrhesia.Audio.Processing;
 using Parrhesia.Core.Graph;
+using Parrhesia.Plugins;
 
 namespace Parrhesia.Audio.Engine;
 
@@ -73,6 +74,9 @@ public sealed class WasapiAudioEngine : IAudioEngine
     public float GetPeak(Guid nodeId) => _processor.GetPeak(nodeId);
 
     public void CollectPluginStates() => _slotChains.CollectStates();
+
+    public IAudioPlugin? GetSlotInstance(Guid nodeId, int slotIndex) =>
+        _slotChains.GetSlotInstance(nodeId, slotIndex);
 
     public void Start()
     {

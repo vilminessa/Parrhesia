@@ -1,4 +1,5 @@
 using Parrhesia.Core.Graph;
+using Parrhesia.Plugins;
 
 namespace Parrhesia.Audio.Engine;
 
@@ -30,4 +31,7 @@ public interface IAudioEngine : IDisposable
     /// перед сохранением профиля, чтобы параметры пережили перезапуск.
     /// </summary>
     void CollectPluginStates();
+
+    /// <summary>Живой экземпляр слота шины (null — не загружен). UI-поток: редактор.</summary>
+    IAudioPlugin? GetSlotInstance(Guid nodeId, int slotIndex);
 }

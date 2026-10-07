@@ -38,6 +38,9 @@ internal static unsafe class Vst3Native
         LatencyPtr = Marshal.GetDelegateForFunctionPointer<LatencyFn>(Export(module, "Pv3GetLatency"));
         GetStatePtr = Marshal.GetDelegateForFunctionPointer<GetStateFn>(Export(module, "Pv3GetState"));
         SetStatePtr = Marshal.GetDelegateForFunctionPointer<SetStateFn>(Export(module, "Pv3SetState"));
+        EditorOpenPtr = Marshal.GetDelegateForFunctionPointer<EditorOpenFn>(Export(module, "Pv3EditorOpen"));
+        EditorGetSizePtr = Marshal.GetDelegateForFunctionPointer<EditorGetSizeFn>(Export(module, "Pv3EditorGetSize"));
+        EditorClosePtr = Marshal.GetDelegateForFunctionPointer<EditorCloseFn>(Export(module, "Pv3EditorClose"));
     }
 
     private static IntPtr Export(IntPtr module, string name) =>
@@ -74,6 +77,19 @@ internal static unsafe class Vst3Native
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     internal delegate int SetStateFn(IntPtr instance, IntPtr buffer, int length);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    internal delegate int EditorOpenFn(IntPtr instance, IntPtr parentHwnd);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    internal delegate int EditorGetSizeFn(IntPtr instance, out int width, out int height);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    internal delegate void EditorCloseFn(IntPtr instance);
+
+    private static readonly EditorOpenFn EditorOpenPtr;
+    private static readonly EditorGetSizeFn EditorGetSizePtr;
+    private static readonly EditorCloseFn EditorClosePtr;
 
     // ===== Обёртки с маршировкой =====
 
@@ -149,4 +165,12 @@ internal static unsafe class Vst3Native
             handle.Free();
         }
     }
+
+    public static int EditorOpen(IntPtr instance, IntPtr parentHwnd) =>
+        EditorOpenPtr(instance, parentHwnd);
+
+    public static int EditorGetSize(IntPtr instance, out int width, out int height) =>
+        EditorGetSizePtr(instance, out width, out height);
+
+    public static void EditorClose(IntPtr instance) => EditorClosePtr(instance);
 }

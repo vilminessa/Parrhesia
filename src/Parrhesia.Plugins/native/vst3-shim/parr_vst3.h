@@ -46,4 +46,15 @@ extern "C"
 
     /// 0 = успех.
     PV3 int __cdecl Pv3SetState(void* instance, const unsigned char* buffer, int length);
+
+    // ===== Редактор (IPlugView → дочерний HWND; main-thread) =====
+
+    /// Создаёт view и встраивает в parentHwnd.0 = успех (идемпотентно).
+    PV3 int __cdecl Pv3EditorOpen(void* instance, void* parentHwnd);
+
+    /// Размер view в пикселях.0 = успех.
+    PV3 int __cdecl Pv3EditorGetSize(void* instance, int* width, int* height);
+
+    /// removed() + release() (идемпотентно).
+    PV3 void __cdecl Pv3EditorClose(void* instance);
 }

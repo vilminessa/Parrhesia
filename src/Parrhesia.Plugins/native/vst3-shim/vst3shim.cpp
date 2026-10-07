@@ -16,7 +16,9 @@
 #include <public.sdk/source/common/memorystream.h>
 #include <pluginterfaces/vst/ivstaudioprocessor.h>
 #include <pluginterfaces/vst/ivstcomponent.h>
+#include <pluginterfaces/vst/ivsteditcontroller.h>
 #include <pluginterfaces/vst/ivstprocesscontext.h>
+#include <pluginterfaces/gui/iplugview.h>
 
 #include <algorithm>
 #include <cstring>
@@ -57,6 +59,7 @@ struct Instance
     Vst::IAudioProcessor* processor = nullptr; // ручной refcount (queryInterface)
     Vst::ProcessContext context {};
     Vst::HostProcessData processData;
+    IPlugView* view = nullptr; // редактор (owned; close до destroy)
     double sampleRate = 48000.0;
     int maxBlock = 0;
     int channels = 0;
@@ -201,6 +204,9 @@ void __cdecl Pv3Destroy (void* raw)
     {
         return;
     }
+
+    // Редактор закрывается первым (view не должен пережить плагина).
+    Pv3EditorClose (instance);
 
     if (instance->prepared)
     {
@@ -440,6 +446,90 @@ int __cdecl Pv3SetState (void* raw, const unsigned char* buffer, int length)
     }
 
     return 0;
+}
+
+int __cdecl Pv3EditorOpen (void* raw, void* parentHwnd)
+{
+    auto* instance = static_cast<Instance*> (raw);
+    if (instance == nullptr || parentHwnd == nullptr)
+    {
+        return Fail ("Pv3EditorOpen: аргумент null");
+    }
+
+    if (instance->view != nullptr)
+    {
+        return 0; // идемпотентно
+    }
+
+    LastErrorRef ().clear ();
+
+    void* controllerObject = nullptr;
+    if (instance->component->queryInterface (Vst::IEditController::iid, &controllerObject) != kResultOk ||
+        controllerObject == nullptr)
+    {
+        return Fail ("Компонент не предоставляет IEditController");
+    }
+
+    auto* controller = static_cast<Vst::IEditController*> (controllerObject);
+    IPlugView* view = controller->createView (Vst::ViewType::kEditor);
+    controller->release (); // view от контроллера не зависит (ref=1 у вызывающего)
+    if (view == nullptr)
+    {
+        return Fail ("IEditController::createView вернул nullptr");
+    }
+
+    if (view->isPlatformTypeSupported (kPlatformTypeHWND) != kResultOk)
+    {
+        view->release ();
+        return Fail ("Редактор не поддерживает HWND");
+    }
+
+    const tresult attachedResult = view->attached (parentHwnd, kPlatformTypeHWND);
+    if (attachedResult != kResultOk && attachedResult != kResultTrue)
+    {
+        view->release ();
+        return Fail ("IPlugView::attached не прошёл");
+    }
+
+    instance->view = view;
+    return 0;
+}
+
+int __cdecl Pv3EditorGetSize (void* raw, int* width, int* height)
+{
+    auto* instance = static_cast<Instance*> (raw);
+    if (instance == nullptr || width == nullptr || height == nullptr)
+    {
+        return Fail ("Pv3EditorGetSize: аргумент null");
+    }
+
+    if (instance->view == nullptr)
+    {
+        return Fail ("Pv3EditorGetSize: редактор не открыт");
+    }
+
+    ViewRect rect {};
+    if (instance->view->getSize (&rect) != kResultOk)
+    {
+        return Fail ("IPlugView::getSize не прошёл");
+    }
+
+    *width = rect.right - rect.left;
+    *height = rect.bottom - rect.top;
+    return 0;
+}
+
+void __cdecl Pv3EditorClose (void* raw)
+{
+    auto* instance = static_cast<Instance*> (raw);
+    if (instance == nullptr || instance->view == nullptr)
+    {
+        return;
+    }
+
+    instance->view->removed ();
+    instance->view->release ();
+    instance->view = nullptr;
 }
 
 } // extern "C"
