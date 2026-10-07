@@ -48,6 +48,14 @@
                    FontSize="12"
                    Foreground="{DynamicResource Brush.TextFaint}"
                    VerticalAlignment="Center" />
+        <!-- Версия сборки: 0.0.0-dev → «unreleased», из тега - релизная (см. Directory.Build.props) -->
+        <TextBlock x:Name="VersionText"
+                   Margin="12,1,0,0"
+                   FontSize="12"
+                   FontWeight="SemiBold"
+                   Foreground="{DynamicResource Brush.TextFaint}"
+                   VerticalAlignment="Center"
+                   Text="unreleased" />
       </StackPanel>
 
       <StackPanel Grid.Column="1" Orientation="Horizontal">

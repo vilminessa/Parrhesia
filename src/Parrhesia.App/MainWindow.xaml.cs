@@ -1,4 +1,5 @@
-﻿using System.Windows;
+﻿using System.Reflection;
+using System.Windows;
 
 namespace Parrhesia.App;
 
@@ -7,7 +8,25 @@ public partial class MainWindow
     public MainWindow()
     {
         InitializeComponent();
+        VersionText.Text = DisplayVersion();
         SelectStartupTab();
+    }
+
+    /// <summary>
+    /// Версия из AssemblyInformationalVersion: CI вшивает тег (напр. 1.2.7.41),
+    /// локальная/dev-сборка берёт 0.0.0-dev из Directory.Build.props — показываем
+    /// «unreleased» (модель Synfronia: версия живёт в теге, а не в коммитах).
+    /// </summary>
+    private static string DisplayVersion()
+    {
+        var informational = Assembly.GetExecutingAssembly()
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
+
+        // SDK добавляет к версии +<git sha> — до плюса сама версия.
+        var version = informational?.Split('+')[0];
+        return string.IsNullOrEmpty(version) || version.StartsWith("0.0.0", StringComparison.Ordinal)
+            ? "unreleased"
+            : version;
     }
 
     /// <summary>
