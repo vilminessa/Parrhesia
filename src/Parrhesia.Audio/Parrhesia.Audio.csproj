@@ -9,6 +9,10 @@
     <PackageReference Include="NAudio.Wasapi" Version="3.1.0" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="Parrhesia.Audio.Tests" />
+  </ItemGroup>
+
   <PropertyGroup>
     <TargetFramework>net10.0-windows</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>

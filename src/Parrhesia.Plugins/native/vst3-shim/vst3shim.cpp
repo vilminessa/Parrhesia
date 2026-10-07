@@ -23,6 +23,7 @@
 #include <algorithm>
 #include <cstring>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <vector>
@@ -33,6 +34,10 @@ namespace
 {
 
 thread_local std::string gLastError;
+
+// Гонка Module::create одного модуля с разных потоков (параллельные
+// enumerate/create в тестах/сканере) — сериализуем все module-пути шима.
+std::mutex gModuleLock;
 
 std::string& LastErrorRef ()
 {
@@ -101,6 +106,8 @@ int __cdecl Pv3Enumerate (const char* modulePath, Pv3EnumCallback callback, void
         return Fail ("Pv3Enumerate: аргумент null");
     }
 
+    std::lock_guard<std::mutex> guard (gModuleLock);
+
     std::string error;
     auto module = VST3::Hosting::Module::create (modulePath, error);
     if (!module)
@@ -136,6 +143,8 @@ void* __cdecl Pv3Create (const char* modulePath, const char* classId)
     {
         return FailPtr ("Pv3Create: аргумент null");
     }
+
+    std::lock_guard<std::mutex> guard (gModuleLock);
 
     LastErrorRef ().clear ();
 

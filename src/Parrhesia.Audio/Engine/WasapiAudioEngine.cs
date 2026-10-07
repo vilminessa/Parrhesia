@@ -59,6 +59,9 @@ public sealed class WasapiAudioEngine : IAudioEngine
     private string? _monitorName;
     private bool _sinkIsVirtual;
 
+    // Кэш «своих» эндпоинтов по InstanceId (М2; лениво, на время движка).
+    private HashSet<string>? _ownVirtualEndpoints;
+
     private bool _restartPending;
     private string _startStage = string.Empty;
     private string[] _bindings = [];
@@ -364,6 +367,30 @@ public sealed class WasapiAudioEngine : IAudioEngine
             ? "Parrhesia Out (виртуальный)"
             : sink.Device?.FriendlyName ?? sink.Plan.Name;
 
+    /// <summary>
+    /// Принадлежит ли capture-эндпоинт нашему виртуальному драйверу.
+    /// Основной путь — InstanceId: PnP-дети root-devnode'а с Service=
+    /// VirtualAudioDriver (устойчиво к переименованию и локализации);
+    /// фолбэк — имя, если PnP-дерево недоступно.
+    /// </summary>
+    private bool IsOwnVirtualEndpoint(MMDevice device)
+    {
+        try
+        {
+            _ownVirtualEndpoints ??= VirtualEndpointResolver.ResolveVirtualEndpointIds();
+            if (_ownVirtualEndpoints.Count > 0)
+            {
+                return _ownVirtualEndpoints.Contains(device.ID);
+            }
+        }
+        catch
+        {
+            // PnP недоступно — имя-фолбэк ниже.
+        }
+
+        return device.FriendlyName.Contains("Parrhesia", StringComparison.OrdinalIgnoreCase);
+    }
+
     private void OpenSources(WaveFormat engineFormat, IReadOnlySet<string> sinkRenderIds)
     {
         foreach (var node in _graph.Nodes)
@@ -396,10 +423,11 @@ public sealed class WasapiAudioEngine : IAudioEngine
             // Петля через виртуальный вывод: при sink=фид наш Out-эндпоинт
             // кормится ИЗ этого же тракта — захват его замыкает цикл
             // (микшер → фид → Out → захват → микшер) и разгоняет переполнения.
-            // TODO(М2): определять надёжнее — по InstanceId инстанса, а не по имени.
+            // Определение — по InstanceId (PnP-дети нашего root-devnode), имя —
+            // только фолбэк при недоступности дерева (М2).
             if (_sinkIsVirtual &&
                 device.DataFlow == DataFlow.Capture &&
-                device.FriendlyName.Contains("Parrhesia", StringComparison.OrdinalIgnoreCase))
+                IsOwnVirtualEndpoint(device))
             {
                 LogMessage(
                     EngineLogLevel.Warning,
