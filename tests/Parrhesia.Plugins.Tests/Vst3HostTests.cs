@@ -81,11 +81,12 @@ public class Vst3HostTests
 
         var state = plugin.GetState();
         Assert.NotNull(state);
-        Assert.Equal(4, state.Length);
 
-        var expected = new byte[] { 9, 8, 7, 6 };
-        plugin.SetState(expected);
-        Assert.Equal(expected, plugin.GetState());
+        // Схема шима: [u32 compLen][magic + normalized gain][u32 ctrlLen].
+        Assert.True(state.Length >= 12, $"подозрительный размер state: {state.Length}");
+
+        plugin.SetState(state);
+        Assert.Equal(state, plugin.GetState());
     }
 
     [Fact]

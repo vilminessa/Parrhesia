@@ -515,20 +515,44 @@ int __cdecl Pv3GetState (void* raw, unsigned char* buffer, int capacity)
         return Fail ("Pv3GetState: экземпляр null");
     }
 
-    MemoryStream stream;
-    if (instance->component->getState (&stream) != kResultOk)
+    // Формат: [u32 compLen][component state][u32 ctrlLen][controller state].
+    // Контроллер обязателен по VST3-спецификации (параметры живут в нём).
+    MemoryStream componentStream;
+    if (instance->component->getState (&componentStream) != kResultOk)
     {
         return Fail ("IComponent::getState не прошёл");
     }
 
-    const auto size = static_cast<int> (stream.getSize ());
-    if (buffer == nullptr || capacity < size)
+    MemoryStream controllerStream;
+    uint32_t controllerLength = 0;
+    IPtr<Vst::IEditController> controller =
+        instance->provider ? instance->provider->getControllerPtr () : nullptr;
+    if (controller && controller->getState (&controllerStream) == kResultOk)
     {
-        return size; // вызывающий узнаёт нужный размер
+        controllerLength = static_cast<uint32_t> (controllerStream.getSize ());
     }
 
-    memcpy (buffer, stream.getData (), static_cast<size_t> (size));
-    return size;
+    const auto componentLength = static_cast<uint32_t> (componentStream.getSize ());
+    const auto total = static_cast<int> (
+        sizeof (uint32_t) + componentLength + sizeof (uint32_t) + controllerLength);
+    if (buffer == nullptr || capacity < total)
+    {
+        return total; // вызывающий узнаёт нужный размер
+    }
+
+    unsigned char* cursor = buffer;
+    memcpy (cursor, &componentLength, sizeof (componentLength));
+    cursor += sizeof (componentLength);
+    memcpy (cursor, componentStream.getData (), componentLength);
+    cursor += componentLength;
+    memcpy (cursor, &controllerLength, sizeof (controllerLength));
+    cursor += sizeof (controllerLength);
+    if (controllerLength > 0)
+    {
+        memcpy (cursor, controllerStream.getData (), controllerLength);
+    }
+
+    return total;
 }
 
 int __cdecl Pv3SetState (void* raw, const unsigned char* buffer, int length)
@@ -539,10 +563,62 @@ int __cdecl Pv3SetState (void* raw, const unsigned char* buffer, int length)
         return Fail ("Pv3SetState: аргумент null");
     }
 
-    MemoryStream stream (const_cast<unsigned char*> (buffer), length);
-    if (instance->component->setState (&stream) != kResultOk)
+    if (length < static_cast<int> (sizeof (uint32_t)))
+    {
+        return Fail ("Pv3SetState: буфер короче заголовка");
+    }
+
+    uint32_t componentLength = 0;
+    memcpy (&componentLength, buffer, sizeof (componentLength));
+
+    // Legacy (до нашей схемы): первые4 байта — не длина, а содержимое
+    // component state — отдаём компоненту весь буфер, контроллера нет.
+    const bool legacy =
+        componentLength > static_cast<uint32_t> (length) ||
+        sizeof (uint32_t) + static_cast<size_t> (componentLength) + sizeof (uint32_t) >
+            static_cast<size_t> (length);
+
+    const unsigned char* componentData = nullptr;
+    const unsigned char* controllerData = nullptr;
+    uint32_t controllerLength = 0;
+    if (legacy)
+    {
+        componentData = buffer;
+        componentLength = static_cast<uint32_t> (length);
+    }
+    else
+    {
+        componentData = buffer + sizeof (uint32_t);
+        const auto* cursor = componentData + componentLength;
+        memcpy (&controllerLength, cursor, sizeof (controllerLength));
+        cursor += sizeof (controllerLength);
+        if (sizeof (uint32_t) + static_cast<size_t> (componentLength) + sizeof (uint32_t) +
+                controllerLength >
+            static_cast<size_t> (length))
+        {
+            return Fail ("Pv3SetState: ctrlLen выходит за буфер");
+        }
+
+        controllerData = controllerLength > 0 ? cursor : nullptr;
+    }
+
+    MemoryStream componentStream (
+        const_cast<unsigned char*> (componentData), static_cast<int32> (componentLength));
+    if (instance->component->setState (&componentStream) != kResultOk)
     {
         return Fail ("IComponent::setState не прошёл");
+    }
+
+    if (controllerData != nullptr)
+    {
+        IPtr<Vst::IEditController> controller =
+            instance->provider ? instance->provider->getControllerPtr () : nullptr;
+        if (controller)
+        {
+            MemoryStream controllerStream (
+                const_cast<unsigned char*> (controllerData), static_cast<int32> (controllerLength));
+            controller->setState (&controllerStream); // ошибка контроллера не фатальна
+        }
     }
 
     return 0;

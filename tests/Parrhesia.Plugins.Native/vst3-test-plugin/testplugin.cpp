@@ -229,6 +229,33 @@ public:
         }
 
         m_state = value;
+
+        // Формат v2: [u32 magic][float normalized gain]. Legacy4-байта
+        // (без gain) принимаем — gain остаётся текущим.
+        float normalized = 0.0f;
+        if (state->read (&normalized, sizeof (normalized), &read) == kResultOk &&
+            read == static_cast<int32> (sizeof (normalized)))
+        {
+            if (!(normalized >= 0.0f))
+            {
+                normalized = 0.0f;
+            }
+            else if (normalized > 1.0f)
+            {
+                normalized = 1.0f;
+            }
+
+            if (Parameter* parameter = parameters.getParameter (kGainParamId))
+            {
+                parameter->setNormalized (normalized);
+                m_gain = static_cast<float> (parameter->getNormalized () * 4.0);
+            }
+            else
+            {
+                m_gain = normalized * 4.0f;
+            }
+        }
+
         return kResultOk;
     }
 
@@ -240,8 +267,23 @@ public:
         }
 
         int32 written = 0;
-        return state->write (&m_state, sizeof (m_state), &written) == kResultOk &&
-                       written == static_cast<int32> (sizeof (m_state))
+        if (state->write (&m_state, sizeof (m_state), &written) != kResultOk ||
+            written != static_cast<int32> (sizeof (m_state)))
+        {
+            return kResultFalse;
+        }
+
+        // Источник правды для состояния — параметр (нормированный), не m_gain:
+        // setParamNormalized без process() тоже должен пережить reload.
+        ParamValue normalized = static_cast<ParamValue> (m_gain) / 4.0;
+        if (Parameter* parameter = parameters.getParameter (kGainParamId))
+        {
+            normalized = parameter->getNormalized ();
+        }
+
+        float value = static_cast<float> (normalized);
+        return state->write (&value, sizeof (value), &written) == kResultOk &&
+                       written == static_cast<int32> (sizeof (value))
                    ? kResultOk
                    : kResultFalse;
     }

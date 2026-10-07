@@ -84,4 +84,20 @@ public class Vst3ParameterTests
         Assert.Equal(0.75f, buffer[0]);
         Assert.Equal(0.375, parameters.GetParameterValue(GainParamId));
     }
+
+    [Fact]
+    public void State_RoundTrip_KeepsParameterValue()
+    {
+        using var source = LoadByName("Parrhesia Test Gain");
+        var sourceParams = Assert.IsAssignableFrom<IPluginParameters>(source);
+        sourceParams.SetParameterValue(GainParamId, 0.75);
+
+        var state = source.GetState();
+        Assert.NotNull(state);
+
+        using var target = LoadByName("Parrhesia Test Gain");
+        target.SetState(state);
+        var targetParams = Assert.IsAssignableFrom<IPluginParameters>(target);
+        Assert.Equal(0.75, targetParams.GetParameterValue(GainParamId));
+    }
 }
