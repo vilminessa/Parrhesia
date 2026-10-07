@@ -12,6 +12,7 @@
 #include <public.sdk/source/vst/hosting/plugprovider.h>
 #include <public.sdk/source/vst/hosting/hostclasses.h>
 #include <public.sdk/source/vst/hosting/processdata.h>
+#include <public.sdk/source/vst/hosting/parameterchanges.h>
 #include <public.sdk/source/vst/utility/uid.h>
 #include <public.sdk/source/common/memorystream.h>
 #include <pluginterfaces/vst/ivstaudioprocessor.h>
@@ -21,6 +22,7 @@
 #include <pluginterfaces/gui/iplugview.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cstring>
 #include <memory>
 #include <mutex>
@@ -69,6 +71,20 @@ struct Instance
     int maxBlock = 0;
     int channels = 0;
     bool prepared = false;
+
+    // Параметры: Set (main-thread) копит в SPSC-кольцо, Process (audio)
+    // доставляет очередью в inputParameterChanges и чистит её.
+    struct PendingParam
+    {
+        Vst::ParamID id;
+        Vst::ParamValue value;
+    };
+
+    static constexpr int kPendingCapacity = 64;
+    PendingParam pending[kPendingCapacity] {};
+    std::atomic<int> pendingHead {0};
+    std::atomic<int> pendingTail {0};
+    Vst::ParameterChanges inChanges {32}; // host → component на ближайший process
 };
 
 Vst::IAudioProcessor* QueryProcessor (Vst::IComponent* component)
@@ -81,6 +97,55 @@ Vst::IAudioProcessor* QueryProcessor (Vst::IComponent* component)
 
     return static_cast<Vst::IAudioProcessor*> (object);
 }
+
+// Контроллер параметров: сначала у провайдера (двухкомпонентные плагины),
+// иначе сам компонент (single-component — как у редактора), с освобождением
+// взятого через queryInterface reference.
+struct ControllerGuard
+{
+    Vst::IEditController* controller = nullptr;
+    bool owned = false;
+
+    explicit ControllerGuard (Instance* instance)
+    {
+        if (instance == nullptr)
+        {
+            return;
+        }
+
+        if (instance->provider)
+        {
+            IPtr<Vst::IEditController> fromProvider = instance->provider->getControllerPtr ();
+            if (fromProvider)
+            {
+                controller = fromProvider.get (); // провайдер владеет — указатель жив
+                return;
+            }
+        }
+
+        void* object = nullptr;
+        if (instance->component &&
+            instance->component->queryInterface (Vst::IEditController::iid, &object) == kResultOk &&
+            object != nullptr)
+        {
+            controller = static_cast<Vst::IEditController*> (object);
+            owned = true;
+        }
+    }
+
+    ~ControllerGuard ()
+    {
+        if (owned && controller != nullptr)
+        {
+            controller->release ();
+        }
+    }
+
+    ControllerGuard (const ControllerGuard&) = delete;
+    ControllerGuard& operator= (const ControllerGuard&) = delete;
+
+    explicit operator bool () const { return controller != nullptr; }
+};
 
 int Fail (const char* message)
 {
@@ -386,6 +451,32 @@ int __cdecl Pv3Process (void* raw, float* interleaved, int frames)
 
     instance->processData.numSamples = frames;
 
+    // Доставка параметров (host → component): свежий батч из SPSC-очереди.
+    instance->processData.inputParameterChanges = nullptr;
+    {
+        const int head = instance->pendingHead.load (std::memory_order_relaxed);
+        const int tail = instance->pendingTail.load (std::memory_order_acquire);
+        if (tail > head)
+        {
+            instance->inChanges.clearQueue ();
+            for (int i = head; i < tail; i++)
+            {
+                const auto& change = instance->pending[i % Instance::kPendingCapacity];
+                int32 queueIndex = -1;
+                Vst::IParamValueQueue* queue =
+                    instance->inChanges.addParameterData (change.id, queueIndex);
+                if (queue != nullptr)
+                {
+                    int32 pointIndex = -1;
+                    queue->addPoint (0, change.value, pointIndex);
+                }
+            }
+
+            instance->processData.inputParameterChanges = &instance->inChanges;
+            instance->pendingHead.store (tail, std::memory_order_release);
+        }
+    }
+
     const tresult result = instance->processor->process (instance->processData);
     if (result != kResultOk && result != kResultTrue)
     {
@@ -452,6 +543,127 @@ int __cdecl Pv3SetState (void* raw, const unsigned char* buffer, int length)
     if (instance->component->setState (&stream) != kResultOk)
     {
         return Fail ("IComponent::setState не прошёл");
+    }
+
+    return 0;
+}
+
+int __cdecl Pv3ParamCount (void* raw)
+{
+    auto* instance = static_cast<Instance*> (raw);
+    if (instance == nullptr)
+    {
+        return Fail ("Pv3ParamCount: экземпляр null");
+    }
+
+    LastErrorRef ().clear ();
+    ControllerGuard controller (instance);
+    if (!controller)
+    {
+        return Fail ("Pv3ParamCount: у плагина нет IEditController");
+    }
+
+    return controller.controller->getParameterCount ();
+}
+
+int __cdecl Pv3GetParamInfo (void* raw, int index, Pv3ParamInfo* out)
+{
+    auto* instance = static_cast<Instance*> (raw);
+    if (instance == nullptr || out == nullptr)
+    {
+        return Fail ("Pv3GetParamInfo: аргумент null");
+    }
+
+    LastErrorRef ().clear ();
+    ControllerGuard controller (instance);
+    if (!controller)
+    {
+        return Fail ("Pv3GetParamInfo: у плагина нет IEditController");
+    }
+
+    Vst::ParameterInfo info {};
+    if (controller.controller->getParameterInfo (index, info) != kResultOk)
+    {
+        return Fail ("Pv3ParamInfo: индекс вне диапазона");
+    }
+
+    out->id = static_cast<int> (info.id);
+    out->stepCount = info.stepCount;
+    out->flags = info.flags;
+    out->defaultValue = info.defaultNormalizedValue;
+    out->minValue = 0.0;
+    out->maxValue = 1.0;
+
+    // String128 (UTF-16) → ASCII; нелатиница — '?' (интерфейс C, буфер128).
+    int32 i = 0;
+    for (; i < 127; i++)
+    {
+        const char16 c = info.title[i];
+        if (c == 0)
+        {
+            break;
+        }
+
+        out->name[i] = (c < 128) ? static_cast<char> (c) : '?';
+    }
+
+    out->name[i] = '\0';
+    return 0;
+}
+
+int __cdecl Pv3ParamValueGet (void* raw, int id, double* outNormalized)
+{
+    auto* instance = static_cast<Instance*> (raw);
+    if (instance == nullptr || outNormalized == nullptr)
+    {
+        return Fail ("Pv3ParamValueGet: аргумент null");
+    }
+
+    LastErrorRef ().clear ();
+    ControllerGuard controller (instance);
+    if (!controller)
+    {
+        return Fail ("Pv3ParamValueGet: у плагина нет IEditController");
+    }
+
+    *outNormalized = controller.controller->getParamNormalized (static_cast<Vst::ParamID> (id));
+    return 0;
+}
+
+int __cdecl Pv3ParamValueSet (void* raw, int id, double normalized)
+{
+    auto* instance = static_cast<Instance*> (raw);
+    if (instance == nullptr)
+    {
+        return Fail ("Pv3ParamValueSet: экземпляр null");
+    }
+
+    LastErrorRef ().clear ();
+    ControllerGuard controller (instance);
+    if (!controller)
+    {
+        return Fail ("Pv3ParamValueSet: у плагина нет IEditController");
+    }
+
+    if (!(normalized >= 0.0)) // NaN →0
+    {
+        normalized = 0.0;
+    }
+    else if (normalized > 1.0)
+    {
+        normalized = 1.0;
+    }
+
+    const Vst::ParamID pid = static_cast<Vst::ParamID> (id);
+    controller.controller->setParamNormalized (pid, normalized); // мгновенно для чтения
+
+    // SPSC-очередь в аудио-поток (main-thread — единственный производитель).
+    const int head = instance->pendingHead.load (std::memory_order_acquire);
+    const int tail = instance->pendingTail.load (std::memory_order_relaxed);
+    if (tail - head < Instance::kPendingCapacity)
+    {
+        instance->pending[tail % Instance::kPendingCapacity] = {pid, normalized};
+        instance->pendingTail.store (tail + 1, std::memory_order_release);
     }
 
     return 0;

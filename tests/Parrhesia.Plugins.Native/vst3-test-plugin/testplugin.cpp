@@ -14,6 +14,7 @@
 #include <public.sdk/source/main/pluginfactory.h>
 #include <public.sdk/source/common/pluginview.h>
 #include <pluginterfaces/vst/ivstaudioprocessor.h>
+#include <pluginterfaces/vst/ivstparameterchanges.h>
 #include <pluginterfaces/gui/iplugview.h>
 #include <windows.h>
 #include <pluginterfaces/base/ibstream.h>
@@ -32,6 +33,9 @@ static const FUID kLatencyControllerUid (0x50725201, 0x4C415443, 0x434F4D52, 0x0
 #define STATE_MAGIC 0x50525248u /* "PRRH" */
 #define LATENCY_FRAMES 128
 #define MAX_CHANNELS 2
+
+// Id gain-параметра (зарегистрирован только в TestGain).
+static const Steinberg::Vst::ParamID kGainParamId = 1;
 
 namespace
 {
@@ -152,6 +156,28 @@ public:
 
     tresult PLUGIN_API process (ProcessData& data) SMTG_OVERRIDE
     {
+        // Параметры от хоста (inputParameterChanges): gain нормирован0..1 →0..4.
+        if (data.inputParameterChanges != nullptr)
+        {
+            const int32 queueCount = data.inputParameterChanges->getParameterCount ();
+            for (int32 qi = 0; qi < queueCount; qi++)
+            {
+                IParamValueQueue* queue = data.inputParameterChanges->getParameterData (qi);
+                if (queue == nullptr || queue->getPointCount () == 0)
+                {
+                    continue;
+                }
+
+                int32 offset = 0;
+                ParamValue value = 0.0;
+                if (queue->getPoint (queue->getPointCount () - 1, offset, value) == kResultOk &&
+                    queue->getParameterId () == kGainParamId)
+                {
+                    m_gain = static_cast<float> (value * 4.0);
+                }
+            }
+        }
+
         if (data.numInputs < 1 || data.numOutputs < 1 ||
             data.inputs[0].numChannels < 1 || data.outputs[0].numChannels < 1 ||
             data.symbolicSampleSize != kSample32)
@@ -225,6 +251,7 @@ protected:
     virtual void processAudio (float** in, float** out, int32 channels, int32 frames) = 0;
 
     uint32 m_state = STATE_MAGIC;
+    float m_gain = 2.0f; // нормированный default0.5 ×4 =2 (прежнее «×2»)
 };
 
 //------------------------------------------------------------------------
@@ -243,6 +270,14 @@ public:
         return static_cast<IEditController*> (new TestGain);
     }
 
+    tresult PLUGIN_API initialize (FUnknown* context) SMTG_OVERRIDE
+    {
+        const tresult result = TestEffect::initialize (context);
+        parameters.addParameter (STR16 ("Gain"), nullptr, 0, 0.5,
+                                 ParameterInfo::kCanAutomate, kGainParamId);
+        return result;
+    }
+
 protected:
     void processAudio (float** in, float** out, int32 channels, int32 frames) override
     {
@@ -252,7 +287,7 @@ protected:
             float* target = out[ch];
             for (int32 i = 0; i < frames; i++)
             {
-                target[i] = source[i] * 2.0f;
+                target[i] = source[i] * m_gain;
             }
         }
     }
