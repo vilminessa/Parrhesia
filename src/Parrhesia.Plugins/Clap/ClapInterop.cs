@@ -13,8 +13,11 @@ internal static class Clap
     public const string ExtAudioPorts = "clap.audio-ports";
     public const string ExtState = "clap.state";
     public const string ExtLatency = "clap.latency";
+    public const string ExtGui = "clap.gui";
     public const string ExtThreadCheck = "clap.thread-check";
     public const string ExtHostLatency = "clap.latency";
+
+    public const string WindowApiWin32 = "win32";
 
     public const uint AudioPortIsMain = 1 << 0;
 
@@ -286,6 +289,47 @@ internal static class ClapDelegates
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     [return: MarshalAs(UnmanagedType.I1)]
     public delegate bool OutputEventsTryPush(IntPtr list, IntPtr evt);
+
+    // ===== GUI (clap.gui) =====
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct ClapWindowStruct
+    {
+        public IntPtr Api;
+        public IntPtr Win32;
+    }
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    public delegate bool GuiIsApiSupported(
+        IntPtr plugin,
+        [MarshalAs(UnmanagedType.LPStr)] string api,
+        [MarshalAs(UnmanagedType.I1)] bool isFloating);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    public delegate bool GuiCreate(
+        IntPtr plugin,
+        [MarshalAs(UnmanagedType.LPStr)] string api,
+        [MarshalAs(UnmanagedType.I1)] bool isFloating);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    public delegate void GuiDestroy(IntPtr plugin);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    public delegate void GuiGetSize(IntPtr plugin, out uint width, out uint height);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    public delegate bool GuiSetParent(IntPtr plugin, ref ClapWindowStruct window);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    public delegate bool GuiShow(IntPtr plugin);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    public delegate bool GuiHide(IntPtr plugin);
 }
 
 /// <summary>Разбор UTF8-строк из непамяти.</summary>

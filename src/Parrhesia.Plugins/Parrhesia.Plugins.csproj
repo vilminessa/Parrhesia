@@ -11,4 +11,11 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
+  <ItemGroup>
+    <!-- Нативный VST3-шим: собрать native/vst3-shim/build-vst3-shim.bat -->
+    <None Include="native\vst3-shim\out\parr_vst3_shim.dll"
+          Link="parr_vst3_shim.dll"
+          CopyToOutputDirectory="PreserveNewest"
+          Condition="Exists('native\vst3-shim\out\parr_vst3_shim.dll')" />
+  </ItemGroup>
 </Project>

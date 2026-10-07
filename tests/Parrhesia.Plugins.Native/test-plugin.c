@@ -11,6 +11,7 @@
 
 #define _CRT_SECURE_NO_WARNINGS
 #include <clap/clap.h>
+#include <windows.h>
 #include <string.h>
 #include <stdlib.h>
 
@@ -23,6 +24,11 @@ typedef struct {
     float d1[DELAY_FRAMES];
     unsigned pos;
     uint32_t magic;
+    /* GUI (embed-окно в родителе из host) */
+    HWND guiParent;
+    HWND guiChild;
+    UINT guiW;
+    UINT guiH;
 } test_state_t;
 
 /* ===== vtable-колбэки (общие для обоих плагинов; различия — по is_latency) ===== */
@@ -181,9 +187,149 @@ static const clap_plugin_state_t EXT_STATE = {
 
 /* ===== get_extension ===== */
 
+/* ===== GUI: embed-окно (WIN32, non-floating) ===== */
+
+static bool CLAP_ABI gui_is_api_supported(const clap_plugin_t *plugin, const char *api, bool is_floating) {
+    (void)plugin;
+    return !is_floating && strcmp(api, CLAP_WINDOW_API_WIN32) == 0;
+}
+
+static bool CLAP_ABI gui_get_preferred_api(const clap_plugin_t *plugin, const char **api, bool *is_floating) {
+    (void)plugin;
+    *api = CLAP_WINDOW_API_WIN32;
+    *is_floating = false;
+    return true;
+}
+
+static bool CLAP_ABI gui_create(const clap_plugin_t *plugin, const char *api, bool is_floating) {
+    if (is_floating || strcmp(api, CLAP_WINDOW_API_WIN32) != 0) {
+        return false;
+    }
+    test_state_t *s = state_of(plugin);
+    s->guiW = 400;
+    s->guiH = 180;
+    return true;
+}
+
+static void CLAP_ABI gui_destroy(const clap_plugin_t *plugin) {
+    test_state_t *s = state_of(plugin);
+    if (s->guiChild) {
+        DestroyWindow(s->guiChild);
+        s->guiChild = NULL;
+    }
+    s->guiParent = NULL;
+}
+
+static bool CLAP_ABI gui_set_scale(const clap_plugin_t *plugin, double scale) {
+    (void)plugin;
+    (void)scale;
+    return true;
+}
+
+static bool CLAP_ABI gui_get_size(const clap_plugin_t *plugin, uint32_t *width, uint32_t *height) {
+    test_state_t *s = state_of(plugin);
+    *width = s->guiW;
+    *height = s->guiH;
+    return true;
+}
+
+static bool CLAP_ABI gui_can_resize(const clap_plugin_t *plugin) {
+    (void)plugin;
+    return false;
+}
+
+static bool CLAP_ABI gui_get_resize_hints(const clap_plugin_t *plugin, clap_gui_resize_hints_t *hints) {
+    (void)plugin;
+    memset(hints, 0, sizeof(*hints));
+    return false;
+}
+
+static bool CLAP_ABI gui_adjust_size(const clap_plugin_t *plugin, uint32_t *width, uint32_t *height) {
+    test_state_t *s = state_of(plugin);
+    if (width && *width == 0) { *width = s->guiW; }
+    if (height && *height == 0) { *height = s->guiH; }
+    return true;
+}
+
+static bool CLAP_ABI gui_set_size(const clap_plugin_t *plugin, uint32_t width, uint32_t height) {
+    (void)plugin;
+    (void)width;
+    (void)height;
+    return false; /* окно фиксированного размера */
+}
+
+static bool CLAP_ABI gui_set_parent(const clap_plugin_t *plugin, const clap_window_t *window) {
+    test_state_t *s = state_of(plugin);
+    if (!window || strcmp(window->api, CLAP_WINDOW_API_WIN32) != 0 || window->win32 == NULL) {
+        return false;
+    }
+    s->guiParent = (HWND)window->win32;
+    if (s->guiChild) {
+        DestroyWindow(s->guiChild);
+        s->guiChild = NULL;
+    }
+    s->guiChild = CreateWindowExW(
+        0, L"STATIC", L"Parrhesia Test Plugin GUI",
+        WS_CHILD | WS_BORDER,
+        0, 0, (int)s->guiW, (int)s->guiH,
+        s->guiParent, (HMENU)1, GetModuleHandleW(NULL), NULL);
+    return s->guiChild != NULL;
+}
+
+static bool CLAP_ABI gui_set_transient(const clap_plugin_t *plugin, const clap_window_t *window) {
+    (void)plugin;
+    (void)window;
+    return false; /* только embed */
+}
+
+static void CLAP_ABI gui_suggest_title(const clap_plugin_t *plugin, const char *title) {
+    (void)plugin;
+    (void)title;
+}
+
+static bool CLAP_ABI gui_show(const clap_plugin_t *plugin) {
+    test_state_t *s = state_of(plugin);
+    if (!s->guiChild) {
+        return false;
+    }
+    ShowWindow(s->guiChild, SW_SHOW);
+    UpdateWindow(s->guiChild);
+    return true;
+}
+
+static bool CLAP_ABI gui_hide(const clap_plugin_t *plugin) {
+    test_state_t *s = state_of(plugin);
+    if (s->guiChild) {
+        ShowWindow(s->guiChild, SW_HIDE);
+    }
+    return true;
+}
+
+static const clap_plugin_gui_t EXT_GUI = {
+    .is_api_supported = gui_is_api_supported,
+    .get_preferred_api = gui_get_preferred_api,
+    .create = gui_create,
+    .destroy = gui_destroy,
+    .set_scale = gui_set_scale,
+    .get_size = gui_get_size,
+    .can_resize = gui_can_resize,
+    .get_resize_hints = gui_get_resize_hints,
+    .adjust_size = gui_adjust_size,
+    .set_size = gui_set_size,
+    .set_parent = gui_set_parent,
+    .set_transient = gui_set_transient,
+    .suggest_title = gui_suggest_title,
+    .show = gui_show,
+    .hide = gui_hide,
+};
+
 static const void *CLAP_ABI plug_get_extension(const clap_plugin_t *plugin, const char *id) {
     if (strcmp(id, CLAP_EXT_AUDIO_PORTS) == 0) {
         return &EXT_AUDIO_PORTS;
+    }
+
+    if (strcmp(id, CLAP_EXT_GUI) == 0) {
+        return &EXT_GUI;
     }
 
     if (strcmp(id, CLAP_EXT_STATE) == 0) {

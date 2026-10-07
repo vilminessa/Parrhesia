@@ -1,4 +1,5 @@
 using Parrhesia.Core.Graph;
+using Parrhesia.Plugins;
 
 namespace Parrhesia.Audio.Engine;
 
@@ -44,4 +45,7 @@ public interface IAudioEngine : IDisposable
     /// mix реального выхода → 48k). Смена при работающем движке перезапускает тракт.
     /// </summary>
     void SetSampleRate(int? configuredRate);
+
+    /// <summary>Живой экземпляр слота шины (null — не загружен). UI-поток: редактор.</summary>
+    IAudioPlugin? GetSlotInstance(Guid nodeId, int slotIndex);
 }

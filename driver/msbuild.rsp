@@ -42,3 +42,4 @@
 /p:MatchingSdkPresent=true
 /p:LatestTargetVersion=Windows10
 /p:SkipPackageVerification=true
+/p:Inf2CatUseLocalTime=true

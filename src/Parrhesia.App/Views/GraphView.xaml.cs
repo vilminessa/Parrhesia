@@ -843,7 +843,12 @@ public partial class GraphView : UserControl
         _syncingMode = true;
         try
         {
-            var mastering = MasteringModeButton.IsChecked == true;
+            // Режим определяется по НАЖАТОЙ кнопке (sender), а не по галке
+            // соседней: при клике по «Однонодовый» из состояния «Мастеринг»
+            // соседняя галка ещё не снята — чтение по ней давало обратный
+            // режим и гасило только что нажатую кнопку.
+            var mastering = ReferenceEquals(sender, MasteringModeButton);
+
             // Режим ровно один: снимаем галку с противоположного (без рекурсии).
             if (mastering)
             {
@@ -1040,6 +1045,7 @@ public partial class GraphView : UserControl
             row.Children.Add(BuildSlotButton("↑", "Выше", index > 0, (_, _) => MoveSlot(node, index, -1)));
             row.Children.Add(BuildSlotButton("↓", "Ниже", index < node.Slots.Count - 1, (_, _) => MoveSlot(node, index, +1)));
             row.Children.Add(BuildSlotButton("✕", "Убрать", true, (_, _) => RemoveSlot(node, index)));
+            row.Children.Add(BuildSlotButton("✎", "Редактор плагина", true, (_, _) => OpenSlotEditor(node, index)));
 
             SlotsHost.Children.Add(row);
         }
@@ -1096,6 +1102,51 @@ public partial class GraphView : UserControl
         }
 
         _graph.RemoveSlot(node.Id, index);
+    }
+
+    private void OpenSlotEditor(AudioNode node, int index)
+    {
+        if (_syncing || index < 0 || index >= node.Slots.Count)
+        {
+            return;
+        }
+
+        var slot = node.Slots[index];
+        var instance = AppServices.Engine.GetSlotInstance(node.Id, index);
+        if (instance is not Parrhesia.Plugins.IPluginEditor editor)
+        {
+            MessageBox.Show(
+                Window.GetWindow(this),
+                instance is null
+                    ? "Слот не загружен — проверьте путь к плагину."
+                    : "Этот формат пока не поддерживает редактор.",
+                "Редактор",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
+            return;
+        }
+
+        if (!editor.SupportsEditor)
+        {
+            MessageBox.Show(
+                Window.GetWindow(this),
+                "У плагина нет редактора.",
+                "Редактор",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
+            return;
+        }
+
+        if (editor.IsOpen)
+        {
+            return; // редактор этого слота уже открыт
+        }
+
+        var window = new PluginEditorWindow(editor, slot.Name)
+        {
+            Owner = Window.GetWindow(this),
+        };
+        window.Show();
     }
 
     private void OnAddSlotClick(object sender, RoutedEventArgs e)
