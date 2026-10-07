@@ -24,3 +24,4 @@ launchSettings.json
 
 # Артефакты сборки нативного тест-плагина
 tests/Parrhesia.Plugins.Native/out/
+tests/Parrhesia.Plugins.Native/vst3-test-plugin/out/
