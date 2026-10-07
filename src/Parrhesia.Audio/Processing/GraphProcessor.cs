@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using Parrhesia.Core.Graph;
+using Parrhesia.Plugins;
 
 namespace Parrhesia.Audio.Processing;
 
@@ -22,6 +23,12 @@ public sealed class GraphProcessor : IDisposable
     private readonly Dictionary<Guid, float[]> _buffers = [];
     private readonly ConcurrentDictionary<Guid, float> _peaks = [];
 
+    /// <summary>Активные цепочки плагинов по узлам (см. SetSlotChain).</summary>
+    private readonly ConcurrentDictionary<Guid, SlotChainHolder> _slotChains = [];
+
+    /// <summary>Компенсирующие задержки на ребрах (параллельные ветки).</summary>
+    private readonly ConcurrentDictionary<(Guid From, Guid To), EdgeDelayLine> _edgeDelays = [];
+
     private GraphSnapshot _snapshot;
 
     public GraphProcessor(AudioGraph graph, int channels = 2)
@@ -31,7 +38,7 @@ public sealed class GraphProcessor : IDisposable
 
         _graph = graph;
         _channels = channels;
-        _snapshot = GraphSnapshot.Build(graph);
+        _snapshot = GraphSnapshot.Build(graph, ChainLatency);
         _graph.Changed += OnGraphChanged;
     }
 
@@ -50,12 +57,105 @@ public sealed class GraphProcessor : IDisposable
 
     public void ClearInputs() => _inputs.Clear();
 
+    /// <summary>
+    /// Атомарно публикует цепочку плагинов узла: RT-поток читает свежий
+    /// массив со следующего блока. Старые экземпляры освобождаются с
+    /// отложенным грейсом (500 мс) — RT мог ещё держать ссылку.
+    /// </summary>
+    public void SetSlotChain(Guid nodeId, IAudioPlugin?[] chain)
+    {
+        ArgumentNullException.ThrowIfNull(chain);
+        var holder = _slotChains.GetOrAdd(nodeId, static _ => new SlotChainHolder());
+        var previous = holder.Plugins;
+        if (ReferenceEquals(previous, chain))
+        {
+            return;
+        }
+
+        holder.Plugins = chain;
+        if (previous.Length > 0)
+        {
+            _ = Task.Delay(500).ContinueWith(
+                _ =>
+                {
+                    foreach (var plugin in previous)
+                    {
+                        try
+                        {
+                            plugin?.Dispose();
+                        }
+                        catch
+                        {
+                            // Ошибка деструктора плагина не должна валить процесс.
+                        }
+                    }
+                },
+                CancellationToken.None,
+                TaskContinuationOptions.None,
+                TaskScheduler.Default);
+        }
+    }
+
+    /// <summary>Суммарная латентность активной цепочки узла (в кадрах).</summary>
+    public int ChainLatency(Guid nodeId)
+    {
+        if (!_slotChains.TryGetValue(nodeId, out var holder))
+        {
+            return 0;
+        }
+
+        var chain = holder.Plugins;
+        var total = 0;
+        foreach (var plugin in chain)
+        {
+            if (plugin is not null)
+            {
+                total += plugin.LatencySamples;
+            }
+        }
+
+        return total;
+    }
+
     /// <summary>Пик (linear, |x|) сигнала узла после гейна за последний блок.</summary>
     public float GetPeak(Guid nodeId) =>
         _peaks.TryGetValue(nodeId, out var peak) ? peak : 0f;
 
     /// <summary>Пересобрать снимок вручную (обычно делает подписка на Changed).</summary>
-    public void Invalidate() => Volatile.Write(ref _snapshot, GraphSnapshot.Build(_graph));
+    public void Invalidate()
+    {
+        var snapshot = GraphSnapshot.Build(_graph, ChainLatency);
+        PrepareEdgeDelays(snapshot);
+        Volatile.Write(ref _snapshot, snapshot);
+    }
+
+    /// <summary>
+    /// Предаллокация линий задержек ВНЕ RT-потока (graph.Changed приходит с UI)
+    /// и чистка устаревших рёбер.
+    /// </summary>
+    private void PrepareEdgeDelays(GraphSnapshot snapshot)
+    {
+        var active = new HashSet<(Guid, Guid)>();
+        foreach (var edge in snapshot.Edges)
+        {
+            active.Add((edge.From, edge.To));
+            if (edge.CompensationDelay <= 0)
+            {
+                continue;
+            }
+
+            var line = _edgeDelays.GetOrAdd((edge.From, edge.To), static _ => new EdgeDelayLine());
+            line.Ensure(edge.CompensationDelay * _channels, 8192);
+        }
+
+        foreach (var key in _edgeDelays.Keys)
+        {
+            if (!active.Contains(key))
+            {
+                _edgeDelays.TryRemove(key, out _);
+            }
+        }
+    }
 
     /// <summary>
     /// Смикшировать один блок для назначения <paramref name="sinkId"/>
@@ -176,6 +276,12 @@ public sealed class GraphProcessor : IDisposable
             }
 
             var source = from.AsSpan(0, samples);
+            if (edge.CompensationDelay > 0)
+            {
+                // Параллельные ветки: выравнивание по самой латентной (см. ComputeLatencies).
+                source = DelayEdge(edge, source);
+            }
+
             if (edge.Map.Bits == StraightStereo.Bits)
             {
                 // Стерео-диагональ по прямой — данные лежат в буфере сплошняком.
@@ -195,7 +301,28 @@ public sealed class GraphProcessor : IDisposable
             }
         }
 
+        // Цепочка слотов-вставок шины: суммарный сигнал → плагины → стадия узла.
+        // Обход узла (Bypassed) пропускает и цепочку — полная прозрачность.
+        if (!node.Bypassed && _slotChains.TryGetValue(node.Id, out var chainHolder))
+        {
+            var chain = chainHolder.Plugins;
+            if (chain.Length > 0)
+            {
+                var frames = samples / _channels;
+                foreach (var plugin in chain)
+                {
+                    plugin?.Process(span, frames);
+                }
+            }
+        }
+
         ApplyNodeStage(node, span);
+    }
+
+    private Span<float> DelayEdge(EdgeInfo edge, ReadOnlySpan<float> source)
+    {
+        var line = _edgeDelays.GetOrAdd((edge.From, edge.To), static _ => new EdgeDelayLine());
+        return line.Process(source, edge.CompensationDelay * _channels);
     }
 
     private static void Accumulate(Span<float> target, ReadOnlySpan<float> source, float gain)
@@ -309,6 +436,70 @@ public sealed class GraphProcessor : IDisposable
             }
 
             _buffers[node.Id] = new float[size];
+        }
+    }
+
+    /// <summary>Атомарно-свопаемая цепочка плагинов узла (RT читает ссылку).</summary>
+    private sealed class SlotChainHolder
+    {
+        public volatile IAudioPlugin?[] Plugins = [];
+    }
+
+    /// <summary>
+    /// Компенсирующая задержка ребра: классическое кольцо длиной D сэмплов —
+    /// выход[i] = вход[i − D] (стартовые D сэмплов — нули, «истории ещё нет»).
+    /// Буферы аллоцируются в Ensure (вне RT); scratch — для копии с задержкой.
+    /// </summary>
+    private sealed class EdgeDelayLine
+    {
+        private float[] _delay = [];
+        private float[] _scratch = [];
+        private int _position;
+
+        public void Ensure(int delaySamples, int minScratch)
+        {
+            if (delaySamples > 0 && _delay.Length != delaySamples)
+            {
+                _delay = new float[delaySamples];
+                _position = 0;
+            }
+
+            if (_scratch.Length < minScratch)
+            {
+                _scratch = new float[minScratch];
+            }
+        }
+
+        public Span<float> Process(ReadOnlySpan<float> source, int delaySamples)
+        {
+            if (delaySamples <= 0)
+            {
+                return _scratch.AsSpan(0, source.Length); // не зовётся: вызывающий фильтрует
+            }
+
+            if (_delay.Length != delaySamples || _scratch.Length < source.Length)
+            {
+                // Фолбэк: линия не готова (ребро появилось без Invalidate) —
+                // аллокация в RT только в аномалии.
+                Ensure(delaySamples, source.Length);
+            }
+
+            var buffer = _delay;
+            var capacity = buffer.Length;
+            var position = _position;
+            for (var i = 0; i < source.Length; i++)
+            {
+                _scratch[i] = buffer[position];
+                buffer[position] = source[i];
+                position++;
+                if (position == capacity)
+                {
+                    position = 0;
+                }
+            }
+
+            _position = position;
+            return _scratch.AsSpan(0, source.Length);
         }
     }
 }

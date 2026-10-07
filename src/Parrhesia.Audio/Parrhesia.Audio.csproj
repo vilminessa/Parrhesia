@@ -2,6 +2,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Parrhesia.Core\Parrhesia.Core.csproj" />
+    <ProjectReference Include="..\Parrhesia.Plugins\Parrhesia.Plugins.csproj" />
   </ItemGroup>
 
   <ItemGroup>

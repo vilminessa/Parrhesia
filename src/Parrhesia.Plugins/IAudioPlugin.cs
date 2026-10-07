@@ -13,7 +13,7 @@ public interface IAudioPlugin : IDisposable
     /// <summary>Отображаемое имя плагина.</summary>
     string Name { get; }
 
-    /// <summary>Задержка, которую плагин вносит (в сэмплах; для компенсации).</summary>
+    /// <summary>Задержка, которую плагин вносит (в кадрах — для компенсации в графе).</summary>
     int LatencySamples { get; }
 
     /// <summary>

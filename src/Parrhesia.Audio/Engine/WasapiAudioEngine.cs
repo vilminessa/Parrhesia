@@ -28,6 +28,7 @@ public sealed class WasapiAudioEngine : IAudioEngine
 
     private readonly AudioGraph _graph;
     private readonly GraphProcessor _processor;
+    private readonly SlotChainManager _slotChains;
     private readonly IDeviceService _deviceService;
     private readonly MMDeviceEnumerator _enumerator = new();
     private readonly object _gate = new();
@@ -55,6 +56,7 @@ public sealed class WasapiAudioEngine : IAudioEngine
         _graph = graph ?? throw new ArgumentNullException(nameof(graph));
         _deviceService = deviceService ?? throw new ArgumentNullException(nameof(deviceService));
         _processor = new GraphProcessor(graph);
+        _slotChains = new SlotChainManager(graph, _processor);
 
         _graph.Changed += OnGraphChanged;
         _deviceService.DevicesChanged += OnDevicesChanged;
@@ -112,6 +114,7 @@ public sealed class WasapiAudioEngine : IAudioEngine
             _deviceService.DevicesChanged -= OnDevicesChanged;
             Cleanup();
             _processor.Dispose();
+            _slotChains.Dispose();
             _enumerator.Dispose();
         }
     }
@@ -178,6 +181,10 @@ public sealed class WasapiAudioEngine : IAudioEngine
             _sinkId = sink.Id;
             _sampleRate = engineFormat.SampleRate;
             _channels = engineFormat.Channels;
+
+            // Цепочки слотов: загрузка/подготовка плагинов под формат движка
+            // (max-блок100 мс — больше обоих путей вывода: player50 мс, помпа10 мс).
+            _slotChains.Prepare(engineFormat.SampleRate, engineFormat.SampleRate / 10, engineFormat.Channels);
 
             OpenSources(engineFormat, sinkDevice);
 

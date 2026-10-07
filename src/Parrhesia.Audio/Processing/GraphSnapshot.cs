@@ -22,7 +22,7 @@ internal sealed class GraphSnapshot
 
     public EdgeInfo[] Edges { get; }
 
-    public static GraphSnapshot Build(AudioGraph graph)
+    public static GraphSnapshot Build(AudioGraph graph, Func<Guid, int>? chainLatency = null)
     {
         var nodes = graph.Nodes
             .Select(n => new NodeInfo(
@@ -31,14 +31,54 @@ internal sealed class GraphSnapshot
                 n.Gain,
                 graph.IsEffectivelyMuted(n),
                 n.Bypassed,
-                n.ChannelCount))
+                n.ChannelCount,
+                ChainLatency: Math.Max(0, chainLatency?.Invoke(n.Id) ?? 0)))
             .ToArray();
         var edges = graph.Routes
             .Select(BuildEdge)
             .Where(e => e.Assignments.Length > 0)
             .ToArray();
 
-        return new GraphSnapshot(TopologicalOrder(nodes, edges), edges);
+        var ordered = TopologicalOrder(nodes, edges);
+        return new GraphSnapshot(ordered, ComputeLatencies(ordered, edges));
+    }
+
+    /// <summary>
+    /// Топологический проход латентностей: In(узел) = max Out(входящих источников)
+    /// по активным рёбрам, Out = In + ChainLatency. Ребро получает компенсирующую
+    /// задержку In(to) − Out(from) — параллельные ветки выравниваются по самой
+    /// «медленной» (в духе DAW-компенсации вставок).
+    /// </summary>
+    private static EdgeInfo[] ComputeLatencies(NodeInfo[] ordered, EdgeInfo[] edges)
+    {
+        var outLatency = new Dictionary<Guid, int>(ordered.Length);
+        var inLatency = new Dictionary<Guid, int>(ordered.Length);
+
+        foreach (var node in ordered)
+        {
+            var incomingMax = 0;
+            foreach (var edge in edges)
+            {
+                if (edge.To != node.Id || !edge.Enabled)
+                {
+                    continue;
+                }
+
+                var sourceOut = outLatency.GetValueOrDefault(edge.From);
+                if (sourceOut > incomingMax)
+                {
+                    incomingMax = sourceOut;
+                }
+            }
+
+            inLatency[node.Id] = incomingMax;
+            outLatency[node.Id] = incomingMax + node.ChainLatency;
+        }
+
+        return edges.Select(e => e with
+        {
+            CompensationDelay = Math.Max(0, inLatency.GetValueOrDefault(e.To) - outLatency.GetValueOrDefault(e.From)),
+        }).ToArray();
     }
 
     /// <summary>
@@ -129,7 +169,9 @@ internal sealed record NodeInfo(
     float Gain,
     bool Muted,
     bool Bypassed,
-    int ChannelCount);
+    int ChannelCount,
+    int ChainLatency = 0,
+    int InLatency = 0);
 
 /// <summary>Пара каналов маршрута с масштабом (1/n для N→1-суммирования).</summary>
 internal sealed record EdgeAssignment(int From, int To, float Scale);
@@ -140,4 +182,5 @@ internal sealed record EdgeInfo(
     float Gain,
     bool Enabled,
     ChannelMap Map,
-    EdgeAssignment[] Assignments);
+    EdgeAssignment[] Assignments,
+    int CompensationDelay = 0);

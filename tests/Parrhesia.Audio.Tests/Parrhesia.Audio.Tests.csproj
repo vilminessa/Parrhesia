@@ -20,6 +20,15 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Parrhesia.Audio\Parrhesia.Audio.csproj" />
+    <ProjectReference Include="..\..\src\Parrhesia.Plugins\Parrhesia.Plugins.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Нативный CLAP-тест-плагин: собрать tests\Parrhesia.Plugins.Native\build-test-plugin.bat -->
+    <None Include="..\Parrhesia.Plugins.Native\out\test-plugin.dll"
+          Link="test-plugin.dll"
+          CopyToOutputDirectory="PreserveNewest"
+          Condition="Exists('..\Parrhesia.Plugins.Native\out\test-plugin.dll')" />
   </ItemGroup>
 
 </Project>
