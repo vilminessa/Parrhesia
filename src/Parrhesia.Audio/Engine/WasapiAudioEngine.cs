@@ -42,6 +42,8 @@ public sealed class WasapiAudioEngine : IAudioEngine
     private int _channels;
     private bool _running;
     private string[] _bindings = [];
+    private Timer? _statsTimer;
+    private long _lastLoggedUnderflow;
     private bool _disposed;
 
     public WasapiAudioEngine(AudioGraph graph, IDeviceService deviceService)
@@ -156,11 +158,15 @@ public sealed class WasapiAudioEngine : IAudioEngine
             _player.Play();
             foreach (var source in _sources)
             {
+                source.StartTimestamp = Stopwatch.GetTimestamp();
+                source.FirstDataLogged = false;
                 source.Recorder.StartRecording();
             }
 
             _running = true;
             _bindings = CaptureBindings();
+            _lastLoggedUnderflow = 0;
+            _statsTimer = new Timer(_ => LogStatsIfChanged(), null, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5));
             LogMessage(
                 EngineLogLevel.Info,
                 $"Движок запущен: {_sampleRate} Гц, выход «{_sinkName}», источников {_sources.Count}");
@@ -228,11 +234,25 @@ public sealed class WasapiAudioEngine : IAudioEngine
             recorder.DataAvailable += (data, flags, _, _) => OnCaptureData(binding, data, flags);
             _processor.SetInput(node.Id, binding.Ring);
             _sources.Add(binding);
+
+            LogMessage(
+                EngineLogLevel.Info,
+                $"Источник «{node.Name}»: {recorder.WaveFormat.SampleRate} Гц, {recorder.WaveFormat.Channels} к " +
+                $"({(spec.Loopback ? "loopback" : "захват")}, {node.DeviceId})");
         }
     }
 
     private void OnCaptureData(SourceBinding binding, ReadOnlySpan<byte> data, AudioClientBufferFlags flags)
     {
+        if (!binding.FirstDataLogged)
+        {
+            binding.FirstDataLogged = true;
+            var delayMs = (Stopwatch.GetTimestamp() - binding.StartTimestamp) * 1000.0 / Stopwatch.Frequency;
+            LogMessage(
+                EngineLogLevel.Info,
+                $"«{binding.Name}»: первые данные через {delayMs:0} мс");
+        }
+
         if (flags.HasFlag(AudioClientBufferFlags.Silent))
         {
             var samples = data.Length / sizeof(float);
@@ -277,6 +297,8 @@ public sealed class WasapiAudioEngine : IAudioEngine
         }
 
         _sources.Clear();
+        _statsTimer?.Dispose();
+        _statsTimer = null;
         _player?.Dispose();
         _player = null;
         _sinkDevice?.Dispose();
@@ -399,11 +421,56 @@ public sealed class WasapiAudioEngine : IAudioEngine
         lock (_gate)
         {
             // Сбрасываем стартовые xrun'ы (первые блоки идут до наполнения колец).
+            long underflow = 0;
+            long overflow = 0;
+            foreach (var source in _sources)
+            {
+                underflow += source.Ring.UnderrunSamples;
+                overflow += source.Ring.OverflowSamples;
+            }
+
+            if (underflow > 0 || overflow > 0)
+            {
+                LogMessage(
+                    EngineLogLevel.Info,
+                    $"стартовые xrun сброшены: под={underflow}, переп={overflow}");
+            }
+
             foreach (var source in _sources)
             {
                 source.Ring.ResetStatistics();
             }
+
+            _lastLoggedUnderflow = 0;
         }
+    }
+
+    /// <summary>Раз в5 секунд пишет дельту xrun — только если под-счётчик растёт.</summary>
+    private void LogStatsIfChanged()
+    {
+        if (!_running)
+        {
+            return;
+        }
+
+        long underflow = 0;
+        long overflow = 0;
+        foreach (var source in _sources)
+        {
+            underflow += source.Ring.UnderrunSamples;
+            overflow += source.Ring.OverflowSamples;
+        }
+
+        if (underflow == _lastLoggedUnderflow)
+        {
+            return;
+        }
+
+        var delta = underflow - _lastLoggedUnderflow;
+        _lastLoggedUnderflow = underflow;
+        LogMessage(
+            EngineLogLevel.Info,
+            $"xrun-дельта: под +{delta} сэмплов (всего {underflow}), переп {overflow}");
     }
 
     private void LogMessage(EngineLogLevel level, string message)
@@ -443,5 +510,11 @@ public sealed class WasapiAudioEngine : IAudioEngine
         string Name,
         WasapiRecorder Recorder,
         SampleRing Ring,
-        MMDevice Device);
+        MMDevice Device)
+    {
+        /// <summary>Монотонные тики старта записи — для замера задержки первых данных.</summary>
+        public long StartTimestamp;
+
+        public bool FirstDataLogged;
+    }
 }
