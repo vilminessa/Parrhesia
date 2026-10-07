@@ -120,3 +120,20 @@ src/Parrhesia.App/AppServices.cs, src/Parrhesia.Core/**, СЌС‚РѕС‚ С„Р°Р№Р»
 git checkout dev-agNote   :: РђРіРµРЅС‚ Note вЂ” С„Р°Р·Р° A1 (РІРµРЅРґРѕСЂ SDK + С‚РµСЃС‚-РїР»Р°РіРёРЅ)
 git checkout dev-agPc     :: РђРіРµРЅС‚ Pc вЂ” С„Р°Р·Р° B1 (СЂРµСЃРµРјРїР»РёРЅРі)
 ```
+
+## Статус интеграционной волны (2026-10-08) [shared]
+
+- **Волна выполнена целиком**: A > dev (`62cf8f2`, гейт зелёный) >
+  предmerge-синк dev>dev-agPc (`bc2688b`, конфликты IAudioEngine /
+  WasapiAudioEngine разрешил интегратор-сессии по указанию владельца:
+  база = мультисink-рефактор Pc, поверх — надстройки A: _startStage,
+  Restart-в-фоне/retry, эхо-гард на _sinkIsVirtual) > merge B > dev
+  (`b8fbecd`). Гейт3 (объединённая база): dotnet test exit=0 (все4
+  сборки, включая тесты обеих линий), смоук0 исключений, driver build exit=0.
+- **Зеркала**: настроен dual-push (`git remote set-url --add --push origin
+  <github>`) — `git push origin` шлёт в оба. GitHub-ветка dev защищена
+  (GH006: required status check «dotnet test» от CI агента Pc) — прямой
+  push dev в GitHub отклонён; dev залит в Gitea, GitHub-догон отложено до
+  решения владельца (снять требование / перевести dev на PR-flow).
+- **Ветки dev-agNote / dev-agPc** — исчерпаны, к удалению после
+  подтверждения владельца.
