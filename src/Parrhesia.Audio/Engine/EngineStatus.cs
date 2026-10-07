@@ -20,4 +20,10 @@ public sealed record EngineStatus(
     long OverflowSamples)
 {
     public static readonly EngineStatus Stopped = new(false, 0, 0, null, 0, 0, 0);
+
+    /// <summary>Имя устройства мониторинга; null — мониторинг выключен или задан, но не запущен.</summary>
+    public string? MonitorName { get; init; }
+
+    /// <summary>Монитор-плеер сейчас играет параллельно основному выходу.</summary>
+    public bool MonitorActive { get; init; }
 }

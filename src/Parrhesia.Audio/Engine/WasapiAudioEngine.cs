@@ -44,6 +44,15 @@ public sealed class WasapiAudioEngine : IAudioEngine
     private int _sampleRate;
     private int _channels;
     private bool _running;
+
+    /// <summary>Общий замок всех RT-потребителей GraphProcessor (помпа + монитор).</summary>
+    private readonly object _renderGate = new();
+
+    private string? _monitorDeviceId;
+    private WasapiPlayer? _monitorPlayer;
+    private MMDevice? _monitorDevice;
+    private string? _monitorName;
+    private bool _sinkIsVirtual;
     private string[] _bindings = [];
     private Timer? _statsTimer;
     private long _lastLoggedUnderflow;
@@ -148,7 +157,9 @@ public sealed class WasapiAudioEngine : IAudioEngine
                 engineFormat = WaveFormat.CreateIeeeFloatWaveFormat(DriverFeed.Rate, DriverFeed.Channels);
                 var feed = new DriverFeed();
                 feed.Open(); // бросает исключение, если драйвер не установлен
-                var provider = new GraphWaveProvider(_processor, sink.Id, engineFormat);
+                var provider = new SerializedWaveProvider(
+                    new GraphWaveProvider(_processor, sink.Id, engineFormat),
+                    _renderGate);
                 var pump = new VirtualSinkPump(provider, feed);
                 _feed = feed;
                 _pump = pump;
@@ -171,7 +182,9 @@ public sealed class WasapiAudioEngine : IAudioEngine
 
                 var mix = player.DeviceMixFormat;
                 engineFormat = WaveFormat.CreateIeeeFloatWaveFormat(mix.SampleRate, mix.Channels);
-                var provider = new GraphWaveProvider(_processor, sink.Id, engineFormat);
+                var provider = new SerializedWaveProvider(
+                    new GraphWaveProvider(_processor, sink.Id, engineFormat),
+                    _renderGate);
                 player.Init(provider);
 
                 _player = player;
@@ -181,6 +194,7 @@ public sealed class WasapiAudioEngine : IAudioEngine
             }
 
             _sinkId = sink.Id;
+            _sinkIsVirtual = sinkSpec.Target == DeviceSpecTarget.Virtual;
             _sampleRate = engineFormat.SampleRate;
             _channels = engineFormat.Channels;
 
@@ -191,6 +205,7 @@ public sealed class WasapiAudioEngine : IAudioEngine
             OpenSources(engineFormat, sinkDevice);
 
             startStreaming();
+            StartMonitorIfConfigured();
             foreach (var source in _sources.ToArray())
             {
                 source.StartTimestamp = Stopwatch.GetTimestamp();
@@ -468,6 +483,117 @@ public sealed class WasapiAudioEngine : IAudioEngine
         }
     }
 
+    /// <summary>
+    /// Переключает устройство мониторинга. При работающем движке перезапускается
+    /// только монитор-плеер — источники, помпа и ядро не трогаются (вкл/выкл
+    /// не должно ронять тракт).
+    /// </summary>
+    public void SetMonitorDevice(string? deviceId)
+    {
+        var normalized = MonitorOutput.NormalizeDeviceId(deviceId);
+        lock (_gate)
+        {
+            var unchanged =
+                string.Equals(_monitorDeviceId, normalized, StringComparison.Ordinal) &&
+                (normalized is null || _monitorPlayer is not null);
+            if (unchanged)
+            {
+                _monitorDeviceId = normalized;
+                return;
+            }
+
+            _monitorDeviceId = normalized;
+            if (!_running)
+            {
+                return;
+            }
+
+            StopMonitor();
+            StartMonitorIfConfigured();
+            StatusChanged?.Invoke(this, EventArgs.Empty);
+        }
+    }
+
+    /// <summary>
+    /// Поднимает монитор-плеер, если задано устройство и основной выход виртуальный.
+    /// Отказ устройства = лог и монитор выключен; тракт продолжает работать.
+    /// </summary>
+    private void StartMonitorIfConfigured()
+    {
+        if (!MonitorOutput.ShouldStart(_monitorDeviceId, _sinkIsVirtual))
+        {
+            return;
+        }
+
+        MMDevice? device = null;
+        WasapiPlayer? player = null;
+        try
+        {
+            if (!DeviceSpec.TryParse(_monitorDeviceId, out var spec) || spec.Loopback)
+            {
+                LogMessage(EngineLogLevel.Warning, $"Мониторинг: недопустимая привязка «{_monitorDeviceId}»");
+                return;
+            }
+
+            if (!TryResolveDevice(spec, DataFlow.Render, out device))
+            {
+                // TryResolveDevice уже залогировал причину.
+                return;
+            }
+
+            player = new WasapiPlayerBuilder()
+                .WithDevice(device)
+                .WithSharedMode()
+                .WithEventSync()
+                .WithLatency(OutputLatencyMs)
+                .Build();
+
+            // Монитор получает блок в формате движка: частоту/каналы доделает
+            // WASAPI (shared, AutoConvertPcm), GraphProcessor не меняется.
+            var format = WaveFormat.CreateIeeeFloatWaveFormat(_sampleRate, _channels);
+            var provider = new SerializedWaveProvider(
+                new GraphWaveProvider(_processor, _sinkId, format),
+                _renderGate);
+            player.Init(provider);
+            player.Play();
+
+            _monitorDevice = device;
+            _monitorPlayer = player;
+            _monitorName = device.FriendlyName;
+            LogMessage(EngineLogLevel.Info, $"Мониторинг включён: «{_monitorName}»");
+        }
+        catch (Exception ex)
+        {
+            player?.Dispose();
+            device?.Dispose();
+            LogMessage(EngineLogLevel.Error, $"Мониторинг не запущен: {ex.Message}");
+        }
+    }
+
+    /// <summary>Останавливает и освобождает монитор-плеер (вызывается под _gate).</summary>
+    private void StopMonitor()
+    {
+        if (_monitorPlayer is null && _monitorDevice is null)
+        {
+            return;
+        }
+
+        try
+        {
+            _monitorPlayer?.Stop();
+        }
+        catch
+        {
+            // Устройство могло исчезнуть — не мешаем остановке.
+        }
+
+        _monitorPlayer?.Dispose();
+        _monitorPlayer = null;
+        _monitorDevice?.Dispose();
+        _monitorDevice = null;
+        _monitorName = null;
+    }
+
     /// <summary>Отключает источник, который не удалось открыть: освобождает поток и убирает вход.</summary>
     private void DisableSource(SourceBinding binding, string reason)
     {
@@ -527,6 +653,8 @@ public sealed class WasapiAudioEngine : IAudioEngine
             // Фид мог закрыться — не мешаем остальной очистке.
         }
 
+        StopMonitor();
+
         _processor.ClearInputs();
 
         foreach (var source in _sources)
@@ -551,6 +679,7 @@ public sealed class WasapiAudioEngine : IAudioEngine
         _sampleRate = 0;
         _channels = 0;
         _running = false;
+        _sinkIsVirtual = false;
         _bindings = [];
     }
 
@@ -654,7 +783,11 @@ public sealed class WasapiAudioEngine : IAudioEngine
             overflows += source.Ring.OverflowSamples;
         }
 
-        return new EngineStatus(true, _sampleRate, _channels, _sinkName, active, underruns, overflows);
+        return new EngineStatus(true, _sampleRate, _channels, _sinkName, active, underruns, overflows)
+        {
+            MonitorName = _monitorName,
+            MonitorActive = _monitorPlayer is not null,
+        };
     }
 
     private async Task ResetStatsLater()
