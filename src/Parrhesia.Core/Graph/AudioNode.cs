@@ -49,6 +49,14 @@ public sealed class AudioNode
     public string? DeviceId { get; internal set; }
 
     /// <summary>
+    /// Цепочка слотов-вставок эффектов (заполняется только для шин;
+    /// мутации — через <see cref="AudioGraph"/>-методы слотов).
+    /// </summary>
+    internal List<PluginSlot> SlotsInternal { get; } = [];
+
+    public IReadOnlyList<PluginSlot> Slots => SlotsInternal;
+
+    /// <summary>
     /// Положение на холсте схемы. Хранится в модели (а не в UI), чтобы пресеты
     /// восстанавливали раскладку. null — узел ещё не расставлен, UI назначит позицию.
     /// </summary>

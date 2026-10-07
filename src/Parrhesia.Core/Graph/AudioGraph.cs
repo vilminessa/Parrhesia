@@ -464,6 +464,115 @@ public sealed class AudioGraph
         Raise(GraphChangeKind.NodeChanged, node: node);
     }
 
+    // ===== Слоты-вставки эффектов (только шины) =====
+
+    /// <summary>
+    /// Добавляет слот-вставку в конец цепочки шины. Слоты доступны только
+    /// у шин — вставка обрабатывает её суммарный сигнал.
+    /// </summary>
+    public void AddSlot(Guid nodeId, PluginSlot slot)
+    {
+        ArgumentNullException.ThrowIfNull(slot);
+        if (string.IsNullOrWhiteSpace(slot.Path))
+        {
+            throw new ArgumentException("У слота не задан путь к модулю плагина.", nameof(slot));
+        }
+
+        if (string.IsNullOrWhiteSpace(slot.PluginId))
+        {
+            throw new ArgumentException("У слота не задан id плагина.", nameof(slot));
+        }
+
+        var node = FindSlotNode(nodeId);
+        node.SlotsInternal.Add(slot);
+        Raise(GraphChangeKind.NodeChanged, node: node);
+    }
+
+    /// <summary>Удаляет слот по индексу. false — индекс вне диапазона.</summary>
+    public bool RemoveSlot(Guid nodeId, int index)
+    {
+        var node = FindSlotNode(nodeId);
+        if (index < 0 || index >= node.SlotsInternal.Count)
+        {
+            return false;
+        }
+
+        node.SlotsInternal.RemoveAt(index);
+        Raise(GraphChangeKind.NodeChanged, node: node);
+        return true;
+    }
+
+    /// <summary>Меняет порядок слота: fromIndex → toIndex (индексы проверяются).</summary>
+    public void MoveSlot(Guid nodeId, int fromIndex, int toIndex)
+    {
+        var node = FindSlotNode(nodeId);
+        if (fromIndex < 0 || fromIndex >= node.SlotsInternal.Count)
+        {
+            throw new ArgumentOutOfRangeException(nameof(fromIndex));
+        }
+
+        if (toIndex < 0 || toIndex >= node.SlotsInternal.Count)
+        {
+            throw new ArgumentOutOfRangeException(nameof(toIndex));
+        }
+
+        if (fromIndex == toIndex)
+        {
+            return;
+        }
+
+        var slot = node.SlotsInternal[fromIndex];
+        node.SlotsInternal.RemoveAt(fromIndex);
+        node.SlotsInternal.Insert(toIndex, slot);
+        Raise(GraphChangeKind.NodeChanged, node: node);
+    }
+
+    /// <summary>Включает/выключает слот (выключенный обходится без вызова плагина).</summary>
+    public void SetSlotEnabled(Guid nodeId, int index, bool enabled)
+    {
+        var node = FindSlotNode(nodeId);
+        var slot = FindSlot(node, index);
+        if (slot.Enabled == enabled)
+        {
+            return;
+        }
+
+        node.SlotsInternal[index] = slot with { Enabled = enabled };
+        Raise(GraphChangeKind.NodeChanged, node: node);
+    }
+
+    /// <summary>Записывает state-чанк слота (null — сбрасывает состояние).</summary>
+    public void SetSlotState(Guid nodeId, int index, byte[]? state)
+    {
+        var node = FindSlotNode(nodeId);
+        var slot = FindSlot(node, index);
+        node.SlotsInternal[index] = slot with { State = state };
+        Raise(GraphChangeKind.NodeChanged, node: node);
+    }
+
+    private AudioNode FindSlotNode(Guid id)
+    {
+        var node = FindNode(id) ?? throw new ArgumentException($"Узел {id:N} не найден.", nameof(id));
+        if (node.Kind != NodeKind.Bus)
+        {
+            throw new ArgumentException(
+                $"Слоты эффектов доступны только у шин (узел «{node.Name}» — {node.Kind}).",
+                nameof(id));
+        }
+
+        return node;
+    }
+
+    private static PluginSlot FindSlot(AudioNode node, int index)
+    {
+        if (index < 0 || index >= node.SlotsInternal.Count)
+        {
+            throw new ArgumentOutOfRangeException(nameof(index), index, $"Слотов у «{node.Name}»: {node.SlotsInternal.Count}.");
+        }
+
+        return node.SlotsInternal[index];
+    }
+
     /// <summary>Задаёт координаты узла на холсте схемы.</summary>
     public void SetNodePosition(Guid id, double x, double y)
     {
@@ -501,7 +610,7 @@ public sealed class AudioGraph
 
         foreach (var node in source._nodes)
         {
-            _nodes.Add(new AudioNode(node.Id, node.Name, node.Kind)
+            var copy = new AudioNode(node.Id, node.Name, node.Kind)
             {
                 Gain = node.Gain,
                 Mute = node.Mute,
@@ -512,7 +621,9 @@ public sealed class AudioGraph
                 DeviceId = node.DeviceId,
                 X = node.X,
                 Y = node.Y,
-            });
+            };
+            copy.SlotsInternal.AddRange(node.SlotsInternal);
+            _nodes.Add(copy);
         }
 
         foreach (var route in source._routes)

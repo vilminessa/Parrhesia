@@ -42,7 +42,7 @@ public class GraphSerializerTests
     {
         var json = GraphSerializer.Serialize(BuildSampleGraph());
 
-        Assert.Contains("\"version\": 2", json);
+        Assert.Contains("\"version\": 3", json);
         Assert.Contains("\"Source\"", json);
         Assert.Contains("\"default:capture\"", json);
         Assert.Contains("\"channelCount\": 2", json);
@@ -182,6 +182,129 @@ public class GraphSerializerTests
     {
         var exception = Assert.Throws<GraphSerializerException>(() => GraphSerializer.Deserialize("{"));
         Assert.Contains("JSON", exception.Message);
+    }
+
+    [Fact]
+    public void RoundTrip_PreservesPluginSlots()
+    {
+        var graph = new AudioGraph();
+        var bus = graph.AddNode("Шина", NodeKind.Bus);
+        graph.AddSlot(bus.Id, new PluginSlot
+        {
+            Format = PluginFormat.Clap,
+            Path = @"C:\plugins\test.clap",
+            PluginId = "com.parrhesia.test",
+            Name = "Тест",
+            State = [1, 2, 3, 255],
+        });
+        graph.AddSlot(bus.Id, new PluginSlot
+        {
+            Format = PluginFormat.Vst3,
+            Path = @"C:\plugins\reverb.vst3",
+            PluginId = "ABCD1234",
+            Name = "Реверб",
+            Enabled = false,
+        });
+
+        var restored = GraphSerializer.Deserialize(GraphSerializer.Serialize(graph));
+
+        var restoredBus = Assert.Single(restored.Nodes, n => n.Name == "Шина");
+        Assert.Equal(2, restoredBus.Slots.Count);
+
+        var first = restoredBus.Slots[0];
+        Assert.Equal(PluginFormat.Clap, first.Format);
+        Assert.Equal(@"C:\plugins\test.clap", first.Path);
+        Assert.Equal("com.parrhesia.test", first.PluginId);
+        Assert.Equal("Тест", first.Name);
+        Assert.True(first.Enabled);
+        Assert.Equal(new byte[] { 1, 2, 3, 255 }, first.State);
+
+        var second = restoredBus.Slots[1];
+        Assert.Equal(PluginFormat.Vst3, second.Format);
+        Assert.False(second.Enabled);
+        Assert.Null(second.State);
+    }
+
+    [Fact]
+    public void V2Json_WithoutSlots_LoadsWithEmptyChains()
+    {
+        const string json = """
+        {
+          "version": 2,
+          "nodes": [ { "id": "11111111-1111-1111-1111-111111111111", "name": "Шина", "kind": "Bus" } ],
+          "routes": []
+        }
+        """;
+
+        var graph = GraphSerializer.Deserialize(json);
+
+        Assert.Empty(Assert.Single(graph.Nodes).Slots);
+    }
+
+    [Fact]
+    public void Slots_OnNonBusNode_Fail()
+    {
+        const string json = """
+        {
+          "version": 3,
+          "nodes": [
+            {
+              "id": "11111111-1111-1111-1111-111111111111",
+              "name": "Вход",
+              "kind": "Source",
+              "slots": [ { "format": "Clap", "path": "x.clap", "pluginId": "a.b" } ]
+            }
+          ],
+          "routes": []
+        }
+        """;
+
+        Assert.False(GraphSerializer.TryDeserialize(json, out _, out var error));
+        Assert.Contains("только у шин", error);
+    }
+
+    [Fact]
+    public void SlotWithoutPath_Fails()
+    {
+        const string json = """
+        {
+          "version": 3,
+          "nodes": [
+            {
+              "id": "11111111-1111-1111-1111-111111111111",
+              "name": "Шина",
+              "kind": "Bus",
+              "slots": [ { "format": "Clap", "pluginId": "a.b" } ]
+            }
+          ],
+          "routes": []
+        }
+        """;
+
+        Assert.False(GraphSerializer.TryDeserialize(json, out _, out var error));
+        Assert.Contains("пути", error);
+    }
+
+    [Fact]
+    public void SlotWithBadStateBase64_Fails()
+    {
+        const string json = """
+        {
+          "version": 3,
+          "nodes": [
+            {
+              "id": "11111111-1111-1111-1111-111111111111",
+              "name": "Шина",
+              "kind": "Bus",
+              "slots": [ { "format": "Clap", "path": "x.clap", "pluginId": "a.b", "state": "не-base64!" } ]
+            }
+          ],
+          "routes": []
+        }
+        """;
+
+        Assert.False(GraphSerializer.TryDeserialize(json, out _, out var error));
+        Assert.Contains("base64", error);
     }
 
     private static AudioGraph BuildSampleGraph()

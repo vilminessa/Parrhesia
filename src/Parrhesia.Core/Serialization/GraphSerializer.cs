@@ -11,9 +11,10 @@ namespace Parrhesia.Core.Serialization;
 /// </summary>
 public static class GraphSerializer
 {
-    /// <summary>v2: карты каналов в раскладке 8×8, поля channelCount/channelNames/bypassed.
-    /// v1 читается с миграцией (старая раскладка карты 2×2).</summary>
-    public const int CurrentVersion = 2;
+    /// <summary>v3: слоты-вставки эффектов в шинах (fields slots у узла).
+    /// v1 читается с миграцией (старая раскладка карты 2×2), v2 — как есть
+    /// (слоты отсутствуют → пустые цепочки).</summary>
+    public const int CurrentVersion = 3;
 
     private static readonly JsonSerializerOptions Options = new()
     {
@@ -48,6 +49,17 @@ public static class GraphSerializer
                 Device = n.DeviceId,
                 X = n.X,
                 Y = n.Y,
+                Slots = n.Slots.Count > 0
+                    ? n.Slots.Select(s => new SlotDocument
+                    {
+                        Format = s.Format,
+                        Path = s.Path,
+                        PluginId = s.PluginId,
+                        Name = s.Name,
+                        Enabled = s.Enabled,
+                        State = s.State is null ? null : Convert.ToBase64String(s.State),
+                    }).ToList()
+                    : null,
             }).ToList(),
             Routes = graph.Routes.Select(r => new RouteDocument
             {
@@ -135,6 +147,49 @@ public static class GraphSerializer
             node.DeviceId = nodeDocument.Device;
             node.X = nodeDocument.X;
             node.Y = nodeDocument.Y;
+
+            if (nodeDocument.Slots is { Count: > 0 })
+            {
+                if (nodeDocument.Kind != NodeKind.Bus)
+                {
+                    error = $"Узел «{nodeDocument.Name}»: слоты эффектов возможны только у шин.";
+                    return false;
+                }
+
+                foreach (var slotDocument in nodeDocument.Slots)
+                {
+                    var slotError = ValidateSlot(slotDocument, nodeDocument.Name!);
+                    if (slotError is not null)
+                    {
+                        error = slotError;
+                        return false;
+                    }
+
+                    byte[]? state = null;
+                    if (!string.IsNullOrEmpty(slotDocument.State))
+                    {
+                        try
+                        {
+                            state = Convert.FromBase64String(slotDocument.State);
+                        }
+                        catch (FormatException)
+                        {
+                            error = $"Узел «{nodeDocument.Name}»: слот «{slotDocument.Name}»: состояние не является base64.";
+                            return false;
+                        }
+                    }
+
+                    node.SlotsInternal.Add(new PluginSlot
+                    {
+                        Format = slotDocument.Format,
+                        Path = slotDocument.Path!,
+                        PluginId = slotDocument.PluginId!,
+                        Name = string.IsNullOrEmpty(slotDocument.Name) ? slotDocument.PluginId! : slotDocument.Name,
+                        Enabled = slotDocument.Enabled,
+                        State = state,
+                    });
+                }
+            }
         }
 
         foreach (var routeDocument in document.Routes ?? [])
@@ -221,6 +276,26 @@ public static class GraphSerializer
         return null;
     }
 
+    private static string? ValidateSlot(SlotDocument document, string nodeName)
+    {
+        if (!Enum.IsDefined(document.Format))
+        {
+            return $"Узел «{nodeName}»: слот с неизвестным форматом {document.Format}.";
+        }
+
+        if (string.IsNullOrWhiteSpace(document.Path))
+        {
+            return $"Узел «{nodeName}»: слот без пути к модулю плагина.";
+        }
+
+        if (string.IsNullOrWhiteSpace(document.PluginId))
+        {
+            return $"Узел «{nodeName}»: слот «{document.Path}» без id плагина.";
+        }
+
+        return null;
+    }
+
     private static string? ValidateRoute(RouteDocument document, AudioGraph graph)
     {
         var from = graph.FindNode(document.From);
@@ -282,6 +357,25 @@ public static class GraphSerializer
         public double? X { get; set; }
 
         public double? Y { get; set; }
+
+        /// <summary>Слоты-вставки эффектов (только у шин); null — слотов нет.</summary>
+        public List<SlotDocument>? Slots { get; set; }
+    }
+
+    private sealed class SlotDocument
+    {
+        public PluginFormat Format { get; set; }
+
+        public string? Path { get; set; }
+
+        public string? PluginId { get; set; }
+
+        public string? Name { get; set; }
+
+        public bool Enabled { get; set; } = true;
+
+        /// <summary>State-чанк плагина в base64.</summary>
+        public string? State { get; set; }
     }
 
     private sealed class RouteDocument
