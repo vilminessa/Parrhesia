@@ -72,8 +72,11 @@ if ($errors.Count -eq 0 -or (Test-Path $laneFiles[1])) {
 # --- 3. Парность beta.yml <-> release.yml -----------------------------------
 function Normalize-Lane([string]$text)
 {
+    # CRLF-нормализация в первую очередь: checkout с core.autocrlf даёт \r\n,
+    # и якорные регэкспы (\w+$) на CRLF не совпадают.
+    $text = $text -replace "`r`n", "`n"
     $text = $text -replace '(?m)^\s*#.*$', ''        # YAML-комментарии (структура, не пиннинг)
-    $text = $text -replace '(?m)^name: \w+$', 'name: LANE'
+    $text = $text -replace '(?m)^name: \w+\s*$', 'name: LANE'
     $text = $text -replace '"[bv]\*"', '"TAG*"'
     $text = $text -replace '\^[bv]\[', '^TAG['
     $text = $text -replace '\b[bv]\d+(\.\d+){2,3}\b', 'X.Y.Z.N'
