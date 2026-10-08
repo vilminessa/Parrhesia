@@ -6,7 +6,10 @@ namespace Parrhesia.Audio.Tests.Engine;
 /// Разрешение виртуальных эндпоинтов по InstanceId (М2): контракт —
 /// не бросает исключений на любой машине и возвращает только MMDevice.ID.
 /// На машине без установленного драйвера множество пусто (это валидно).
+/// Одна коллекция с EndpointPolicyTests — тест видимости временно скрывает
+/// endpoint (см. там).
 /// </summary>
+[Collection("AudioSystem")]
 public class VirtualEndpointResolverTests
 {
     [Fact]

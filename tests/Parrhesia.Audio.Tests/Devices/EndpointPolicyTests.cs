@@ -7,7 +7,10 @@ namespace Parrhesia.Audio.Tests.Devices;
 /// EndpointPolicy (IPolicyConfig): переименование и видимость СВОИХ
 /// endpoints. На машине без установленного драйвера Parrhesia тесты
 /// завершаются пусто (skip). Изменения откатываются в finally.
+/// Одна коллекция с VirtualEndpointResolverTests: тест видимости СКРЫВАЕТ
+/// endpoint — параллельный resolve в это время вернул бы неполный набор.
 /// </summary>
+[Collection("AudioSystem")]
 public class EndpointPolicyTests
 {
     private sealed record Endpoint(string Id, string Name, DeviceState State);
@@ -109,6 +112,40 @@ public class EndpointPolicyTests
                 () => ReadEndpoint(endpoint.Id, DataFlow.Render)?.Name == endpoint.Name,
                 TimeSpan.FromSeconds(2)),
             $"имя не вернулось: сейчас [{ReadEndpoint(endpoint.Id, DataFlow.Render)?.Name}]");
+    }
+
+    [Fact]
+    public void StripDeviceSuffix_RemovesAndKeeps()
+    {
+        Assert.Equal(
+            "Динамики",
+            Parrhesia.Audio.Devices.EndpointPolicy.StripDeviceSuffix(
+                "Динамики (Parrhesia Virtual Audio)",
+                "Parrhesia Virtual Audio"));
+
+        // Без суффикса — имя возвращается как есть.
+        Assert.Equal(
+            "1Динамики",
+            Parrhesia.Audio.Devices.EndpointPolicy.StripDeviceSuffix(
+                "1Динамики",
+                "Parrhesia Virtual Audio"));
+    }
+
+    [Fact]
+    public void ShouldAutoRename_OnlyGenericNames()
+    {
+        Assert.True(
+            Parrhesia.Audio.Devices.EndpointPolicy.ShouldAutoRename("Динамики"));
+        Assert.True(
+            Parrhesia.Audio.Devices.EndpointPolicy.ShouldAutoRename("Набор микрофонов"));
+        Assert.True(
+            Parrhesia.Audio.Devices.EndpointPolicy.ShouldAutoRename("Speakers"));
+
+        // Ручное переименование владельца не трогаем.
+        Assert.False(
+            Parrhesia.Audio.Devices.EndpointPolicy.ShouldAutoRename("1Динамики"));
+        Assert.False(
+            Parrhesia.Audio.Devices.EndpointPolicy.ShouldAutoRename("Мой вход"));
     }
 
     [Fact]

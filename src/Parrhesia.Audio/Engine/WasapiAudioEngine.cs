@@ -296,6 +296,12 @@ public sealed class WasapiAudioEngine : IAudioEngine
             _sinkNames = opened.Select(Describe).ToArray();
             _sinkName = Describe(primary);
 
+            // Имена endpoints: «Parrhesia In/Out» вместо системных заглушек
+            // (только если имя ещё дефолтное — выбор владельца сохраняем).
+            // Работает при любом тракте: resolver вернёт только наши
+            // endpoints, при пустом наборе — no-op.
+            ApplyVirtualEndpointNames();
+
             // Цепочки слотов: загрузка/подготовка плагинов под формат движка
             // (max-блок100 мс — больше обоих путей вывода: player50 мс, помпа10 мс).
             _slotChains.Prepare(engineFormat.SampleRate, engineFormat.SampleRate / 10, engineFormat.Channels);
@@ -389,6 +395,57 @@ public sealed class WasapiAudioEngine : IAudioEngine
         }
 
         return device.FriendlyName.Contains("Parrhesia", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Ставит «Parrhesia In/Out» своим endpoints при старте — только если
+    /// имя всё ещё системное (ручные переименования владельца не трогаем).
+    /// </summary>
+    private void ApplyVirtualEndpointNames()
+    {
+        try
+        {
+            foreach (var id in VirtualEndpointResolver.ResolveVirtualEndpointIds())
+            {
+                // MMDevice.ID: {0.0.0.…} — рендер, {0.0.1.…} — захват.
+                var target = id.StartsWith("{0.0.0.", StringComparison.OrdinalIgnoreCase)
+                    ? "Parrhesia In"
+                    : "Parrhesia Out";
+
+                string current;
+                try
+                {
+                    using var enumerator = new MMDeviceEnumerator();
+                    using var device = enumerator.GetDevice(id);
+                    current = device.FriendlyName;
+                }
+                catch
+                {
+                    continue; // поток недоступен — пропускаем
+                }
+
+                var baseName = EndpointPolicy.StripDeviceSuffix(current, EndpointPolicy.DeviceProductName);
+                if (!EndpointPolicy.ShouldAutoRename(baseName))
+                {
+                    continue; // владелец переименовал вручную
+                }
+
+                if (EndpointPolicy.TryRename(id, target))
+                {
+                    LogMessage(EngineLogLevel.Info, $"Эндпоинт переименован: «{baseName}» → «{target}»");
+                }
+                else
+                {
+                    LogMessage(
+                        EngineLogLevel.Warning,
+                        $"Не удалось переименовать эндпоинт «{baseName}»: {EndpointPolicy.LastError}");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            LogMessage(EngineLogLevel.Warning, $"Авто-переименование endpoints: {ex.Message}");
+        }
     }
 
     private void OpenSources(WaveFormat engineFormat, IReadOnlySet<string> sinkRenderIds)

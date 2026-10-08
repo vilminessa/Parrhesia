@@ -16,6 +16,20 @@ namespace Parrhesia.Audio.Devices;
 /// </summary>
 public static class EndpointPolicy
 {
+    /// <summary>Продуктовое имя устройства из INF (DeviceDesc) — суффикс отображения.</summary>
+    internal const string DeviceProductName = "Parrhesia Virtual Audio";
+
+    // Системно-дефолтные базовые имена (локализованные и английские) —
+    // признак того, что владелец ещё не переименовывал эндпоинт.
+    private static readonly string[] GenericBaseNames =
+    [
+        "Динамики",
+        "Набор микрофонов",
+        "Микрофон",
+        "Speakers",
+        "Microphone Array",
+        "Microphone",
+    ];
     // Класс политики конфигурации аудио (AudioSes.dll; замена PolicyConfigClient).
     private static readonly Guid PolicyConfigClientClsid = new("870AF99C-171D-4F9E-AF0D-E63DF40C2BC9");
 
@@ -34,6 +48,19 @@ public static class EndpointPolicy
 
     /// <summary>Диагностика последнего отказа (для тестов/логов).</summary>
     internal static string? LastError { get; private set; }
+
+    /// <summary>Снимает суффикс « (имя-устройства)» с отображаемого имени.</summary>
+    internal static string StripDeviceSuffix(string displayName, string productName)
+    {
+        var suffix = " (" + productName + ")";
+        return displayName.EndsWith(suffix, StringComparison.Ordinal)
+            ? displayName[..^suffix.Length]
+            : displayName;
+    }
+
+    /// <summary>Авто-переименование уместно, только если имя системное.</summary>
+    internal static bool ShouldAutoRename(string baseName) =>
+        Array.Exists(GenericBaseNames, g => g.Equals(baseName, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>
     /// Переименовать эндпоинт (отображаемое имя, например «Parrhesia In»).
