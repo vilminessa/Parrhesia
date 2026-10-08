@@ -47,6 +47,32 @@ extern "C"
     /// 0 = успех.
     PV3 int __cdecl Pv3SetState(void* instance, const unsigned char* buffer, int length);
 
+    // ===== Параметры (IEditController; main-thread; значения нормированы0..1) =====
+
+    /// Описание параметра VST3 (нормированный диапазон).
+    typedef struct Pv3ParamInfo {
+        int id;             // Vst::ParamID (unchecked в int)
+        int stepCount;      // 0 — непрерывный
+        int flags;          // Vst::ParameterInfo::Flags
+        double defaultValue;
+        double minValue;    // всегда0 (VST3 normalized)
+        double maxValue;    // всегда1
+        char name[128];     // заголовок (ASCII; нелатиница → '?')
+    } Pv3ParamInfo;
+
+    /// Число параметров; <0 = ошибка (нет контроллера).
+    PV3 int __cdecl Pv3ParamCount(void* instance);
+
+    /// Описание по индексу. 0 = успех; <0 = ошибка.
+    PV3 int __cdecl Pv3GetParamInfo(void* instance, int index, Pv3ParamInfo* out);
+
+    /// Текущее нормированное значение. 0 = успех; <0 = ошибка.
+    PV3 int __cdecl Pv3ParamValueGet(void* instance, int id, double* outNormalized);
+
+    /// Установка: setParamNormalized (мгновенно для чтения) + очередь
+    /// в ближайший Process (аудио-поток). 0 = успех; <0 = ошибка.
+    PV3 int __cdecl Pv3ParamValueSet(void* instance, int id, double normalized);
+
     // ===== Редактор (IPlugView → дочерний HWND; main-thread) =====
 
     /// Создаёт view и встраивает в parentHwnd.0 = успех (идемпотентно).

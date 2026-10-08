@@ -41,6 +41,10 @@ internal static unsafe class Vst3Native
         EditorOpenPtr = Marshal.GetDelegateForFunctionPointer<EditorOpenFn>(Export(module, "Pv3EditorOpen"));
         EditorGetSizePtr = Marshal.GetDelegateForFunctionPointer<EditorGetSizeFn>(Export(module, "Pv3EditorGetSize"));
         EditorClosePtr = Marshal.GetDelegateForFunctionPointer<EditorCloseFn>(Export(module, "Pv3EditorClose"));
+        ParamCountPtr = Marshal.GetDelegateForFunctionPointer<ParamsCountFn>(Export(module, "Pv3ParamCount"));
+        ParamInfoPtr = Marshal.GetDelegateForFunctionPointer<ParamsInfoFn>(Export(module, "Pv3GetParamInfo"));
+        ParamValueGetPtr = Marshal.GetDelegateForFunctionPointer<ParamsValueGetFn>(Export(module, "Pv3ParamValueGet"));
+        ParamValueSetPtr = Marshal.GetDelegateForFunctionPointer<ParamsValueSetFn>(Export(module, "Pv3ParamValueSet"));
     }
 
     private static IntPtr Export(IntPtr module, string name) =>
@@ -87,9 +91,25 @@ internal static unsafe class Vst3Native
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     internal delegate void EditorCloseFn(IntPtr instance);
 
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    internal delegate int ParamsCountFn(IntPtr instance);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    internal delegate int ParamsInfoFn(IntPtr instance, int index, IntPtr info);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    internal delegate int ParamsValueGetFn(IntPtr instance, int id, out double value);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    internal delegate int ParamsValueSetFn(IntPtr instance, int id, double value);
+
     private static readonly EditorOpenFn EditorOpenPtr;
     private static readonly EditorGetSizeFn EditorGetSizePtr;
     private static readonly EditorCloseFn EditorClosePtr;
+    private static readonly ParamsCountFn ParamCountPtr;
+    private static readonly ParamsInfoFn ParamInfoPtr;
+    private static readonly ParamsValueGetFn ParamValueGetPtr;
+    private static readonly ParamsValueSetFn ParamValueSetPtr;
 
     // ===== Обёртки с маршировкой =====
 
@@ -111,6 +131,69 @@ internal static unsafe class Vst3Native
         var ptr = LastErrorPtr();
         return ptr == IntPtr.Zero ? null : Marshal.PtrToStringUTF8(ptr);
     }
+
+    // ===== Параметры (Pv3ParamInfo* —168 байт:3 int + pad +3 double + name[128]) =====
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct Pv3ParamInfo
+    {
+        public int Id;
+        public int StepCount;
+        public int Flags;
+        public double DefaultValue;
+        public double MinValue;
+        public double MaxValue;
+        public fixed byte Name[128];
+    }
+
+    /// <summary>Число параметров; <0 — ошибка шима.</summary>
+    public static int ParamCount(IntPtr instance) => ParamCountPtr(instance);
+
+    /// <summary>Описание параметра по индексу (false — нет/ошибка).</summary>
+    public static bool TryGetParamInfo(
+        IntPtr instance,
+        int index,
+        out int id,
+        out string name,
+        out double defaultValue,
+        out int stepCount,
+        out int flags)
+    {
+        id = 0;
+        name = string.Empty;
+        defaultValue = 0;
+        stepCount = 0;
+        flags = 0;
+
+        var infoPtr = Marshal.AllocHGlobal(Marshal.SizeOf<Pv3ParamInfo>());
+        try
+        {
+            if (ParamInfoPtr(instance, index, infoPtr) != 0)
+            {
+                return false;
+            }
+
+            // id@0, stepCount@4, flags@8, default@16, name@40.
+            id = Marshal.ReadInt32(infoPtr, 0);
+            stepCount = Marshal.ReadInt32(infoPtr, 4);
+            flags = Marshal.ReadInt32(infoPtr, 8);
+            defaultValue = BitConverter.Int64BitsToDouble(Marshal.ReadInt64(infoPtr, 16));
+            name = Marshal.PtrToStringUTF8(infoPtr + 40) ?? $"param {id}";
+            return true;
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(infoPtr);
+        }
+    }
+
+    /// <summary>Текущее нормированное значение (false — параметр не найден).</summary>
+    public static bool TryParamValueGet(IntPtr instance, int id, out double value) =>
+        ParamValueGetPtr(instance, id, out value) == 0;
+
+    /// <summary>Установка (кламп в шиме; доставка в аудио-поток очередью).</summary>
+    public static int ParamValueSet(IntPtr instance, int id, double value) =>
+        ParamValueSetPtr(instance, id, value);
 
     public static IntPtr CreateInstance(string modulePath, string classId)
     {

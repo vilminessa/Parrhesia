@@ -1,7 +1,8 @@
 /*
  * Тестовые CLAP-плагины Parrhesia (см. tests/Parrhesia.Plugins.Native/build-test-plugin.bat).
  *
- *   com.parrhesia.test.gain    — удваивает сигнал; state = u32 magic (roundtrip).
+ *   com.parrhesia.test.gain    — gain-параметр (0..4, default2 → «удваивает»);
+ *                                state = u32 magic + f64 gain (roundtrip).
  *   com.parrhesia.test.latency — задержка DELAY_FRAMES сэмплов, сообщает
  *                                latency через CLAP_EXT_LATENCY (тест компенсации).
  *
@@ -14,9 +15,14 @@
 #include <windows.h>
 #include <string.h>
 #include <stdlib.h>
+#include <stdio.h>
 
 #define DELAY_FRAMES 128
 #define STATE_MAGIC 0x50525248u /* "PRRH" */
+#define GAIN_PARAM_ID 1u
+#define GAIN_MIN 0.0
+#define GAIN_MAX 4.0
+#define GAIN_DEFAULT 2.0
 
 typedef struct {
     int is_latency;
@@ -24,6 +30,7 @@ typedef struct {
     float d1[DELAY_FRAMES];
     unsigned pos;
     uint32_t magic;
+    double gain;
     /* GUI (embed-окно в родителе из host) */
     HWND guiParent;
     HWND guiChild;
@@ -37,6 +44,9 @@ static test_state_t *state_of(const clap_plugin_t *plugin) {
     return (test_state_t *)plugin->plugin_data;
 }
 
+/* Определение — ниже, в секции params. */
+static void apply_events(test_state_t *s, const clap_input_events_t *in);
+
 static bool CLAP_ABI plug_init(const clap_plugin_t *plugin) {
     test_state_t *s = state_of(plugin);
     /* ВАЖНО: is_latency задаётся фабрикой ДО init — memset структуры целиком
@@ -45,6 +55,7 @@ static bool CLAP_ABI plug_init(const clap_plugin_t *plugin) {
     memset(s->d1, 0, sizeof(s->d1));
     s->pos = 0;
     s->magic = STATE_MAGIC;
+    s->gain = GAIN_DEFAULT;
     return true;
 }
 
@@ -95,6 +106,11 @@ static clap_process_status CLAP_ABI plug_process(const clap_plugin_t *plugin, co
     float *out0 = out->data32[0];
     float *out1 = out->data32[1];
 
+    /* Приём param-событий хоста (host шлёт их в process при активном плагине). */
+    if (!s->is_latency) {
+        apply_events(s, proc->in_events);
+    }
+
     if (s->is_latency) {
         /* Задержка: кольцевый буфер на кадр, чтение входа до записи выхода
            (корректно и при in-place совпадении указателей). */
@@ -110,9 +126,10 @@ static clap_process_status CLAP_ABI plug_process(const clap_plugin_t *plugin, co
             s->pos = (s->pos + 1u) % DELAY_FRAMES;
         }
     } else {
+        const float g = (float)s->gain;
         for (uint32_t i = 0; i < frames; i++) {
-            out0[i] = in0[i] * 2.0f;
-            out1[i] = in1[i] * 2.0f;
+            out0[i] = in0[i] * g;
+            out1[i] = in1[i] * g;
         }
     }
 
@@ -160,23 +177,134 @@ static const clap_plugin_latency_t EXT_LATENCY = {
     .get = latency_get,
 };
 
-/* ===== state: roundtrip u32 magic ===== */
+/* ===== params (только gain-плагин) ===== */
+
+/* Приём param-событий из in-events (process) или flush. */
+static void apply_events(test_state_t *s, const clap_input_events_t *in) {
+    if (!in || !in->size) {
+        return;
+    }
+
+    const uint32_t n = in->size(in);
+    for (uint32_t i = 0; i < n; i++) {
+        const clap_event_header_t *h = in->get(in, i);
+        if (!h || h->space_id != CLAP_CORE_EVENT_SPACE_ID || h->type != CLAP_EVENT_PARAM_VALUE) {
+            continue;
+        }
+
+        const clap_event_param_value_t *e = (const clap_event_param_value_t *)h;
+        if (e->param_id == GAIN_PARAM_ID) {
+            double v = e->value;
+            if (v < GAIN_MIN) { v = GAIN_MIN; }
+            if (v > GAIN_MAX) { v = GAIN_MAX; }
+            s->gain = v;
+        }
+    }
+}
+
+static uint32_t CLAP_ABI params_count(const clap_plugin_t *plugin) {
+    (void)plugin;
+    return 1;
+}
+
+static bool CLAP_ABI params_get_info(const clap_plugin_t *plugin, uint32_t index, clap_param_info_t *info) {
+    (void)plugin;
+    if (index != 0) {
+        return false;
+    }
+
+    memset(info, 0, sizeof(*info));
+    info->id = GAIN_PARAM_ID;
+    info->flags = CLAP_PARAM_IS_AUTOMATABLE;
+    info->cookie = NULL;
+    strncpy(info->name, "Gain", CLAP_NAME_SIZE - 1);
+    info->min_value = GAIN_MIN;
+    info->max_value = GAIN_MAX;
+    info->default_value = GAIN_DEFAULT;
+    return true;
+}
+
+static bool CLAP_ABI params_get_value(const clap_plugin_t *plugin, clap_id param_id, double *out_value) {
+    if (param_id != GAIN_PARAM_ID || !out_value) {
+        return false;
+    }
+
+    *out_value = state_of(plugin)->gain;
+    return true;
+}
+
+static bool CLAP_ABI params_value_to_text(const clap_plugin_t *plugin, clap_id param_id,
+                                          double value, char *out_buffer, uint32_t capacity) {
+    (void)plugin;
+    if (param_id != GAIN_PARAM_ID || !out_buffer || capacity == 0) {
+        return false;
+    }
+
+    snprintf(out_buffer, capacity, "%.2fx", value);
+    return true;
+}
+
+static bool CLAP_ABI params_text_to_value(const clap_plugin_t *plugin, clap_id param_id,
+                                          const char *text, double *out_value) {
+    (void)plugin;
+    if (param_id != GAIN_PARAM_ID || !text || !out_value) {
+        return false;
+    }
+
+    char *end = NULL;
+    const double v = strtod(text, &end);
+    if (end == text) {
+        return false;
+    }
+
+    *out_value = v;
+    return true;
+}
+
+static void CLAP_ABI params_flush(const clap_plugin_t *plugin,
+                                  const clap_input_events_t *in,
+                                  const clap_output_events_t *out) {
+    (void)out;
+    apply_events(state_of(plugin), in);
+}
+
+static const clap_plugin_params_t EXT_PARAMS = {
+    .count = params_count,
+    .get_info = params_get_info,
+    .get_value = params_get_value,
+    .value_to_text = params_value_to_text,
+    .text_to_value = params_text_to_value,
+    .flush = params_flush,
+};
+
+/* ===== state: roundtrip u32 magic + f64 gain ===== */
 
 static bool CLAP_ABI state_save(const clap_plugin_t *plugin, const clap_ostream_t *stream) {
     const test_state_t *s = state_of(plugin);
-    const int64_t written = stream->write(stream, &s->magic, sizeof(s->magic));
-    return written == (int64_t)sizeof(s->magic);
+    if (stream->write(stream, &s->magic, sizeof(s->magic)) != (int64_t)sizeof(s->magic)) {
+        return false;
+    }
+
+    return stream->write(stream, &s->gain, sizeof(s->gain)) == (int64_t)sizeof(s->gain);
 }
 
 static bool CLAP_ABI state_load(const clap_plugin_t *plugin, const clap_istream_t *stream) {
     test_state_t *s = state_of(plugin);
     uint32_t value = 0;
-    const int64_t read = stream->read(stream, &value, sizeof(value));
-    if (read != (int64_t)sizeof(value)) {
+    if (stream->read(stream, &value, sizeof(value)) != (int64_t)sizeof(value)) {
         return false;
     }
 
     s->magic = value;
+
+    /* Legacy-состояния (4 байта без gain) принимаем: gain остаётся текущим. */
+    double g = 0;
+    if (stream->read(stream, &g, sizeof(g)) == (int64_t)sizeof(g)) {
+        if (g < GAIN_MIN) { g = GAIN_MIN; }
+        if (g > GAIN_MAX) { g = GAIN_MAX; }
+        s->gain = g;
+    }
+
     return true;
 }
 
@@ -337,6 +465,10 @@ static const void *CLAP_ABI plug_get_extension(const clap_plugin_t *plugin, cons
     }
 
     test_state_t *s = state_of(plugin);
+    if (!s->is_latency && strcmp(id, CLAP_EXT_PARAMS) == 0) {
+        return &EXT_PARAMS;
+    }
+
     if (s->is_latency && strcmp(id, CLAP_EXT_LATENCY) == 0) {
         return &EXT_LATENCY;
     }

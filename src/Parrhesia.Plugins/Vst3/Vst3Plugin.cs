@@ -7,10 +7,11 @@ namespace Parrhesia.Plugins.Vst3;
 /// Контракт потоков — как у <see cref="IAudioPlugin"/>: Prepare/GetState/
 /// SetState/Dispose — вне аудио-потока; Process — только аудио-поток.
 /// </summary>
-internal sealed class Vst3Plugin : IAudioPlugin, IPluginEditor
+internal sealed class Vst3Plugin : IAudioPlugin, IPluginEditor, IPluginParameters
 {
     private IntPtr _instance;
     private bool _editorOpen;
+    private PluginParameter[]? _paramCache;
 
     private Vst3Plugin(string classId)
     {
@@ -183,5 +184,99 @@ internal sealed class Vst3Plugin : IAudioPlugin, IPluginEditor
 
             return (width, height);
         }
+    }
+
+    // ===== IPluginParameters (IEditController через шим) =====
+
+    // Флаги Vst::ParameterInfo (ivsteditcontroller.h).
+    private const int Vst3FlagIsReadOnly = 1 << 1;
+    private const int Vst3FlagIsHidden = 1 << 4;
+
+    public IReadOnlyList<PluginParameter> GetParameters()
+    {
+        ObjectDisposedException.ThrowIf(_instance == IntPtr.Zero, this);
+        if (_paramCache is not null)
+        {
+            return _paramCache;
+        }
+
+        var count = Vst3Native.ParamCount(_instance);
+        if (count <= 0)
+        {
+            _paramCache = [];
+            return _paramCache;
+        }
+
+        var list = new List<PluginParameter>(count);
+        for (var index = 0; index < count; index++)
+        {
+            if (!Vst3Native.TryGetParamInfo(
+                    _instance,
+                    index,
+                    out var id,
+                    out var name,
+                    out var defaultValue,
+                    out var stepCount,
+                    out var flags))
+            {
+                continue;
+            }
+
+            // VST3-значения нормированы: диапазон всегда [0, 1].
+            list.Add(new PluginParameter(
+                unchecked(id),
+                name,
+                string.Empty,
+                0,
+                1,
+                defaultValue,
+                IsStepped: stepCount > 0 || (flags & (1 << 3)) != 0, // kIsList
+                IsReadOnly: (flags & Vst3FlagIsReadOnly) != 0,
+                IsHidden: (flags & Vst3FlagIsHidden) != 0));
+        }
+
+        _paramCache = [.. list];
+        return _paramCache;
+    }
+
+    public double GetParameterValue(int id)
+    {
+        ObjectDisposedException.ThrowIf(_instance == IntPtr.Zero, this);
+        return Vst3Native.TryParamValueGet(_instance, id, out var value) ? value : 0;
+    }
+
+    public void SetParameterValue(int id, double value)
+    {
+        ObjectDisposedException.ThrowIf(_instance == IntPtr.Zero, this);
+
+        var parameter = FindParameter(id);
+        if (parameter is null || parameter.IsReadOnly)
+        {
+            return;
+        }
+
+        value = Math.Clamp(value, parameter.Min, parameter.Max);
+        if (parameter.IsStepped)
+        {
+            value = Math.Truncate(value);
+        }
+
+        Vst3Native.ParamValueSet(_instance, id, value);
+    }
+
+    public string FormatParameterValue(int id, double value) =>
+        value.ToString("0.###"); // VST3 не имеет value_to_text (хост форматирует сам)
+
+    private PluginParameter? FindParameter(int id)
+    {
+        foreach (var parameter in GetParameters())
+        {
+            if (parameter.Id == id)
+            {
+                return parameter;
+            }
+        }
+
+        return null;
     }
 }
