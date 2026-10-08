@@ -358,6 +358,7 @@ Return Value:
     //
     {
         NTSTATUS feedStatus = Feed_Initialize(DriverObject);
+        Feed_DiagLog(L"DrvEntry");
         if (!NT_SUCCESS(feedStatus))
         {
             DPF(D_ERROR, ("Feed_Initialize failed, status = %X (продолжаем без фида)", feedStatus));
@@ -430,6 +431,8 @@ Return Value:
     DPF(D_TERSE, ("[AddDevice]"));
 
     maxObjects = g_MaxMiniports;
+
+    Feed_DiagLog(L"AddDevice");
 
     // Tell the class driver to add the device.
     //
@@ -631,6 +634,7 @@ InstallAllRenderFilters(
     
     ntStatus = STATUS_SUCCESS;
 
+
 Exit:
     return ntStatus;
 }
@@ -682,6 +686,7 @@ InstallAllCaptureFilters(
 
     ntStatus = STATUS_SUCCESS;
 
+
 Exit:
     return ntStatus;
 }
@@ -727,6 +732,8 @@ Return Value:
     ASSERT(Irp);
     ASSERT(ResourceList);
 
+    Feed_DiagLog(L"StartEnter");
+
     NTSTATUS                    ntStatus        = STATUS_SUCCESS;
 
     PADAPTERCOMMON              pAdapterCommon  = NULL;
@@ -746,28 +753,42 @@ Return Value:
                                 );
     IF_FAILED_JUMP(ntStatus, Exit);
 
+    Feed_DiagLog(L"Stg_NacOk"); // NewAdapterCommon прошёл
+
     ntStatus = pUnknownCommon->QueryInterface( IID_IAdapterCommon,(PVOID *) &pAdapterCommon);
     IF_FAILED_JUMP(ntStatus, Exit);
+
+    Feed_DiagLog(L"Stg_QiOk"); // QI прошёл
+
+    Feed_DiagSet(DeviceObject, 0x100); // adapter common created
 
     ntStatus = pAdapterCommon->Init(DeviceObject);
     IF_FAILED_JUMP(ntStatus, Exit);
 
     //
+    Feed_DiagSet(DeviceObject, 0x200); // Init ok
+
     // register with PortCls for power-management services
     ntStatus = PcRegisterAdapterPowerManagement( PUNKNOWN(pAdapterCommon), DeviceObject);
     IF_FAILED_JUMP(ntStatus, Exit);
 
     //
+    Feed_DiagSet(DeviceObject, 0x400); // power mgmt ok
+
     // Install wave+topology filters for render devices
     //
     ntStatus = InstallAllRenderFilters(DeviceObject, Irp, pAdapterCommon);
     IF_FAILED_JUMP(ntStatus, Exit);
 
     //
+    Feed_DiagSet(DeviceObject, 0x800); // render filters ok
+
     // Install wave+topology filters for capture devices
     //
     ntStatus = InstallAllCaptureFilters(DeviceObject, Irp, pAdapterCommon);
     IF_FAILED_JUMP(ntStatus, Exit);
+
+    Feed_DiagSet(DeviceObject, 0x1000); // capture filters ok
 
 Exit:
 

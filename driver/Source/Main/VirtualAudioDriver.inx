@@ -3,7 +3,7 @@ Signature   = "$Windows NT$"
 Class       = MEDIA
 Provider    = %ProviderName%
 ClassGUID   = {4d36e96c-e325-11ce-bfc1-08002be10318}
-DriverVer   = 02/22/2016, 1.0.0.1
+DriverVer   = 10/08/2026, 1.0.0.2
 CatalogFile = VirtualAudioDriver.cat
 PnpLockDown = 1
 
@@ -19,6 +19,9 @@ virtualaudiodriver.sys=222
 
 [VIRTUALAUDIODRIVER.NT$ARCH$.10.0...22000]
 %VIRTUALAUDIODRIVER_SA.DeviceDesc%=VIRTUALAUDIODRIVER_SA, ROOT\VirtualAudioDriver
+%Lane1.DeviceDesc%=VIRTUALAUDIODRIVER_SA, ROOT\ParrhesiaLane1
+%Lane2.DeviceDesc%=VIRTUALAUDIODRIVER_SA, ROOT\ParrhesiaLane2
+%Lane3.DeviceDesc%=VIRTUALAUDIODRIVER_SA, ROOT\ParrhesiaLane3
 
 [DestinationDirs]
 VIRTUALAUDIODRIVER_SA.CopyList=13 ; 13=Package's DriverStore directory
@@ -140,6 +143,17 @@ HKR,,DeviceType,0x10001,0x0000001D
 ; SDDL_DEVOBJ_SYS_ALL_ADM_RWX_WORLD_RWX_RES_RWX
 HKR,,Security,,"D:P(A;;GA;;;SY)(A;;GRGWGX;;;BA)(A;;GRGWGX;;;WD)(A;;GRGWGX;;;RC)"
 
+;======================================================
+; Friendly names endpoints (KSPROPERTY_PIN_NAME).
+; KS (Win10 1809+) сначала ищет строку в software key устройства:
+; по Name-GUID пина, затем по Category-GUID; при отсутствии — inbox-дефолты
+; («Speakers»/«Microphone Array» → локализованные «Динамики»/«Набор
+; микрофонов»). См. docs «Friendly Names for Audio Endpoint Devices».
+;======================================================
+HKR,MediaCategories\{DFF21CE1-F70F-11D0-B917-00A0C9223196},Name,,%EndpointNameRender%
+HKR,MediaCategories\{DFF21BE5-F70F-11D0-B917-00A0C9223196},Name,,%EndpointNameCapture%
+HKR,MediaCategories\{6AE81FF4-203E-4FE1-88AA-F2D57775CD4A},Name,,%EndpointNameCapture%
+
 
 ;======================================================
 ; WDF
@@ -180,8 +194,15 @@ ProviderName = "Parrhesia"
 MfgName      = "Parrhesia"
 MsCopyRight  = "(c) Parrhesia project"
 
-VIRTUALAUDIODRIVER_SA.DeviceDesc="Parrhesia Virtual Audio"
+VIRTUALAUDIODRIVER_SA.DeviceDesc="Parrhesia"
 VirtualAudioDriver.SvcDesc="Parrhesia Audio Driver"
+
+;; лanes (М2): тот же драйвер, отдельные HW-ID → свой devnode + своя пара
+;; endpoints + свой feed (\\.\ParrhesiaFeed_<suffix>). Имена короткие:
+;; список endpoints выглядит как «Parrhesia In2 (Parrhesia L1)».
+Lane1.DeviceDesc="Parrhesia L1"
+Lane2.DeviceDesc="Parrhesia L2"
+Lane3.DeviceDesc="Parrhesia L3"
 
 ;; friendly names
 VIRTUALAUDIODRIVER.WaveSpeaker.szPname="Parrhesia In"
@@ -191,4 +212,10 @@ VIRTUALAUDIODRIVER.WaveMicArray1.szPname="Parrhesia Out"
 VIRTUALAUDIODRIVER.TopologyMicArray1.szPname="Parrhesia Out"
 
 MicArray1CustomName= "Parrhesia Out"
+
+;; имена endpoints (KSPROPERTY_PIN_NAME → MediaCategories в software key):
+;; рендер = KSNODETYPE_SPEAKER, захват = KSNODETYPE_MICROPHONE_ARRAY
+;; (+ Name-GUID пина микрофона MICARRAY1_CUSTOM_NAME)
+EndpointNameRender="Parrhesia In"
+EndpointNameCapture="Parrhesia Out"
 

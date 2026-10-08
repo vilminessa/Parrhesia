@@ -33,6 +33,7 @@ EXT_CALLBACK   TimerNotifyRT;
 //=============================================================================
 class CMiniportWaveRT;
 typedef CMiniportWaveRT *PCMiniportWaveRT;
+class CParrhesiaFeed;
 
 //=============================================================================
 // Classes
@@ -88,6 +89,9 @@ protected:
     // Parrhesia feed: поток-читатель фида и совместимость его формата.
     BOOLEAN                     m_FeedClaimed = FALSE;
     BOOLEAN                     m_FeedFormatOk = FALSE;
+
+    // Feed СВОЕГО адаптера (lanes, М2): NULL — не capture-поток или фида нет.
+    CParrhesiaFeed* GetOwnFeed() const;
     ULONG                       m_ulDmaBufferSize;
     BYTE*                       m_pDmaBuffer;
     ULONG                       m_ulNotificationsPerBuffer;

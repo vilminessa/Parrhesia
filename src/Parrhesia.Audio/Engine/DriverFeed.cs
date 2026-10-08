@@ -18,13 +18,23 @@ public struct ParrhesiaFeedStats
 }
 
 /// <summary>
-/// Транспорт до ядро-фида виртуального микрофона (\\.\ParrhesiaFeed).
-/// Пишет PCM-блоки через IOCTL_PFEED_WRITE; драйвер отдаёт их потоку захвата.
-/// Канонический формат — PCM signed 32-bit, 48000 Гц, 2 канала (см. feed.h).
+/// Транспорт до ядро-фида виртуального микрофона
+/// (\\.\ParrhesiaFeed_<suffix>; legacy-имя без суффикса — для старых
+/// драйверов до переустановки). Пишет PCM-блоки через IOCTL_PFEED_WRITE;
+/// драйвер отдаёт их потоку захвата. Канонический формат — PCM signed
+/// 32-bit, 48000 Гц, 2 канала (см. feed.h).
 /// </summary>
 public sealed class DriverFeed : IDisposable
 {
+    /// <summary>Legacy-путь (драйвер до М2-переустановки).</summary>
     public const string DevicePath = "\\\\.\\ParrhesiaFeed";
+
+    /// <summary>Путь инстанса (lanes): \\.\ParrhesiaFeed_&lt;suffix&gt;.</summary>
+    public static string PathFor(string suffix) =>
+        "\\\\.\\ParrhesiaFeed_" + suffix;
+
+    /// <summary>Фактический путь этого экземпляра.</summary>
+    public string Path { get; private set; }
 
     /// <summary>Частота фида, Гц (должна совпадать с feed.h).</summary>
     public const int Rate = 48000;
@@ -55,9 +65,16 @@ public sealed class DriverFeed : IDisposable
     private static uint CtlCode(uint deviceType, uint function, uint method, uint access) =>
         (deviceType << 16) | (access << 14) | (function << 2) | method;
 
+    /// <summary>suffix — из VirtualEndpointResolver.TryGetFeedSuffix (null → legacy-путь).</summary>
+    public DriverFeed(string? suffix = null)
+    {
+        Path = string.IsNullOrEmpty(suffix) ? DevicePath : PathFor(suffix);
+    }
+
     /// <summary>
-    /// Открывает \\.\ParrhesiaFeed. Бросает <see cref="IOException"/> с текстом
-    /// ошибки Win32, если драйвер не установлен/фид не готов.
+    /// Открывает фид: сначала путь инстанса, при отказе — legacy
+    /// (драйвер ещё не переустановлен после М2). Бросает
+    /// <see cref="IOException"/> с текстом ошибки Win32, если не открылся ни один.
     /// </summary>
     public void Open()
     {
@@ -67,24 +84,37 @@ public sealed class DriverFeed : IDisposable
             return;
         }
 
-        var handle = NativeMethods.CreateFileW(
-            DevicePath,
-            NativeMethods.GenericWrite | NativeMethods.GenericRead,
-            (uint)FileShare.ReadWrite,
-            IntPtr.Zero,
-            FileMode.Open,
-            0,
-            IntPtr.Zero);
+        // Суффиксный путь первым; legacy — второй попыткой (только если отличается).
+        var candidates = Path == DevicePath
+            ? new[] { DevicePath }
+            : new[] { Path, DevicePath };
 
-        if (handle.IsInvalid)
+        IOException? last = null;
+        foreach (var candidate in candidates)
         {
+            var handle = NativeMethods.CreateFileW(
+                candidate,
+                NativeMethods.GenericWrite | NativeMethods.GenericRead,
+                (uint)FileShare.ReadWrite,
+                IntPtr.Zero,
+                FileMode.Open,
+                0,
+                IntPtr.Zero);
+
+            if (!handle.IsInvalid)
+            {
+                _handle = handle;
+                Path = candidate;
+                return;
+            }
+
             var error = Marshal.GetLastWin32Error();
             handle.Dispose();
-            throw new IOException(
-                $"Не удалось открыть {DevicePath} (ошибка {error}) — драйвер Parrhesia не установлен или фид не готов");
+            last = new IOException(
+                $"Не удалось открыть {candidate} (ошибка {error}) — драйвер Parrhesia не установлен или фид не готов");
         }
 
-        _handle = handle;
+        throw last!;
     }
 
     /// <summary>Пишет блок PCM из массива. Длина кратна кадру. false — фид не открыт.</summary>

@@ -59,6 +59,9 @@ public sealed class WasapiAudioEngine : IAudioEngine
     private string? _monitorName;
     private bool _sinkIsVirtual;
 
+    // Кэш «своих» эндпоинтов по InstanceId (М2; лениво, на время движка).
+    private HashSet<string>? _ownVirtualEndpoints;
+
     private bool _restartPending;
     private string _startStage = string.Empty;
     private string[] _bindings = [];
@@ -189,7 +192,15 @@ public sealed class WasapiAudioEngine : IAudioEngine
 
                     try
                     {
-                        var feed = new DriverFeed();
+                        // Feed своего инстанса (lanes, М2); при недоступности
+                        // PnP — legacy-путь (старый драйвер до переустановки).
+                        var suffix = VirtualEndpointResolver.TryGetFeedSuffix(out var s) ? s : null;
+                        var feed = new DriverFeed(suffix);
+                        if (suffix is not null)
+                        {
+                            LogMessage(EngineLogLevel.Info, $"Фид инстанса: {DriverFeed.PathFor(suffix)}");
+                        }
+
                         feed.Open(); // бросает исключение, если драйвер не установлен
                         _feed = feed;
                         opened.Add(new OpenedSink(plan, null, null));
@@ -293,6 +304,12 @@ public sealed class WasapiAudioEngine : IAudioEngine
             _sinkNames = opened.Select(Describe).ToArray();
             _sinkName = Describe(primary);
 
+            // Имена endpoints: «Parrhesia In/Out» вместо системных заглушек
+            // (только если имя ещё дефолтное — выбор владельца сохраняем).
+            // Работает при любом тракте: resolver вернёт только наши
+            // endpoints, при пустом наборе — no-op.
+            ApplyVirtualEndpointNames();
+
             // Цепочки слотов: загрузка/подготовка плагинов под формат движка
             // (max-блок100 мс — больше обоих путей вывода: player50 мс, помпа10 мс).
             _slotChains.Prepare(engineFormat.SampleRate, engineFormat.SampleRate / 10, engineFormat.Channels);
@@ -364,6 +381,82 @@ public sealed class WasapiAudioEngine : IAudioEngine
             ? "Parrhesia Out (виртуальный)"
             : sink.Device?.FriendlyName ?? sink.Plan.Name;
 
+    /// <summary>
+    /// Принадлежит ли capture-эндпоинт нашему виртуальному драйверу.
+    /// Основной путь — InstanceId: PnP-дети root-devnode'а с Service=
+    /// VirtualAudioDriver (устойчиво к переименованию и локализации);
+    /// фолбэк — имя, если PnP-дерево недоступно.
+    /// </summary>
+    private bool IsOwnVirtualEndpoint(MMDevice device)
+    {
+        try
+        {
+            _ownVirtualEndpoints ??= VirtualEndpointResolver.ResolveVirtualEndpointIds();
+            if (_ownVirtualEndpoints.Count > 0)
+            {
+                return _ownVirtualEndpoints.Contains(device.ID);
+            }
+        }
+        catch
+        {
+            // PnP недоступно — имя-фолбэк ниже.
+        }
+
+        return device.FriendlyName.Contains("Parrhesia", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Ставит «Parrhesia InN/OutN» своим endpoints при старте (N — номер
+    /// lanes,1..N по отсортированным instance-id) — только если имя ещё
+    /// системное (ручные переименования владельца не трогаем).
+    /// </summary>
+    private void ApplyVirtualEndpointNames()
+    {
+        try
+        {
+            foreach (var (lane, id) in VirtualEndpointResolver.ResolveLanedEndpoints())
+            {
+                // MMDevice.ID: {0.0.0.…} — рендер, {0.0.1.…} — захват.
+                var target = id.StartsWith("{0.0.0.", StringComparison.OrdinalIgnoreCase)
+                    ? $"Parrhesia In{lane}"
+                    : $"Parrhesia Out{lane}";
+
+                string current;
+                try
+                {
+                    using var enumerator = new MMDeviceEnumerator();
+                    using var device = enumerator.GetDevice(id);
+                    current = device.FriendlyName;
+                }
+                catch
+                {
+                    continue; // поток недоступен — пропускаем
+                }
+
+                var baseName = EndpointPolicy.StripAnyDeviceSuffix(current);
+                if (!EndpointPolicy.ShouldAutoRename(baseName))
+                {
+                    continue; // владелец переименовал вручную
+                }
+
+                if (EndpointPolicy.TryRename(id, target))
+                {
+                    LogMessage(EngineLogLevel.Info, $"Эндпоинт переименован: «{baseName}» → «{target}»");
+                }
+                else
+                {
+                    LogMessage(
+                        EngineLogLevel.Warning,
+                        $"Не удалось переименовать эндпоинт «{baseName}»: {EndpointPolicy.LastError}");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            LogMessage(EngineLogLevel.Warning, $"Авто-переименование endpoints: {ex.Message}");
+        }
+    }
+
     private void OpenSources(WaveFormat engineFormat, IReadOnlySet<string> sinkRenderIds)
     {
         foreach (var node in _graph.Nodes)
@@ -396,10 +489,11 @@ public sealed class WasapiAudioEngine : IAudioEngine
             // Петля через виртуальный вывод: при sink=фид наш Out-эндпоинт
             // кормится ИЗ этого же тракта — захват его замыкает цикл
             // (микшер → фид → Out → захват → микшер) и разгоняет переполнения.
-            // TODO(М2): определять надёжнее — по InstanceId инстанса, а не по имени.
+            // Определение — по InstanceId (PnP-дети нашего root-devnode), имя —
+            // только фолбэк при недоступности дерева (М2).
             if (_sinkIsVirtual &&
                 device.DataFlow == DataFlow.Capture &&
-                device.FriendlyName.Contains("Parrhesia", StringComparison.OrdinalIgnoreCase))
+                IsOwnVirtualEndpoint(device))
             {
                 LogMessage(
                     EngineLogLevel.Warning,

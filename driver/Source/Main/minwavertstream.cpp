@@ -14,6 +14,22 @@
 // CMiniportWaveRTStream
 //=============================================================================
 
+CParrhesiaFeed* CMiniportWaveRTStream::GetOwnFeed() const
+{
+    if (!m_bCapture || m_pMiniport == NULL)
+    {
+        return NULL;
+    }
+
+    PADAPTERCOMMON common = m_pMiniport->GetAdapterCommObj();
+    if (common == NULL)
+    {
+        return NULL;
+    }
+
+    return Feed_At(common->GetFeedIndex());
+}
+
 //=============================================================================
 #pragma code_seg("PAGE")
 CMiniportWaveRTStream::~CMiniportWaveRTStream
@@ -39,7 +55,11 @@ Return Value:
     // Parrhesia feed: отпустить фид, если поток всё ещё владеет.
     if (m_FeedClaimed)
     {
-        g_Feed.Release(this);
+        if (CParrhesiaFeed* feed = GetOwnFeed())
+        {
+            feed->Release(this);
+        }
+
         m_FeedClaimed = FALSE;
     }
 
@@ -1190,7 +1210,11 @@ NTSTATUS CMiniportWaveRTStream::SetState
             // Parrhesia feed: остановка потока отпускает фид.
             if (m_FeedClaimed)
             {
-                g_Feed.Release(this);
+                if (CParrhesiaFeed* feed = GetOwnFeed())
+                {
+                    feed->Release(this);
+                }
+
                 m_FeedClaimed = FALSE;
             }
 
@@ -1234,7 +1258,11 @@ NTSTATUS CMiniportWaveRTStream::SetState
             // Parrhesia feed: пауза тоже отпускает фид (чтение — только в RUN).
             if (m_FeedClaimed)
             {
-                g_Feed.Release(this);
+                if (CParrhesiaFeed* feed = GetOwnFeed())
+                {
+                    feed->Release(this);
+                }
+
                 m_FeedClaimed = FALSE;
             }
 
@@ -1276,7 +1304,15 @@ NTSTATUS CMiniportWaveRTStream::SetState
             // захват будет отдавать тишину.
             if (m_bCapture)
             {
-                m_FeedClaimed = g_Feed.TryClaim(this);
+                if (CParrhesiaFeed* feed = GetOwnFeed())
+                {
+                    m_FeedClaimed = feed->TryClaim(this);
+                }
+                else
+                {
+                    m_FeedClaimed = FALSE;
+                }
+
                 if (m_FeedClaimed)
                 {
                     m_FeedFormatOk =
@@ -1468,7 +1504,15 @@ ByteDisplacement - # of bytes to process.
         if (m_FeedClaimed && m_FeedFormatOk)
         {
             // Данные из Parrhesia feed (нехватка = тишина внутри Read).
-            g_Feed.Read(m_pDmaBuffer + bufferOffset, runWrite);
+            CParrhesiaFeed* feed = GetOwnFeed();
+            if (feed != NULL)
+            {
+                feed->Read(m_pDmaBuffer + bufferOffset, runWrite);
+            }
+            else
+            {
+                RtlZeroMemory(m_pDmaBuffer + bufferOffset, runWrite);
+            }
         }
         else
         {
