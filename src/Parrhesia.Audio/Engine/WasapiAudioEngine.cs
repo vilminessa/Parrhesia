@@ -192,7 +192,15 @@ public sealed class WasapiAudioEngine : IAudioEngine
 
                     try
                     {
-                        var feed = new DriverFeed();
+                        // Feed своего инстанса (lanes, М2); при недоступности
+                        // PnP — legacy-путь (старый драйвер до переустановки).
+                        var suffix = VirtualEndpointResolver.TryGetFeedSuffix(out var s) ? s : null;
+                        var feed = new DriverFeed(suffix);
+                        if (suffix is not null)
+                        {
+                            LogMessage(EngineLogLevel.Info, $"Фид инстанса: {DriverFeed.PathFor(suffix)}");
+                        }
+
                         feed.Open(); // бросает исключение, если драйвер не установлен
                         _feed = feed;
                         opened.Add(new OpenedSink(plan, null, null));

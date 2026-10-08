@@ -248,6 +248,36 @@ internal static class VirtualEndpointResolver
         }
     }
 
+    /// <summary>
+    /// Суффикс фида нашего драйвера (lanes, М2): instance-id первого devnode
+    /// с endpoints, с '\' → '_' — ровно так же имя строит драйвер
+    /// (GetInstanceIdSuffix в common.cpp). false — драйвера нет.
+    /// </summary>
+    public static bool TryGetFeedSuffix(out string suffix)
+    {
+        suffix = string.Empty;
+        try
+        {
+            foreach (var rootId in FindDriverRootInstanceIds())
+            {
+                foreach (var child in GetChildren(rootId))
+                {
+                    if (child.StartsWith(EndpointPrefix, StringComparison.OrdinalIgnoreCase))
+                    {
+                        suffix = rootId.Replace('\\', '_');
+                        return suffix.Length > 0;
+                    }
+                }
+            }
+        }
+        catch
+        {
+            // PnP-дерево недоступно — вызывающий уходит на legacy-путь.
+        }
+
+        return false;
+    }
+
     /// <summary>Прямые дети devnode'а (DEVPKEY_Device_Children, STRING_LIST).</summary>
     private static List<string> GetChildren(string instanceId)
     {

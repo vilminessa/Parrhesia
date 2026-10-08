@@ -29,4 +29,35 @@ public class VirtualEndpointResolverTests
 
         Assert.Equal(first, second);
     }
+
+    [Fact]
+    public void TryGetFeedSuffix_MatchesDriverDerivation()
+    {
+        var endpoints = VirtualEndpointResolver.ResolveVirtualEndpointIds();
+        var found = VirtualEndpointResolver.TryGetFeedSuffix(out var suffix);
+
+        if (endpoints.Count == 0)
+        {
+            Assert.False(found); // драйвера нет (CI) — суффикса тоже нет
+            return;
+        }
+
+        Assert.True(found, "драйвер установлен, но суффикс фида не разобран");
+        Assert.NotEmpty(suffix);
+        Assert.DoesNotContain("\\", suffix); // санирован: '\' → '_'
+        Assert.Contains("MEDIA", suffix);    // instance-id нашего devnode
+    }
+
+    [Fact]
+    public void DriverFeed_PathFor_BuildsInstancePath()
+    {
+        Assert.Equal(
+            "\\\\.\\ParrhesiaFeed_ROOT_MEDIA_0001",
+            Parrhesia.Audio.Engine.DriverFeed.PathFor("ROOT_MEDIA_0001"));
+
+        // Legacy-конструктор без суффикса — старое имя.
+        Assert.Equal(
+            "\\\\.\\ParrhesiaFeed",
+            new Parrhesia.Audio.Engine.DriverFeed().Path);
+    }
 }
