@@ -67,15 +67,19 @@ public class ClapHostTests
     public void Gain_State_RoundTrip()
     {
         using var plugin = ClapLoader.Load(Dll, GainId);
-        plugin.Prepare(SampleRate, MaxBlock, 2);
+        var parameters = Assert.IsAssignableFrom<IPluginParameters>(plugin);
+
+        // Плагин неактивен → Set уходит через params.flush и применяется сразу.
+        parameters.SetParameterValue(1, 3.5);
+        Assert.Equal(3.5, parameters.GetParameterValue(1));
 
         byte[]? state = plugin.GetState();
         Assert.NotNull(state);
-        Assert.Equal(4, state.Length);
+        Assert.Equal(12, state.Length); // u32 magic + f64 gain
 
-        var expected = new byte[] { 9, 8, 7, 6 };
-        plugin.SetState(expected);
-        Assert.Equal(expected, plugin.GetState());
+        plugin.SetState(state);
+        Assert.Equal(state, plugin.GetState());
+        Assert.Equal(3.5, parameters.GetParameterValue(1)); // gain пережил reload
 
         plugin.SetState(null);
         Assert.NotNull(plugin.GetState());

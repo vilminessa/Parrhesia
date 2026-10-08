@@ -947,6 +947,7 @@ public partial class GraphView : UserControl
 
     private void HideInspector()
     {
+        CloseSlotParams();
         InspectorPanel.Visibility = Visibility.Collapsed;
         NodeSection.Visibility = Visibility.Collapsed;
         RouteSection.Visibility = Visibility.Collapsed;
@@ -1005,6 +1006,12 @@ public partial class GraphView : UserControl
 
     private void RebuildSlotRows(AudioNode node)
     {
+        // Параметры открыты на другом узле — закрываем.
+        if (_paramsNodeId is { } openNodeId && openNodeId != node.Id)
+        {
+            CloseSlotParams();
+        }
+
         SlotsHost.Children.Clear();
         for (var i = 0; i < node.Slots.Count; i++)
         {
@@ -1046,8 +1053,15 @@ public partial class GraphView : UserControl
             row.Children.Add(BuildSlotButton("↓", "Ниже", index < node.Slots.Count - 1, (_, _) => MoveSlot(node, index, +1)));
             row.Children.Add(BuildSlotButton("✕", "Убрать", true, (_, _) => RemoveSlot(node, index)));
             row.Children.Add(BuildSlotButton("✎", "Редактор плагина", true, (_, _) => OpenSlotEditor(node, index)));
+            row.Children.Add(BuildSlotButton("⚙", "Параметры слота", true, (_, _) => ToggleSlotParams(node, index)));
 
             SlotsHost.Children.Add(row);
+        }
+
+        // Слот, чьи параметры были открыты, мог исчезнуть/переехать.
+        if (_paramsNodeId == node.Id && (_paramsSlotIndex < 0 || _paramsSlotIndex >= node.Slots.Count))
+        {
+            CloseSlotParams();
         }
     }
 
@@ -1068,6 +1082,199 @@ public partial class GraphView : UserControl
         return button;
     }
 
+    // ===== Параметры слота (IPluginParameters; секция под списком эффектов) =====
+
+    private Guid? _paramsNodeId;
+    private int _paramsSlotIndex = -1;
+    private bool _syncingParams;
+    private System.Windows.Threading.DispatcherTimer? _paramsTimer;
+    private readonly List<(
+        Slider Slider,
+        Parrhesia.Plugins.IPluginParameters Owner,
+        Parrhesia.Plugins.PluginParameter Param,
+        TextBlock Value)> _paramsRows = [];
+
+    private void ToggleSlotParams(AudioNode node, int index)
+    {
+        if (_syncing || index < 0 || index >= node.Slots.Count)
+        {
+            return;
+        }
+
+        if (_paramsNodeId == node.Id && _paramsSlotIndex == index)
+        {
+            CloseSlotParams();
+            return;
+        }
+
+        CloseSlotParams();
+
+        var slot = node.Slots[index];
+        var instance = AppServices.Engine.GetSlotInstance(node.Id, index);
+        if (instance is not Parrhesia.Plugins.IPluginParameters parameters)
+        {
+            MessageBox.Show(
+                Window.GetWindow(this),
+                instance is null
+                    ? "Слот не загружен — параметры доступны после запуска движка."
+                    : "Этот плагин не предоставляет параметры.",
+                "Параметры",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
+            return;
+        }
+
+        var title = string.IsNullOrEmpty(slot.Name)
+            ? System.IO.Path.GetFileNameWithoutExtension(slot.Path)
+            : slot.Name;
+
+        ParamsHost.Children.Clear();
+        var visible = 0;
+        foreach (var parameter in parameters.GetParameters())
+        {
+            if (parameter.IsHidden)
+            {
+                continue;
+            }
+
+            ParamsHost.Children.Add(BuildParamRow(parameters, parameter));
+            visible++;
+        }
+
+        if (visible == 0)
+        {
+            MessageBox.Show(
+                Window.GetWindow(this),
+                "У плагина нет видимых параметров.",
+                "Параметры",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
+            return;
+        }
+
+        ParamsTitle.Text = "Параметры: " + title;
+        _paramsNodeId = node.Id;
+        _paramsSlotIndex = index;
+        ParamsSection.Visibility = Visibility.Visible;
+
+        // Живые изменения из GUI плагина — отражаем опросом (500 мс).
+        _paramsTimer = new System.Windows.Threading.DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(500),
+        };
+        _paramsTimer.Tick += OnParamsTimerTick;
+        _paramsTimer.Start();
+    }
+
+    private UIElement BuildParamRow(
+        Parrhesia.Plugins.IPluginParameters parameters,
+        Parrhesia.Plugins.PluginParameter parameter)
+    {
+        var grid = new Grid { Margin = new Thickness(0, 2, 0, 0) };
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(110) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(62) });
+
+        var title = new TextBlock
+        {
+            Text = parameter.Name,
+            ToolTip = string.IsNullOrEmpty(parameter.Module)
+                ? parameter.Name
+                : parameter.Module + " / " + parameter.Name,
+            VerticalAlignment = VerticalAlignment.Center,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            Margin = new Thickness(0, 0, 6, 0),
+        };
+        Grid.SetColumn(title, 0);
+        grid.Children.Add(title);
+
+        var valueText = new TextBlock
+        {
+            Text = parameters.FormatParameterValue(parameter.Id, parameters.GetParameterValue(parameter.Id)),
+            VerticalAlignment = VerticalAlignment.Center,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Margin = new Thickness(6, 0, 0, 0),
+        };
+
+        var slider = new Slider
+        {
+            Minimum = parameter.Min,
+            Maximum = parameter.Max,
+            Value = parameters.GetParameterValue(parameter.Id),
+            IsEnabled = !parameter.IsReadOnly,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+
+        if (parameter.IsStepped)
+        {
+            slider.IsSnapToTickEnabled = true;
+            slider.TickFrequency = 1;
+        }
+
+        slider.ValueChanged += (_, e) =>
+        {
+            if (_syncingParams)
+            {
+                return; // программное обновление из таймера — плагин уже знает
+            }
+
+            parameters.SetParameterValue(parameter.Id, e.NewValue);
+            valueText.Text = parameters.FormatParameterValue(parameter.Id, e.NewValue);
+        };
+
+        Grid.SetColumn(slider, 1);
+        grid.Children.Add(slider);
+        Grid.SetColumn(valueText, 2);
+        grid.Children.Add(valueText);
+
+        _paramsRows.Add((slider, parameters, parameter, valueText));
+        return grid;
+    }
+
+    private void OnParamsTimerTick(object? sender, EventArgs e)
+    {
+        foreach (var (slider, owner, parameter, valueText) in _paramsRows)
+        {
+            if (!slider.IsEnabled || slider.IsMouseCaptureWithin)
+            {
+                continue;
+            }
+
+            var current = owner.GetParameterValue(parameter.Id);
+            if (Math.Abs(current - slider.Value) < 1e-9)
+            {
+                continue;
+            }
+
+            _syncingParams = true;
+            try
+            {
+                slider.Value = current;
+                valueText.Text = owner.FormatParameterValue(parameter.Id, current);
+            }
+            finally
+            {
+                _syncingParams = false;
+            }
+        }
+    }
+
+    private void CloseSlotParams()
+    {
+        if (_paramsTimer is not null)
+        {
+            _paramsTimer.Stop();
+            _paramsTimer.Tick -= OnParamsTimerTick;
+            _paramsTimer = null;
+        }
+
+        _paramsNodeId = null;
+        _paramsSlotIndex = -1;
+        _paramsRows.Clear();
+        ParamsHost.Children.Clear();
+        ParamsSection.Visibility = Visibility.Collapsed;
+    }
+
     private void SetSlotEnabled(AudioNode node, int index, bool enabled)
     {
         if (_syncing)
@@ -1085,6 +1292,8 @@ public partial class GraphView : UserControl
             return;
         }
 
+        CloseSlotParams(); // индексы слотов сдвигаются
+
         var target = index + delta;
         if (target < 0 || target >= node.Slots.Count)
         {
@@ -1099,6 +1308,11 @@ public partial class GraphView : UserControl
         if (_syncing)
         {
             return;
+        }
+
+        if (_paramsNodeId == node.Id && _paramsSlotIndex == index)
+        {
+            CloseSlotParams(); // удаляется именно открытый слот
         }
 
         _graph.RemoveSlot(node.Id, index);
