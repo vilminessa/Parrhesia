@@ -117,4 +117,11 @@ NTSTATUS Feed_Initialize(_In_ PDRIVER_OBJECT DriverObject);
 // Убивает все инстансы (вызывается из DriverUnload).
 void Feed_Cleanup();
 
+// ===== Диагностика (софт-ключ устройства: Device Parameters\ParrhesiaDiag) =====
+// Битовая маска пройденных этапов StartDevice/Init + статус фида + suffix —
+// вскрывает место обрыва без подключённого отладчика (М2/поддержка).
+void Feed_DiagSet(_In_ PDEVICE_OBJECT DeviceObject, _In_ ULONG Bit);
+void Feed_DiagSetStatus(_In_ PDEVICE_OBJECT DeviceObject, _In_ NTSTATUS Status);
+void Feed_DiagSetSuffix(_In_ PDEVICE_OBJECT DeviceObject, _In_ const WCHAR* Suffix);
+
 #endif // _PARRHESIA_FEED_H_

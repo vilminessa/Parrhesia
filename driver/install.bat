@@ -15,17 +15,23 @@ if not exist "%PKG%\VirtualAudioDriver.inf" goto :no_package
 if not exist "%DEVCON%" goto :no_devcon
 
 echo Установка пакета и создание device instances (base + lanes)...
+rem ВНИМАНИЕ: devcon возвращает1 и при успешной установке (например,
+rem «требуется перезагрузка») — по exit-коду НЕ судим; результат ниже
+rem проверяется статусом.
 "%DEVCON%" install "%PKG%\VirtualAudioDriver.inf" ROOT\VirtualAudioDriver
-if errorlevel 1 goto :install_failed
+if errorlevel 2 goto :install_failed
 
 rem Лanes (М2): каждый HW-ID = отдельный devnode со своей парой endpoints.
-rem Ошибка лана не фатальна — база уже установлена.
 "%DEVCON%" install "%PKG%\VirtualAudioDriver.inf" ROOT\ParrhesiaLane1
-if errorlevel 1 echo [warn] Lane1 не установился
 "%DEVCON%" install "%PKG%\VirtualAudioDriver.inf" ROOT\ParrhesiaLane2
-if errorlevel 1 echo [warn] Lane2 не установился
 "%DEVCON%" install "%PKG%\VirtualAudioDriver.inf" ROOT\ParrhesiaLane3
-if errorlevel 1 echo [warn] Lane3 не установился
+
+echo.
+echo === Статусы ===
+"%DEVCON%" status ROOT\VirtualAudioDriver
+"%DEVCON%" status ROOT\ParrhesiaLane1
+"%DEVCON%" status ROOT\ParrhesiaLane2
+"%DEVCON%" status ROOT\ParrhesiaLane3
 
 echo.
 echo Готово. В "Звуке" должны появиться "Parrhesia In" и "Parrhesia Out".

@@ -713,6 +713,8 @@ Return Value:
 
     NTSTATUS        ntStatus    = STATUS_SUCCESS;
 
+    Feed_DiagSet(DeviceObject, 0x01); // init entered
+
     m_pServiceGroupWave     = NULL;
     m_pDeviceObject         = DeviceObject;
     m_pPhysicalDeviceObject = NULL;
@@ -732,6 +734,8 @@ Return Value:
         DPF(D_ERROR, ("PcGetPhysicalDeviceObject failed, 0x%x", ntStatus)),
         Done);
 
+    Feed_DiagSet(DeviceObject, 0x02); // pdo ok
+
     //
     // Create a WDF miniport to represent the adapter. Note that WDF miniports 
     // are NOT audio miniports. An audio adapter is associated with a single WDF
@@ -749,6 +753,8 @@ Return Value:
         DPF(D_ERROR, ("WdfDeviceMiniportCreate failed, 0x%x", ntStatus)),
         Done);
 
+    Feed_DiagSet(DeviceObject, 0x04); // wdf ok
+
     // Initialize HW.
     // 
     m_pHW = new (POOL_FLAG_NON_PAGED, VIRTUALAUDIODRIVER_POOLTAG)  CVirtualAudioDriverHW;
@@ -761,12 +767,16 @@ Return Value:
     
     m_pHW->MixerReset();
 
+    Feed_DiagSet(DeviceObject, 0x08); // hw ok
+
     //
     // Initialize SaveData class.
     //
     CSaveData::SetDeviceObject(DeviceObject);   //device object is needed by CSaveData
     ntStatus = CSaveData::InitializeWorkItems(DeviceObject);
     IF_FAILED_JUMP(ntStatus, Done);
+
+    Feed_DiagSet(DeviceObject, 0x10); // savedata ok
 
     //
     // Feed инстанса (lanes, М2): устройство \\.\ParrhesiaFeed_<suffix>,
@@ -780,13 +790,19 @@ Return Value:
         NTSTATUS feedStatus = GetInstanceIdSuffix(DeviceObject, suffix, 64);
         if (NT_SUCCESS(feedStatus))
         {
+            Feed_DiagSetSuffix(DeviceObject, suffix);
             feedStatus = Feed_CreateInstance(DeviceObject->DriverObject, suffix, &m_FeedIndex);
         }
 
+        Feed_DiagSetStatus(DeviceObject, feedStatus);
         if (!NT_SUCCESS(feedStatus))
         {
             DPF(D_ERROR, ("[Feed] instance create failed, status = 0x%x (работаем без фида)", feedStatus));
             m_FeedIndex = -1;
+        }
+        else
+        {
+            Feed_DiagSet(DeviceObject, 0x20); // feed ok
         }
     }
 Done:

@@ -405,6 +405,105 @@ void Feed_DestroyInstance(_In_ INT index)
 }
 #pragma code_seg()
 
+#pragma code_seg("PAGE")
+void Feed_DiagSet(_In_ PDEVICE_OBJECT DeviceObject, _In_ ULONG Bit)
+{
+    PAGED_CODE();
+
+    if (DeviceObject == NULL || Bit == 0)
+    {
+        return;
+    }
+
+    UNICODE_STRING nameStage;
+    RtlInitUnicodeString(&nameStage, L"Stage");
+
+    HANDLE key = NULL;
+    if (!NT_SUCCESS(IoOpenDeviceRegistryKey(
+            DeviceObject, PLUGPLAY_REGKEY_DEVICE, KEY_SET_VALUE | FILE_READ_ATTRIBUTES, &key)))
+    {
+        return;
+    }
+
+    ULONG stage = 0;
+    ULONG len = 0;
+    ZwQueryValueKey(key,
+        &nameStage, KeyValuePartialInformation, NULL, 0, &len);
+    if (len > 0)
+    {
+        PKEY_VALUE_PARTIAL_INFORMATION info =
+            (PKEY_VALUE_PARTIAL_INFORMATION)ExAllocatePool2(POOL_FLAG_PAGED, len, 'gaiD');
+        if (info != NULL)
+        {
+            if (NT_SUCCESS(ZwQueryValueKey(key,
+                    &nameStage, KeyValuePartialInformation, info, len, &len)) &&
+                info->DataLength >= sizeof(ULONG))
+            {
+                stage = *(PULONG)info->Data;
+            }
+
+            ExFreePoolWithTag(info, 'gaiD');
+        }
+    }
+
+    stage |= Bit;
+    ZwSetValueKey(key, &nameStage, 0, REG_DWORD, &stage, sizeof(stage));
+    ZwClose(key);
+}
+
+#pragma code_seg("PAGE")
+void Feed_DiagSetStatus(_In_ PDEVICE_OBJECT DeviceObject, _In_ NTSTATUS Status)
+{
+    PAGED_CODE();
+
+    if (DeviceObject == NULL)
+    {
+        return;
+    }
+
+    UNICODE_STRING nameStatus;
+    RtlInitUnicodeString(&nameStatus, L"FeedStatus");
+
+    HANDLE key = NULL;
+    if (!NT_SUCCESS(IoOpenDeviceRegistryKey(
+            DeviceObject, PLUGPLAY_REGKEY_DEVICE, KEY_SET_VALUE | FILE_READ_ATTRIBUTES, &key)))
+    {
+        return;
+    }
+
+    NTSTATUS status = Status;
+    ZwSetValueKey(key, &nameStatus, 0, REG_DWORD, &status, sizeof(status));
+    ZwClose(key);
+}
+
+#pragma code_seg("PAGE")
+void Feed_DiagSetSuffix(_In_ PDEVICE_OBJECT DeviceObject, _In_ const WCHAR* Suffix)
+{
+    PAGED_CODE();
+
+    if (DeviceObject == NULL || Suffix == NULL)
+    {
+        return;
+    }
+
+    UNICODE_STRING nameSuffix;
+    RtlInitUnicodeString(&nameSuffix, L"FeedSuffix");
+
+    HANDLE key = NULL;
+    if (!NT_SUCCESS(IoOpenDeviceRegistryKey(
+            DeviceObject, PLUGPLAY_REGKEY_DEVICE, KEY_SET_VALUE | FILE_READ_ATTRIBUTES, &key)))
+    {
+        return;
+    }
+
+    UNICODE_STRING value;
+    RtlInitUnicodeString(&value, Suffix);
+    ZwSetValueKey(key, &nameSuffix, 0, REG_SZ,
+        value.Buffer, value.Length + sizeof(WCHAR));
+    ZwClose(key);
+}
+#pragma code_seg()
+
 //=============================================================================
 // Control-устройство: диспетчеры
 //=============================================================================

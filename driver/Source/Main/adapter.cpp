@@ -631,6 +631,7 @@ InstallAllRenderFilters(
     
     ntStatus = STATUS_SUCCESS;
 
+
 Exit:
     return ntStatus;
 }
@@ -681,6 +682,7 @@ InstallAllCaptureFilters(
     }
 
     ntStatus = STATUS_SUCCESS;
+
 
 Exit:
     return ntStatus;
@@ -749,25 +751,35 @@ Return Value:
     ntStatus = pUnknownCommon->QueryInterface( IID_IAdapterCommon,(PVOID *) &pAdapterCommon);
     IF_FAILED_JUMP(ntStatus, Exit);
 
+    Feed_DiagSet(DeviceObject, 0x100); // adapter common created
+
     ntStatus = pAdapterCommon->Init(DeviceObject);
     IF_FAILED_JUMP(ntStatus, Exit);
 
     //
+    Feed_DiagSet(DeviceObject, 0x200); // Init ok
+
     // register with PortCls for power-management services
     ntStatus = PcRegisterAdapterPowerManagement( PUNKNOWN(pAdapterCommon), DeviceObject);
     IF_FAILED_JUMP(ntStatus, Exit);
 
     //
+    Feed_DiagSet(DeviceObject, 0x400); // power mgmt ok
+
     // Install wave+topology filters for render devices
     //
     ntStatus = InstallAllRenderFilters(DeviceObject, Irp, pAdapterCommon);
     IF_FAILED_JUMP(ntStatus, Exit);
 
     //
+    Feed_DiagSet(DeviceObject, 0x800); // render filters ok
+
     // Install wave+topology filters for capture devices
     //
     ntStatus = InstallAllCaptureFilters(DeviceObject, Irp, pAdapterCommon);
     IF_FAILED_JUMP(ntStatus, Exit);
+
+    Feed_DiagSet(DeviceObject, 0x1000); // capture filters ok
 
 Exit:
 
