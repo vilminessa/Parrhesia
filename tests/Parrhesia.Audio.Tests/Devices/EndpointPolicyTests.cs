@@ -75,8 +75,15 @@ public class EndpointPolicyTests
             return; // драйвер не установлен (CI) —skip
         }
 
-        const string temporary = "Parrhesia Rename Test (Parrhesia Virtual Audio)";
-        if (!EndpointPolicy.TryRename(endpoint.Id, temporary))
+        // Отображаемое имя = pid2 + " (" + имя-устройства + ")":
+        // работаем с БАЗОВЫМ именем (без суффикса) и сравниваем с учётом него.
+        const string suffix = " (Parrhesia Virtual Audio)";
+        var originalBase = endpoint.Name.EndsWith(suffix, StringComparison.Ordinal)
+            ? endpoint.Name[..^suffix.Length]
+            : endpoint.Name;
+
+        const string temporaryBase = "Parrhesia Rename Test";
+        if (!EndpointPolicy.TryRename(endpoint.Id, temporaryBase))
         {
             // Механизм переименования недоступен в этой среде (ACL store /
             // отказ политики) — факты в LastError, тест фиксирует только
@@ -88,20 +95,20 @@ public class EndpointPolicyTests
         {
             Assert.True(
                 WaitUntil(
-                    () => ReadEndpoint(endpoint.Id, DataFlow.Render)?.Name == temporary,
+                    () => ReadEndpoint(endpoint.Id, DataFlow.Render)?.Name == temporaryBase + suffix,
                     TimeSpan.FromSeconds(2)),
-                "имя не изменилось после SetPropertyValue");
+                $"имя не изменилось: сейчас [{ReadEndpoint(endpoint.Id, DataFlow.Render)?.Name}]");
         }
         finally
         {
-            EndpointPolicy.TryRename(endpoint.Id, endpoint.Name); // откат
+            EndpointPolicy.TryRename(endpoint.Id, originalBase); // откат к исходному базовому имени
         }
 
         Assert.True(
             WaitUntil(
                 () => ReadEndpoint(endpoint.Id, DataFlow.Render)?.Name == endpoint.Name,
                 TimeSpan.FromSeconds(2)),
-            "имя не вернулось после отката");
+            $"имя не вернулось: сейчас [{ReadEndpoint(endpoint.Id, DataFlow.Render)?.Name}]");
     }
 
     [Fact]

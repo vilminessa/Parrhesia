@@ -19,11 +19,14 @@ public static class EndpointPolicy
     // Класс политики конфигурации аудио (AudioSes.dll; замена PolicyConfigClient).
     private static readonly Guid PolicyConfigClientClsid = new("870AF99C-171D-4F9E-AF0D-E63DF40C2BC9");
 
-    // PKEY_Device_FriendlyName {a45c254e-df1c-4efd-8020-67d146a850e0},14.
+    // PKEY_Device_DeviceDesc {a45c254e-df1c-4efd-8020-67d146a850e0},2 —
+    // «базовое имя» эндпоинта: ровно то, что переписывает mmsys.cpl
+    // (проверено вручную: переименование пишет pid2, отображение =
+    //  pid2 + " (" + имя-устройства + ")").
     private static readonly PropertyKey FriendlyNameKey = new()
     {
         Fmtid = new Guid("a45c254e-df1c-4efd-8020-67d146a850e0"),
-        Pid = 14,
+        Pid = 2,
     };
 
     private const ushort VtLpWStr = 31;
