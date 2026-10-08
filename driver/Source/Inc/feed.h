@@ -32,6 +32,12 @@ Abstract:
 #define PFEED_SYMLINK_NAME  L"\\DosDevices\\ParrhesiaFeed"
 #define PFEED_USER_PATH     "\\\\.\\ParrhesiaFeed"
 
+// Инстансы (lanes): каждое устройство адаптера создаёт свой feed
+// \\.\ParrhesiaFeed_<suffix> (suffix — instance-id девnode c '\' → '_',
+// например ROOT_MEDIA_0001 — глобально уникален).
+#define PFEED_MAX_INSTANCES 8
+#define PFEED_NAME_CCH      96
+
 #define PFEED_DEVICE_TYPE   FILE_DEVICE_UNKNOWN
 
 #define IOCTL_PFEED_WRITE      CTL_CODE(PFEED_DEVICE_TYPE, 0x800, METHOD_BUFFERED, FILE_WRITE_DATA)
@@ -85,14 +91,30 @@ private:
     LONG                m_FormatMismatch;
 };
 
-extern CParrhesiaFeed g_Feed;
+// ===== Инстансы (per-adapter feed; см. М2-lanes) =====
 
-// Создаёт control-устройство \\.\ParrhesiaFeed и заворачивает dispatch
-// (CREATE/CLOSE/CLEANUP/DEVICE_CONTROL) с сохранением обработчиков PortCls
-// для остальных device object'ов. Ошибка не фатальна (фид просто не готов).
+// Создаёт control-устройство \\.\ParrhesiaFeed_<suffix> для адаптера.
+// suffix — безопасное имя (без '\'), например "ROOT_MEDIA_0001".
+// outIndex — слот (для Feed_At/Feed_DestroyInstance); ошибка не фатальна
+// для работы драйвера (фид просто не готов).
+NTSTATUS Feed_CreateInstance(
+    _In_ PDRIVER_OBJECT DriverObject,
+    _In_ const WCHAR* suffix,
+    _Out_ INT* outIndex);
+
+// Удаляет устройство/симлинк слота и кольцо. index=-1 — no-op.
+void Feed_DestroyInstance(_In_ INT index);
+
+// Кольцо фида по слоту; невалидный index → NULL (вызывающий обязан
+// проверять: потоки читают тишину, IOCTL — отклоняется).
+CParrhesiaFeed* Feed_At(_In_ INT index);
+
+// Создаёт control-устройство (LEGACY-имя \\.\ParrhesiaFeed) и заворачивает
+// диспетчер (CREATE/CLOSE/CLEANUP/DEVICE_CONTROL) с сохранением обработчиков
+// PortCls для остальных device object'ов. Ошибка не фатальна (фид не готов).
 NTSTATUS Feed_Initialize(_In_ PDRIVER_OBJECT DriverObject);
 
-// Удаляет symlink/device и освобождает кольцо. Вызывается из DriverUnload.
+// Убивает все инстансы (вызывается из DriverUnload).
 void Feed_Cleanup();
 
 #endif // _PARRHESIA_FEED_H_

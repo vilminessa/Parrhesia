@@ -19,6 +19,9 @@ virtualaudiodriver.sys=222
 
 [VIRTUALAUDIODRIVER.NT$ARCH$.10.0...22000]
 %VIRTUALAUDIODRIVER_SA.DeviceDesc%=VIRTUALAUDIODRIVER_SA, ROOT\VirtualAudioDriver
+%Lane1.DeviceDesc%=VIRTUALAUDIODRIVER_SA, ROOT\ParrhesiaLane1
+%Lane2.DeviceDesc%=VIRTUALAUDIODRIVER_SA, ROOT\ParrhesiaLane2
+%Lane3.DeviceDesc%=VIRTUALAUDIODRIVER_SA, ROOT\ParrhesiaLane3
 
 [DestinationDirs]
 VIRTUALAUDIODRIVER_SA.CopyList=13 ; 13=Package's DriverStore directory
@@ -193,6 +196,12 @@ MsCopyRight  = "(c) Parrhesia project"
 
 VIRTUALAUDIODRIVER_SA.DeviceDesc="Parrhesia Virtual Audio"
 VirtualAudioDriver.SvcDesc="Parrhesia Audio Driver"
+
+;; лanes (М2): тот же драйвер, отдельные HW-ID → свой devnode + своя пара
+;; endpoints + свой feed (\\.\ParrhesiaFeed_<suffix>)
+Lane1.DeviceDesc="Parrhesia Virtual Audio Lane1"
+Lane2.DeviceDesc="Parrhesia Virtual Audio Lane2"
+Lane3.DeviceDesc="Parrhesia Virtual Audio Lane3"
 
 ;; friendly names
 VIRTUALAUDIODRIVER.WaveSpeaker.szPname="Parrhesia In"

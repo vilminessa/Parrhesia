@@ -15,6 +15,7 @@ Abstract:
 
 #include <initguid.h>
 #include "definitions.h"
+#include "feed.h"
 #include "hw.h"
 #include "savedata.h"
 #include "endpoints.h"
@@ -25,6 +26,141 @@ Abstract:
 
 PSAVEWORKER_PARAM       CSaveData::m_pWorkItems = NULL;
 PDEVICE_OBJECT          CSaveData::m_pDeviceObject = NULL;
+
+//-----------------------------------------------------------------------------
+// Instance-id → безопасный суффикс имени (lanes, М2):
+// "ROOT\MEDIA\0001" → "ROOT_MEDIA_0001"
+// Источник: полный путь ключа устройства (IoOpenDeviceRegistryKey →
+// ZwQueryKey KeyNameInformation) = ...\Enum\<instance-id>\Device Parameters.
+// (В WDM-enum DEVICE_REGISTRY_PROPERTY нет instance-id; devpkey.h в KM-
+//  контексте ломает include-цепочку.)
+//-----------------------------------------------------------------------------
+
+typedef struct _PARR_KEY_NAME_INFO
+{
+    ULONG NameLength;   // байты
+    WCHAR Name[1];      // variable
+} PARR_KEY_NAME_INFO, *PPARR_KEY_NAME_INFO;
+
+// Копирует символы src[start..end) с '\' → '_'.
+static void CopySanitized(_Out_writes_(cch) WCHAR* out, _In_ ULONG cch,
+    _In_reads_(len) const WCHAR* src, _In_ ULONG len)
+{
+    ULONG i = 0;
+    for (; i < len && i < cch - 1; i++)
+    {
+        out[i] = (src[i] == L'\\') ? L'_' : src[i];
+    }
+
+    out[i] = L'\0';
+}
+
+// Поиск подстроки (безwcsstr в KM-контексте): позиция после prefix, либо -1.
+static LONG FindAfter(_In_reads_(hayLen) const WCHAR* hay, _In_ ULONG hayLen,
+    _In_reads_(needleLen) const WCHAR* needle, _In_ ULONG needleLen,
+    _In_ ULONG from)
+{
+    if (needleLen == 0 || hayLen < needleLen)
+    {
+        return -1;
+    }
+
+    for (ULONG i = from; i + needleLen <= hayLen; i++)
+    {
+        ULONG j = 0;
+        for (; j < needleLen; j++)
+        {
+            if (hay[i + j] != needle[j])
+            {
+                break;
+            }
+        }
+
+        if (j == needleLen)
+        {
+            return (LONG)(i + needleLen);
+        }
+    }
+
+    return -1;
+}
+
+#pragma code_seg("PAGE")
+static NTSTATUS GetInstanceIdSuffix(
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _Out_writes_(cch) WCHAR* out,
+    _In_ ULONG cch)
+{
+    PAGED_CODE();
+
+    if (DeviceObject == NULL || out == NULL || cch == 0)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    out[0] = L'\0';
+
+    HANDLE key = NULL;
+    NTSTATUS status = IoOpenDeviceRegistryKey(
+        DeviceObject, PLUGPLAY_REGKEY_DEVICE, FILE_READ_ATTRIBUTES, &key);
+    if (!NT_SUCCESS(status) || key == NULL)
+    {
+        return NT_SUCCESS(status) ? STATUS_NOT_FOUND : status;
+    }
+
+    ULONG size = 0;
+    status = ZwQueryKey(key, KeyNameInformation, NULL, 0, &size);
+    if (status != STATUS_BUFFER_TOO_SMALL && status != STATUS_BUFFER_OVERFLOW)
+    {
+        ZwClose(key);
+        return NT_SUCCESS(status) ? STATUS_NOT_FOUND : status;
+    }
+
+    PPARR_KEY_NAME_INFO info =
+        (PPARR_KEY_NAME_INFO)ExAllocatePool2(POOL_FLAG_PAGED, size, 'eeFP');
+    if (info == NULL)
+    {
+        ZwClose(key);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    status = ZwQueryKey(key, KeyNameInformation, info, size, &size);
+    ZwClose(key);
+
+    if (NT_SUCCESS(status))
+    {
+        const WCHAR* path = info->Name;
+        const ULONG pathChars = info->NameLength / sizeof(WCHAR);
+
+        // ...\CurrentControlSet\Enum\<instance>\Device Parameters
+        static const WCHAR enumMark[] = L"\\Enum\\";
+        static const WCHAR tailMark[] = L"\\Device Parameters";
+        LONG start = FindAfter(path, pathChars, enumMark, 7, 0);
+        LONG end = -1;
+        if (start >= 0)
+        {
+            end = FindAfter(path, pathChars, tailMark, 18, (ULONG)start);
+        }
+
+        if (start >= 0 && end > start)
+        {
+            CopySanitized(out, cch, path + start, (ULONG)(end - start) - 18);
+            if (out[0] == L'\0')
+            {
+                status = STATUS_NOT_FOUND;
+            }
+        }
+        else
+        {
+            status = STATUS_NOT_FOUND;
+        }
+    }
+
+    ExFreePoolWithTag(info, 'eeFP');
+    return status;
+}
+#pragma code_seg()
+
 //=============================================================================
 // Classes
 //=============================================================================
@@ -47,9 +183,12 @@ class CAdapterCommon :
         PCVirtualAudioDriverHW   m_pHW;                  // Virtual Simple Audio Sample HW object
         PPORTCLSETWHELPER       m_pPortClsEtwHelper;
 
-        static LONG             m_AdapterInstances;     // # of adapter objects.
+        static LONG             m_AdapterInstances;     // # of adapter objects. (lanes)
 
         DWORD                   m_dwIdleRequests;
+
+        // Слот per-adapter feed'а (\\.\ParrhesiaFeed_<suffix>); -1 — без фида.
+        INT                     m_FeedIndex = -1;
 
     public:
         //=====================================================================
@@ -57,6 +196,9 @@ class CAdapterCommon :
         DECLARE_STD_UNKNOWN();
         DEFINE_STD_CONSTRUCTOR(CAdapterCommon);
         ~CAdapterCommon();
+
+        // IAdapterCommon (lanes, М2): слот per-adapter feed'а; -1 — без фида.
+        STDMETHODIMP_(INT) GetFeedIndex(void);
 
         //=====================================================================
         // Default IAdapterPowerManagement
@@ -376,22 +518,20 @@ Return Value:
     NTSTATUS ntStatus;
 
     //
-    // This sample supports only one instance of this object.
-    // (b/c of CSaveData's static members and Bluetooth HFP logic). 
+    // Многоадаптерность (lanes, М2): счётчик вместо запрета единственности —
+    // каждый devnode получает свой адаптер и свой feed. CSaveData-статики
+    // идемпотентны (guard в InitializeWorkItems), волновой путь CSaveData
+    // этим фичей не используется (аудит — в отчёте М2).
     //
-    if (InterlockedCompareExchange(&CAdapterCommon::m_AdapterInstances, 1, 0) != 0)
-    {
-        ntStatus = STATUS_DEVICE_BUSY;
-        DPF(D_ERROR, ("NewAdapterCommon failed, only one instance is allowed"));
-        goto Done;
-    }
-    
+    InterlockedIncrement(&CAdapterCommon::m_AdapterInstances);
+
     //
     // Allocate an adapter object.
     //
     CAdapterCommon *p = new(PoolFlags, MINADAPTER_POOLTAG) CAdapterCommon(UnknownOuter);
     if (p == NULL)
     {
+        InterlockedDecrement(&CAdapterCommon::m_AdapterInstances);
         ntStatus = STATUS_INSUFFICIENT_RESOURCES;
         DPF(D_ERROR, ("NewAdapterCommon failed, 0x%x", ntStatus));
         goto Done;
@@ -431,6 +571,10 @@ Return Value:
     PAGED_CODE();
     DPF_ENTER(("[CAdapterCommon::~CAdapterCommon]"));
 
+    // Feed инстанса — вместе с адаптером (lanes, М2).
+    Feed_DestroyInstance(m_FeedIndex);
+    m_FeedIndex = -1;
+
     if (m_pHW)
     {
         delete m_pHW;
@@ -448,8 +592,16 @@ Return Value:
     }
 
     InterlockedDecrement(&CAdapterCommon::m_AdapterInstances);
-    ASSERT(CAdapterCommon::m_AdapterInstances == 0);
+    // ASSERT(==0) удалён: lanes — несколько адаптеров, счётчик нулевой
+    // только после остановки последнего.
 } // ~CAdapterCommon  
+
+//=============================================================================
+STDMETHODIMP_(INT)
+CAdapterCommon::GetFeedIndex(void)
+{
+    return m_FeedIndex;
+}
 
 //=============================================================================
 #pragma code_seg("PAGE")
@@ -615,6 +767,28 @@ Return Value:
     CSaveData::SetDeviceObject(DeviceObject);   //device object is needed by CSaveData
     ntStatus = CSaveData::InitializeWorkItems(DeviceObject);
     IF_FAILED_JUMP(ntStatus, Done);
+
+    //
+    // Feed инстанса (lanes, М2): устройство \\.\ParrhesiaFeed_<suffix>,
+    // suffix — instance-id PDO c '\' → '_' (глобально уникален).
+    // Ошибка не фатальна: адаптер работает, поток читает тишину, user-mode
+    // получит отказ открытия фида.
+    //
+    m_FeedIndex = -1;
+    {
+        WCHAR suffix[64] = {0};
+        NTSTATUS feedStatus = GetInstanceIdSuffix(DeviceObject, suffix, 64);
+        if (NT_SUCCESS(feedStatus))
+        {
+            feedStatus = Feed_CreateInstance(DeviceObject->DriverObject, suffix, &m_FeedIndex);
+        }
+
+        if (!NT_SUCCESS(feedStatus))
+        {
+            DPF(D_ERROR, ("[Feed] instance create failed, status = 0x%x (работаем без фида)", feedStatus));
+            m_FeedIndex = -1;
+        }
+    }
 Done:
 
     return ntStatus;

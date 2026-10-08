@@ -17,22 +17,34 @@ Abstract:
 
 #include "definitions.h"
 #include "feed.h"
+#include <ntstrsafe.h>
 
 //=============================================================================
 // Globals
 //=============================================================================
 
-CParrhesiaFeed g_Feed;
+// Слоты инстансов (per-adapter). Хранение статическое: CParrhesiaFeed без
+// конструктора (см. feed.h), вся память обнуляется загрузчиком.
+typedef struct _FEED_SLOT
+{
+    CParrhesiaFeed Feed;
+    PDEVICE_OBJECT Device;
+    UNICODE_STRING DeviceName;
+    UNICODE_STRING Symlink;
+    BOOLEAN        SymlinkCreated;
+    BOOLEAN        Used;
+    WCHAR          DeviceNameBuffer[PFEED_NAME_CCH];
+    WCHAR          SymlinkBuffer[PFEED_NAME_CCH];
+} FEED_SLOT;
 
-static PDEVICE_OBJECT  g_FeedDevice = NULL;
-static UNICODE_STRING  g_FeedSymlink = RTL_CONSTANT_STRING(PFEED_SYMLINK_NAME);
-static BOOLEAN         g_FeedSymlinkCreated = FALSE;
+static FEED_SLOT g_Feeds[PFEED_MAX_INSTANCES];
 
 // Оригинальные обработчики PortCls (до заворачивания).
 static PDRIVER_DISPATCH g_OrigCreate = NULL;
 static PDRIVER_DISPATCH g_OrigCleanup = NULL;
 static PDRIVER_DISPATCH g_OrigClose = NULL;
 static PDRIVER_DISPATCH g_OrigDeviceControl = NULL;
+static BOOLEAN g_FeedDispatchHooked = FALSE;
 
 //=============================================================================
 // CParrhesiaFeed
@@ -241,20 +253,168 @@ void CParrhesiaFeed::GetStats(PPFEED_STATS stats)
 }
 
 //=============================================================================
-// Control-устройство: диспетчеры
+// Слоты инстансов
 //=============================================================================
 
-static BOOLEAN IsFeedDevice(_In_ PDEVICE_OBJECT DeviceObject)
+static INT FeedIndexOfDevice(_In_ PDEVICE_OBJECT DeviceObject)
 {
-    return (g_FeedDevice != NULL && DeviceObject == g_FeedDevice) ? TRUE : FALSE;
+    if (DeviceObject == NULL)
+    {
+        return -1;
+    }
+
+    for (INT i = 0; i < PFEED_MAX_INSTANCES; i++)
+    {
+        if (g_Feeds[i].Used && g_Feeds[i].Device == DeviceObject)
+        {
+            return i;
+        }
+    }
+
+    return -1;
 }
+
+CParrhesiaFeed* Feed_At(_In_ INT index)
+{
+    if (index < 0 || index >= PFEED_MAX_INSTANCES || !g_Feeds[index].Used)
+    {
+        return NULL;
+    }
+
+    return &g_Feeds[index].Feed;
+}
+
+#pragma code_seg("PAGE")
+NTSTATUS Feed_CreateInstance(
+    _In_ PDRIVER_OBJECT DriverObject,
+    _In_ const WCHAR* suffix,
+    _Out_ INT* outIndex)
+{
+    PAGED_CODE();
+
+    *outIndex = -1;
+    if (suffix == NULL || *suffix == L'\0' || DriverObject == NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    INT slot = -1;
+    for (INT i = 0; i < PFEED_MAX_INSTANCES; i++)
+    {
+        if (!g_Feeds[i].Used)
+        {
+            slot = i;
+            break;
+        }
+    }
+
+    if (slot < 0)
+    {
+        DPF(D_ERROR, ("[Feed] нет свободных слотов инстансов"));
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    FEED_SLOT* s = &g_Feeds[slot];
+
+    NTSTATUS status = s->Feed.Init();
+    if (!NT_SUCCESS(status))
+    {
+        DPF(D_ERROR, ("[Feed] Init failed, status = %X", status));
+        return status;
+    }
+
+    status = RtlStringCchPrintfW(
+        s->DeviceNameBuffer, PFEED_NAME_CCH, L"\\Device\\ParrhesiaFeed_%s", suffix);
+    if (NT_SUCCESS(status))
+    {
+        status = RtlStringCchPrintfW(
+            s->SymlinkBuffer, PFEED_NAME_CCH, L"\\DosDevices\\ParrhesiaFeed_%s", suffix);
+    }
+
+    if (!NT_SUCCESS(status))
+    {
+        DPF(D_ERROR, ("[Feed] имя инстанса не построено, status = %X", status));
+        s->Feed.Free();
+        return status;
+    }
+
+    RtlInitUnicodeString(&s->DeviceName, s->DeviceNameBuffer);
+    RtlInitUnicodeString(&s->Symlink, s->SymlinkBuffer);
+
+    status = IoCreateDevice(
+        DriverObject,
+        0,
+        &s->DeviceName,
+        FILE_DEVICE_UNKNOWN,
+        FILE_DEVICE_SECURE_OPEN,
+        FALSE,
+        &s->Device);
+    if (!NT_SUCCESS(status))
+    {
+        DPF(D_ERROR, ("[Feed] IoCreateDevice(%ws) failed, status = %X", s->DeviceNameBuffer, status));
+        s->Feed.Free();
+        s->Device = NULL;
+        return status;
+    }
+
+    status = IoCreateSymbolicLink(&s->Symlink, &s->DeviceName);
+    if (!NT_SUCCESS(status))
+    {
+        DPF(D_ERROR, ("[Feed] IoCreateSymbolicLink(%ws) failed, status = %X", s->SymlinkBuffer, status));
+        IoDeleteDevice(s->Device);
+        s->Device = NULL;
+        s->Feed.Free();
+        return status;
+    }
+
+    s->SymlinkCreated = TRUE;
+    s->Used = TRUE;
+    s->Device->Flags |= DO_BUFFERED_IO;
+    s->Device->Flags &= ~DO_DEVICE_INITIALIZING;
+
+    *outIndex = slot;
+    DPF(D_TERSE, ("[Feed] instance ready: %ws (slot %d)", s->SymlinkBuffer, slot));
+    return STATUS_SUCCESS;
+}
+
+void Feed_DestroyInstance(_In_ INT index)
+{
+    PAGED_CODE();
+
+    if (index < 0 || index >= PFEED_MAX_INSTANCES || !g_Feeds[index].Used)
+    {
+        return;
+    }
+
+    FEED_SLOT* s = &g_Feeds[index];
+    if (s->SymlinkCreated)
+    {
+        IoDeleteSymbolicLink(&s->Symlink);
+        s->SymlinkCreated = FALSE;
+    }
+
+    if (s->Device != NULL)
+    {
+        IoDeleteDevice(s->Device);
+        s->Device = NULL;
+    }
+
+    s->Feed.Free();
+    s->Used = FALSE;
+    DPF(D_TERSE, ("[Feed] instance destroyed: slot %d", index));
+}
+#pragma code_seg()
+
+//=============================================================================
+// Control-устройство: диспетчеры
+//=============================================================================
 
 #pragma code_seg("PAGE")
 static NTSTATUS FeedCreateClose(_In_ PDEVICE_OBJECT DeviceObject, _In_ PIRP Irp)
 {
     PAGED_CODE();
 
-    if (IsFeedDevice(DeviceObject))
+    if (FeedIndexOfDevice(DeviceObject) >= 0)
     {
         Irp->IoStatus.Status = STATUS_SUCCESS;
         Irp->IoStatus.Information = 0;
@@ -276,7 +436,7 @@ static NTSTATUS FeedCleanup(_In_ PDEVICE_OBJECT DeviceObject, _In_ PIRP Irp)
 {
     PAGED_CODE();
 
-    if (IsFeedDevice(DeviceObject))
+    if (FeedIndexOfDevice(DeviceObject) >= 0)
     {
         Irp->IoStatus.Status = STATUS_SUCCESS;
         Irp->IoStatus.Information = 0;
@@ -293,12 +453,14 @@ static NTSTATUS FeedDeviceControl(_In_ PDEVICE_OBJECT DeviceObject, _In_ PIRP Ir
 {
     PAGED_CODE();
 
-    if (!IsFeedDevice(DeviceObject))
+    const INT feedIndex = FeedIndexOfDevice(DeviceObject);
+    if (feedIndex < 0)
     {
         // KS- и прочие IOCTL идут в FDO — передаём PortCls без изменений.
         return g_OrigDeviceControl(DeviceObject, Irp);
     }
 
+    CParrhesiaFeed* feed = &g_Feeds[feedIndex].Feed;
     PIO_STACK_LOCATION irpSp = IoGetCurrentIrpStackLocation(Irp);
     NTSTATUS status = STATUS_INVALID_DEVICE_REQUEST;
     ULONG_PTR information = 0;
@@ -320,7 +482,7 @@ static NTSTATUS FeedDeviceControl(_In_ PDEVICE_OBJECT DeviceObject, _In_ PIRP Ir
         }
         else
         {
-            g_Feed.Write((const BYTE *)buffer, inLen);
+            feed->Write((const BYTE *)buffer, inLen);
             status = STATUS_SUCCESS;
             information = inLen;
         }
@@ -339,7 +501,7 @@ static NTSTATUS FeedDeviceControl(_In_ PDEVICE_OBJECT DeviceObject, _In_ PIRP Ir
         else
         {
             PFEED_STATS stats = {};
-            g_Feed.GetStats(&stats);
+            feed->GetStats(&stats);
             RtlCopyMemory(buffer, &stats, sizeof(stats));
             status = STATUS_SUCCESS;
             information = sizeof(stats);
@@ -368,43 +530,13 @@ NTSTATUS Feed_Initialize(_In_ PDRIVER_OBJECT DriverObject)
 {
     PAGED_CODE();
 
-    NTSTATUS status = g_Feed.Init();
-    if (!NT_SUCCESS(status))
+    // Устройства инстансов создаёт адаптер (Feed_CreateInstance);
+    // здесь — только заворачивание диспетчера поверх PortCls.
+    if (g_FeedDispatchHooked)
     {
-        DPF(D_ERROR, ("[Feed] Init failed, status = %X", status));
-        return status;
+        return STATUS_SUCCESS;
     }
 
-    UNICODE_STRING deviceName = RTL_CONSTANT_STRING(PFEED_DEVICE_NAME);
-    status = IoCreateDevice(
-        DriverObject,
-        0,
-        &deviceName,
-        FILE_DEVICE_UNKNOWN,
-        FILE_DEVICE_SECURE_OPEN,
-        FALSE,
-        &g_FeedDevice);
-    if (!NT_SUCCESS(status))
-    {
-        DPF(D_ERROR, ("[Feed] IoCreateDevice failed, status = %X", status));
-        g_Feed.Free();
-        g_FeedDevice = NULL;
-        return status;
-    }
-
-    status = IoCreateSymbolicLink(&g_FeedSymlink, &deviceName);
-    if (!NT_SUCCESS(status))
-    {
-        DPF(D_ERROR, ("[Feed] IoCreateSymbolicLink failed, status = %X", status));
-        IoDeleteDevice(g_FeedDevice);
-        g_FeedDevice = NULL;
-        g_Feed.Free();
-        return status;
-    }
-    g_FeedSymlinkCreated = TRUE;
-
-    // Заворачиваем диспетчеры: свои — только для control-устройства,
-    // остальным DO достаётся сохранённый обработчик PortCls.
     g_OrigCreate = DriverObject->MajorFunction[IRP_MJ_CREATE];
     g_OrigCleanup = DriverObject->MajorFunction[IRP_MJ_CLEANUP];
     g_OrigClose = DriverObject->MajorFunction[IRP_MJ_CLOSE];
@@ -414,11 +546,9 @@ NTSTATUS Feed_Initialize(_In_ PDRIVER_OBJECT DriverObject)
     DriverObject->MajorFunction[IRP_MJ_CLOSE] = FeedCreateClose;
     DriverObject->MajorFunction[IRP_MJ_CLEANUP] = FeedCleanup;
     DriverObject->MajorFunction[IRP_MJ_DEVICE_CONTROL] = FeedDeviceControl;
+    g_FeedDispatchHooked = TRUE;
 
-    g_FeedDevice->Flags |= DO_BUFFERED_IO;
-    g_FeedDevice->Flags &= ~DO_DEVICE_INITIALIZING;
-
-    DPF(D_TERSE, ("[Feed] control device ready"));
+    DPF(D_TERSE, ("[Feed] dispatch hooked (instances: per-adapter)"));
     return STATUS_SUCCESS;
 }
 #pragma code_seg()
@@ -428,18 +558,9 @@ void Feed_Cleanup()
 {
     PAGED_CODE();
 
-    if (g_FeedSymlinkCreated)
+    for (INT i = 0; i < PFEED_MAX_INSTANCES; i++)
     {
-        IoDeleteSymbolicLink(&g_FeedSymlink);
-        g_FeedSymlinkCreated = FALSE;
+        Feed_DestroyInstance(i);
     }
-
-    if (g_FeedDevice != NULL)
-    {
-        IoDeleteDevice(g_FeedDevice);
-        g_FeedDevice = NULL;
-    }
-
-    g_Feed.Free();
 }
 #pragma code_seg()

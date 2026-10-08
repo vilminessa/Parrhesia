@@ -268,6 +268,12 @@ DECLARE_INTERFACE_(IAdapterCommon, IUnknown)
         THIS
     ) PURE;
 
+    // Слот per-adapter feed'а (lanes, М2); -1 — без фида.
+    STDMETHOD_(INT,             GetFeedIndex)
+    (
+        THIS
+    ) PURE;
+
     STDMETHOD_(VOID,            SetWaveServiceGroup) 
     ( 
         THIS_
