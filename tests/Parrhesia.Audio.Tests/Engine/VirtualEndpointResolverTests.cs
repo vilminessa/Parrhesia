@@ -60,4 +60,33 @@ public class VirtualEndpointResolverTests
             "\\\\.\\ParrhesiaFeed",
             new Parrhesia.Audio.Engine.DriverFeed().Path);
     }
+
+    [Fact]
+    public void ResolveLanedEndpoints_LanesAreMonotonicAndIdsWellFormed()
+    {
+        var laned = VirtualEndpointResolver.ResolveLanedEndpoints();
+
+        if (laned.Count == 0)
+        {
+            return; // драйвера нет (CI)
+        }
+
+        // Номера ланов не убывают (сортировка instance-id).
+        var previous = 0;
+        foreach (var (lane, id) in laned)
+        {
+            Assert.True(lane >= previous, "номера ланов обязаны идти по неубывающей");
+            previous = lane;
+            Assert.StartsWith("{0.0.", id, StringComparison.OrdinalIgnoreCase);
+        }
+
+        // Каждый лан содержит и рендер, и захват.
+        var lanes = laned.Select(x => x.Lane).Distinct().ToList();
+        foreach (var lane in lanes)
+        {
+            var ids = laned.Where(x => x.Lane == lane).Select(x => x.EndpointId).ToList();
+            Assert.Contains(ids, id => id.StartsWith("{0.0.0.", StringComparison.OrdinalIgnoreCase));
+            Assert.Contains(ids, id => id.StartsWith("{0.0.1.", StringComparison.OrdinalIgnoreCase));
+        }
+    }
 }

@@ -56,6 +56,7 @@ static void CopySanitized(_Out_writes_(cch) WCHAR* out, _In_ ULONG cch,
 }
 
 // Поиск подстроки (безwcsstr в KM-контексте): позиция после prefix, либо -1.
+// Регистронезависимо: реестр возвращает путь в разном регистре.
 static LONG FindAfter(_In_reads_(hayLen) const WCHAR* hay, _In_ ULONG hayLen,
     _In_reads_(needleLen) const WCHAR* needle, _In_ ULONG needleLen,
     _In_ ULONG from)
@@ -70,7 +71,7 @@ static LONG FindAfter(_In_reads_(hayLen) const WCHAR* hay, _In_ ULONG hayLen,
         ULONG j = 0;
         for (; j < needleLen; j++)
         {
-            if (hay[i + j] != needle[j])
+            if (RtlUpcaseUnicodeChar(hay[i + j]) != RtlUpcaseUnicodeChar(needle[j]))
             {
                 break;
             }
@@ -100,19 +101,24 @@ static NTSTATUS GetInstanceIdSuffix(
 
     out[0] = L'\0';
 
+    // Вызывается с PDO (см. Init): software key инстанса — у PDO.
     HANDLE key = NULL;
     NTSTATUS status = IoOpenDeviceRegistryKey(
-        DeviceObject, PLUGPLAY_REGKEY_DEVICE, FILE_READ_ATTRIBUTES, &key);
+        DeviceObject, PLUGPLAY_REGKEY_DEVICE, KEY_QUERY_VALUE, &key);
     if (!NT_SUCCESS(status) || key == NULL)
     {
+        Feed_DiagLog(L"SfxKeyFail");
         return NT_SUCCESS(status) ? STATUS_NOT_FOUND : status;
     }
+
+    Feed_DiagLog(L"SfxKeyOk");
 
     ULONG size = 0;
     status = ZwQueryKey(key, KeyNameInformation, NULL, 0, &size);
     if (status != STATUS_BUFFER_TOO_SMALL && status != STATUS_BUFFER_OVERFLOW)
     {
         ZwClose(key);
+        Feed_DiagLog(L"SfxNameFail");
         return NT_SUCCESS(status) ? STATUS_NOT_FOUND : status;
     }
 
@@ -121,6 +127,7 @@ static NTSTATUS GetInstanceIdSuffix(
     if (info == NULL)
     {
         ZwClose(key);
+        Feed_DiagLog(L"SfxAllocFail");
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
@@ -135,11 +142,11 @@ static NTSTATUS GetInstanceIdSuffix(
         // ...\CurrentControlSet\Enum\<instance>\Device Parameters
         static const WCHAR enumMark[] = L"\\Enum\\";
         static const WCHAR tailMark[] = L"\\Device Parameters";
-        LONG start = FindAfter(path, pathChars, enumMark, 7, 0);
+        LONG start = FindAfter(path, pathChars, enumMark, SIZEOF_ARRAY(enumMark) - 1, 0);
         LONG end = -1;
         if (start >= 0)
         {
-            end = FindAfter(path, pathChars, tailMark, 18, (ULONG)start);
+            end = FindAfter(path, pathChars, tailMark, SIZEOF_ARRAY(tailMark) - 1, (ULONG)start);
         }
 
         if (start >= 0 && end > start)
@@ -156,6 +163,13 @@ static NTSTATUS GetInstanceIdSuffix(
         }
     }
 
+    Feed_DiagLog(NT_SUCCESS(status) ? L"SfxOk" : L"SfxParseFail");
+    if (!NT_SUCCESS(status))
+    {
+        // Отладка: полный путь ключа в сервис-ключ (REG_SZ SfxPath).
+        extern void Feed_DiagLogString(const WCHAR* Name, const WCHAR* Value, ULONG Chars);
+        Feed_DiagLogString(L"SfxPath", info->Name, info->NameLength / sizeof(WCHAR));
+    }
     ExFreePoolWithTag(info, 'eeFP');
     return status;
 }
@@ -787,10 +801,9 @@ Return Value:
     m_FeedIndex = -1;
     {
         WCHAR suffix[64] = {0};
-        NTSTATUS feedStatus = GetInstanceIdSuffix(DeviceObject, suffix, 64);
+        NTSTATUS feedStatus = GetInstanceIdSuffix(m_pPhysicalDeviceObject, suffix, 64);
         if (NT_SUCCESS(feedStatus))
         {
-            Feed_DiagSetSuffix(DeviceObject, suffix);
             feedStatus = Feed_CreateInstance(DeviceObject->DriverObject, suffix, &m_FeedIndex);
         }
 

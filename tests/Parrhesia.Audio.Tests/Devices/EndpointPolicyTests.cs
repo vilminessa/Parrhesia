@@ -98,7 +98,7 @@ public class EndpointPolicyTests
         {
             Assert.True(
                 WaitUntil(
-                    () => ReadEndpoint(endpoint.Id, DataFlow.Render)?.Name == temporaryBase + suffix,
+                    () => HasBaseName(ReadEndpoint(endpoint.Id, DataFlow.Render)?.Name, temporaryBase),
                     TimeSpan.FromSeconds(2)),
                 $"имя не изменилось: сейчас [{ReadEndpoint(endpoint.Id, DataFlow.Render)?.Name}]");
         }
@@ -109,10 +109,14 @@ public class EndpointPolicyTests
 
         Assert.True(
             WaitUntil(
-                () => ReadEndpoint(endpoint.Id, DataFlow.Render)?.Name == endpoint.Name,
+                () => HasBaseName(ReadEndpoint(endpoint.Id, DataFlow.Render)?.Name, originalBase),
                 TimeSpan.FromSeconds(2)),
             $"имя не вернулось: сейчас [{ReadEndpoint(endpoint.Id, DataFlow.Render)?.Name}]");
     }
+
+    private static bool HasBaseName(string? displayName, string expectedBase) =>
+        displayName is not null &&
+        Parrhesia.Audio.Devices.EndpointPolicy.StripAnyDeviceSuffix(displayName) == expectedBase;
 
     [Fact]
     public void StripDeviceSuffix_RemovesAndKeeps()
@@ -146,6 +150,20 @@ public class EndpointPolicyTests
             Parrhesia.Audio.Devices.EndpointPolicy.ShouldAutoRename("1Динамики"));
         Assert.False(
             Parrhesia.Audio.Devices.EndpointPolicy.ShouldAutoRename("Мой вход"));
+    }
+
+    [Fact]
+    public void StripAnyDeviceSuffix_RemovesTrailingParentheses()
+    {
+        Assert.Equal(
+            "Parrhesia In1",
+            Parrhesia.Audio.Devices.EndpointPolicy.StripAnyDeviceSuffix("Parrhesia In1 (Parrhesia)"));
+        Assert.Equal(
+            "Parrhesia Out2",
+            Parrhesia.Audio.Devices.EndpointPolicy.StripAnyDeviceSuffix("Parrhesia Out2"));
+        Assert.Equal(
+            "1Динамики",
+            Parrhesia.Audio.Devices.EndpointPolicy.StripAnyDeviceSuffix("1Динамики (Parrhesia Virtual Audio)"));
     }
 
     [Fact]

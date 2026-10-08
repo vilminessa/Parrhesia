@@ -49,6 +49,19 @@ public static class EndpointPolicy
     /// <summary>Диагностика последнего отказа (для тестов/логов).</summary>
     internal static string? LastError { get; private set; }
 
+    /// <summary>Снимает суффикс « (…)» с отображаемого имени (любое имя
+    /// устройства — конфигурация драйвера может менять суффикс).</summary>
+    internal static string StripAnyDeviceSuffix(string displayName)
+    {
+        var open = displayName.LastIndexOf(" (", StringComparison.Ordinal);
+        if (open > 0 && displayName.EndsWith(')'))
+        {
+            return displayName[..open];
+        }
+
+        return displayName;
+    }
+
     /// <summary>Снимает суффикс « (имя-устройства)» с отображаемого имени.</summary>
     internal static string StripDeviceSuffix(string displayName, string productName)
     {

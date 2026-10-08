@@ -120,8 +120,16 @@ void Feed_Cleanup();
 // ===== Диагностика (софт-ключ устройства: Device Parameters\ParrhesiaDiag) =====
 // Битовая маска пройденных этапов StartDevice/Init + статус фида + suffix —
 // вскрывает место обрыва без подключённого отладчика (М2/поддержка).
+// ДУБЛЬ: те же события пишутся в сервис-ключ
+// (Services\VirtualAudioDriver: T_<метка>, S<ptr>_<бит>, F<ptr>=status) —
+// переживает отказ device-ключа.
 void Feed_DiagSet(_In_ PDEVICE_OBJECT DeviceObject, _In_ ULONG Bit);
 void Feed_DiagSetStatus(_In_ PDEVICE_OBJECT DeviceObject, _In_ NTSTATUS Status);
-void Feed_DiagSetSuffix(_In_ PDEVICE_OBJECT DeviceObject, _In_ const WCHAR* Suffix);
+
+// Метка-событие в сервис-ключ (DriverEntry/AddDevice — точки без DeviceObject).
+void Feed_DiagLog(_In_ const WCHAR* Tag);
+
+// Отладочное REG_SZ-значение в сервис-ключ (имя+строка).
+void Feed_DiagLogString(_In_ const WCHAR* Name, _In_ const WCHAR* Value, _In_ ULONG Chars);
 
 #endif // _PARRHESIA_FEED_H_

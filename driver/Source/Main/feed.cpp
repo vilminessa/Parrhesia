@@ -46,6 +46,9 @@ static PDRIVER_DISPATCH g_OrigClose = NULL;
 static PDRIVER_DISPATCH g_OrigDeviceControl = NULL;
 static BOOLEAN g_FeedDispatchHooked = FALSE;
 
+// Дубль диагностики в сервис-ключ (определение ниже, перед Feed_DiagSet*).
+static void DiagLogToService(_In_ const WCHAR* NameFormat, _In_ ULONG Arg1, _In_ ULONG Arg2, _In_ DWORD Value);
+
 //=============================================================================
 // CParrhesiaFeed
 //=============================================================================
@@ -415,40 +418,14 @@ void Feed_DiagSet(_In_ PDEVICE_OBJECT DeviceObject, _In_ ULONG Bit)
         return;
     }
 
-    UNICODE_STRING nameStage;
-    RtlInitUnicodeString(&nameStage, L"Stage");
-
-    HANDLE key = NULL;
-    if (!NT_SUCCESS(IoOpenDeviceRegistryKey(
-            DeviceObject, PLUGPLAY_REGKEY_DEVICE, KEY_SET_VALUE | FILE_READ_ATTRIBUTES, &key)))
-    {
-        return;
-    }
-
-    ULONG stage = 0;
-    ULONG len = 0;
-    ZwQueryValueKey(key,
-        &nameStage, KeyValuePartialInformation, NULL, 0, &len);
-    if (len > 0)
-    {
-        PKEY_VALUE_PARTIAL_INFORMATION info =
-            (PKEY_VALUE_PARTIAL_INFORMATION)ExAllocatePool2(POOL_FLAG_PAGED, len, 'gaiD');
-        if (info != NULL)
-        {
-            if (NT_SUCCESS(ZwQueryValueKey(key,
-                    &nameStage, KeyValuePartialInformation, info, len, &len)) &&
-                info->DataLength >= sizeof(ULONG))
-            {
-                stage = *(PULONG)info->Data;
-            }
-
-            ExFreePoolWithTag(info, 'gaiD');
-        }
-    }
-
-    stage |= Bit;
-    ZwSetValueKey(key, &nameStage, 0, REG_DWORD, &stage, sizeof(stage));
-    ZwClose(key);
+    // Только сервис-ключ: software key устройства недоступен из этого
+    // контекста (эмпирически IoOpenDeviceRegistryKey отказывает; журнал М2).
+    // Формат: S<ptr-low>_<bit> = 1.
+    DiagLogToService(
+        L"S%x_%x",
+        (ULONG)((ULONG_PTR)DeviceObject & 0xFFFFFFFFu),
+        Bit,
+        1);
 }
 
 #pragma code_seg("PAGE")
@@ -461,48 +438,106 @@ void Feed_DiagSetStatus(_In_ PDEVICE_OBJECT DeviceObject, _In_ NTSTATUS Status)
         return;
     }
 
-    UNICODE_STRING nameStatus;
-    RtlInitUnicodeString(&nameStatus, L"FeedStatus");
+    // Только сервис-ключ (см. Feed_DiagSet): F<ptr-low> = NTSTATUS.
+    DiagLogToService(
+        L"F%x",
+        (ULONG)((ULONG_PTR)DeviceObject & 0xFFFFFFFFu),
+        0,
+        (DWORD)Status);
+}
 
-    HANDLE key = NULL;
-    if (!NT_SUCCESS(IoOpenDeviceRegistryKey(
-            DeviceObject, PLUGPLAY_REGKEY_DEVICE, KEY_SET_VALUE | FILE_READ_ATTRIBUTES, &key)))
+#pragma code_seg("PAGE")
+void Feed_DiagLog(_In_ const WCHAR* Tag)
+{
+    PAGED_CODE();
+
+    if (Tag == NULL)
     {
         return;
     }
 
-    NTSTATUS status = Status;
-    ZwSetValueKey(key, &nameStatus, 0, REG_DWORD, &status, sizeof(status));
+    WCHAR name[128];
+    if (!NT_SUCCESS(RtlStringCchPrintfW(name, 128, L"T_%s", Tag)))
+    {
+        return;
+    }
+
+    UNICODE_STRING valueName;
+    RtlInitUnicodeString(&valueName, name);
+
+    UNICODE_STRING path;
+    RtlInitUnicodeString(&path,
+        L"\\Registry\\Machine\\System\\CurrentControlSet\\Services\\VirtualAudioDriver");
+    OBJECT_ATTRIBUTES oa;
+    InitializeObjectAttributes(&oa, &path, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
+
+    HANDLE key = NULL;
+    if (!NT_SUCCESS(ZwOpenKey(&key, KEY_SET_VALUE, &oa)))
+    {
+        return;
+    }
+
+    DWORD one = 1;
+    ZwSetValueKey(key, &valueName, 0, REG_DWORD, &one, sizeof(one));
+    ZwClose(key);
+}
+
+// Пишет DWORD-значение в сервис-ключ (дубль device-ключа диагностики).
+static void DiagLogToService(_In_ const WCHAR* NameFormat, _In_ ULONG Arg1, _In_ ULONG Arg2, _In_ DWORD Value)
+{
+    WCHAR name[64];
+    if (!NT_SUCCESS(RtlStringCchPrintfW(name, 64, NameFormat, Arg1, Arg2)))
+    {
+        return;
+    }
+
+    UNICODE_STRING valueName;
+    RtlInitUnicodeString(&valueName, name);
+
+    UNICODE_STRING path;
+    RtlInitUnicodeString(&path,
+        L"\\Registry\\Machine\\System\\CurrentControlSet\\Services\\VirtualAudioDriver");
+    OBJECT_ATTRIBUTES oa;
+    InitializeObjectAttributes(&oa, &path, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
+
+    HANDLE key = NULL;
+    if (!NT_SUCCESS(ZwOpenKey(&key, KEY_SET_VALUE, &oa)))
+    {
+        return;
+    }
+
+    ZwSetValueKey(key, &valueName, 0, REG_DWORD, &Value, sizeof(Value));
     ZwClose(key);
 }
 
 #pragma code_seg("PAGE")
-void Feed_DiagSetSuffix(_In_ PDEVICE_OBJECT DeviceObject, _In_ const WCHAR* Suffix)
+void Feed_DiagLogString(_In_ const WCHAR* Name, _In_ const WCHAR* Value, _In_ ULONG Chars)
 {
     PAGED_CODE();
 
-    if (DeviceObject == NULL || Suffix == NULL)
+    if (Name == NULL || Value == NULL)
     {
         return;
     }
 
-    UNICODE_STRING nameSuffix;
-    RtlInitUnicodeString(&nameSuffix, L"FeedSuffix");
+    UNICODE_STRING valueName;
+    RtlInitUnicodeString(&valueName, Name);
+
+    UNICODE_STRING path;
+    RtlInitUnicodeString(&path,
+        L"\\Registry\\Machine\\System\\CurrentControlSet\\Services\\VirtualAudioDriver");
+    OBJECT_ATTRIBUTES oa;
+    InitializeObjectAttributes(&oa, &path, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
 
     HANDLE key = NULL;
-    if (!NT_SUCCESS(IoOpenDeviceRegistryKey(
-            DeviceObject, PLUGPLAY_REGKEY_DEVICE, KEY_SET_VALUE | FILE_READ_ATTRIBUTES, &key)))
+    if (!NT_SUCCESS(ZwOpenKey(&key, KEY_SET_VALUE, &oa)))
     {
         return;
     }
 
-    UNICODE_STRING value;
-    RtlInitUnicodeString(&value, Suffix);
-    ZwSetValueKey(key, &nameSuffix, 0, REG_SZ,
-        value.Buffer, value.Length + sizeof(WCHAR));
+    ZwSetValueKey(key, &valueName, 0, REG_SZ, (PVOID)Value, Chars * sizeof(WCHAR));
     ZwClose(key);
 }
-#pragma code_seg()
 
 //=============================================================================
 // Control-устройство: диспетчеры

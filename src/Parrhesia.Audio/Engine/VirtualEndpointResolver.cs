@@ -278,6 +278,39 @@ internal static class VirtualEndpointResolver
         return false;
     }
 
+    /// <summary>
+    /// Наши endpoints по лanes: devnode'ы сортируются по instance-id —
+    /// номер лана (1..N) стабилен для данного состава устройств.
+    /// Формат ключа MMDevice.ID; пусто — драйвера нет.
+    /// </summary>
+    public static List<(int Lane, string EndpointId)> ResolveLanedEndpoints()
+    {
+        var result = new List<(int, string)>();
+        try
+        {
+            var roots = FindDriverRootInstanceIds();
+            roots.Sort(StringComparer.Ordinal);
+            var lane = 0;
+            foreach (var rootId in roots)
+            {
+                lane++;
+                foreach (var child in GetChildren(rootId))
+                {
+                    if (child.StartsWith(EndpointPrefix, StringComparison.OrdinalIgnoreCase))
+                    {
+                        result.Add((lane, child.Substring(EndpointPrefix.Length)));
+                    }
+                }
+            }
+        }
+        catch
+        {
+            // недоступно — пустой список
+        }
+
+        return result;
+    }
+
     /// <summary>Прямые дети devnode'а (DEVPKEY_Device_Children, STRING_LIST).</summary>
     private static List<string> GetChildren(string instanceId)
     {

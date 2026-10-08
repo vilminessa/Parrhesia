@@ -17,13 +17,18 @@ if not exist "%DEVCON%" goto :no_devcon
 echo Установка пакета и создание device instances (base + lanes)...
 rem ВНИМАНИЕ: devcon возвращает1 и при успешной установке (например,
 rem «требуется перезагрузка») — по exit-коду НЕ судим; результат ниже
-rem проверяется статусом.
+rem проверяется статусом. devcon install СОЗДАЁТ новую инстансу даже при
+rem существующей — сначала снимаем свою (по hwid), затем ставим заново.
+"%DEVCON%" remove ROOT\VirtualAudioDriver >nul 2>&1
 "%DEVCON%" install "%PKG%\VirtualAudioDriver.inf" ROOT\VirtualAudioDriver
 if errorlevel 2 goto :install_failed
 
 rem Лanes (М2): каждый HW-ID = отдельный devnode со своей парой endpoints.
+"%DEVCON%" remove ROOT\ParrhesiaLane1 >nul 2>&1
 "%DEVCON%" install "%PKG%\VirtualAudioDriver.inf" ROOT\ParrhesiaLane1
+"%DEVCON%" remove ROOT\ParrhesiaLane2 >nul 2>&1
 "%DEVCON%" install "%PKG%\VirtualAudioDriver.inf" ROOT\ParrhesiaLane2
+"%DEVCON%" remove ROOT\ParrhesiaLane3 >nul 2>&1
 "%DEVCON%" install "%PKG%\VirtualAudioDriver.inf" ROOT\ParrhesiaLane3
 
 echo.

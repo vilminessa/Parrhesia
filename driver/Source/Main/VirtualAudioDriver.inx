@@ -194,14 +194,15 @@ ProviderName = "Parrhesia"
 MfgName      = "Parrhesia"
 MsCopyRight  = "(c) Parrhesia project"
 
-VIRTUALAUDIODRIVER_SA.DeviceDesc="Parrhesia Virtual Audio"
+VIRTUALAUDIODRIVER_SA.DeviceDesc="Parrhesia"
 VirtualAudioDriver.SvcDesc="Parrhesia Audio Driver"
 
 ;; лanes (М2): тот же драйвер, отдельные HW-ID → свой devnode + своя пара
-;; endpoints + свой feed (\\.\ParrhesiaFeed_<suffix>)
-Lane1.DeviceDesc="Parrhesia Virtual Audio Lane1"
-Lane2.DeviceDesc="Parrhesia Virtual Audio Lane2"
-Lane3.DeviceDesc="Parrhesia Virtual Audio Lane3"
+;; endpoints + свой feed (\\.\ParrhesiaFeed_<suffix>). Имена короткие:
+;; список endpoints выглядит как «Parrhesia In2 (Parrhesia L1)».
+Lane1.DeviceDesc="Parrhesia L1"
+Lane2.DeviceDesc="Parrhesia L2"
+Lane3.DeviceDesc="Parrhesia L3"
 
 ;; friendly names
 VIRTUALAUDIODRIVER.WaveSpeaker.szPname="Parrhesia In"

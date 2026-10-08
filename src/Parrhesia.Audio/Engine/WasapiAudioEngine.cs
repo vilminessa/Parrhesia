@@ -406,19 +406,20 @@ public sealed class WasapiAudioEngine : IAudioEngine
     }
 
     /// <summary>
-    /// Ставит «Parrhesia In/Out» своим endpoints при старте — только если
-    /// имя всё ещё системное (ручные переименования владельца не трогаем).
+    /// Ставит «Parrhesia InN/OutN» своим endpoints при старте (N — номер
+    /// lanes,1..N по отсортированным instance-id) — только если имя ещё
+    /// системное (ручные переименования владельца не трогаем).
     /// </summary>
     private void ApplyVirtualEndpointNames()
     {
         try
         {
-            foreach (var id in VirtualEndpointResolver.ResolveVirtualEndpointIds())
+            foreach (var (lane, id) in VirtualEndpointResolver.ResolveLanedEndpoints())
             {
                 // MMDevice.ID: {0.0.0.…} — рендер, {0.0.1.…} — захват.
                 var target = id.StartsWith("{0.0.0.", StringComparison.OrdinalIgnoreCase)
-                    ? "Parrhesia In"
-                    : "Parrhesia Out";
+                    ? $"Parrhesia In{lane}"
+                    : $"Parrhesia Out{lane}";
 
                 string current;
                 try
@@ -432,7 +433,7 @@ public sealed class WasapiAudioEngine : IAudioEngine
                     continue; // поток недоступен — пропускаем
                 }
 
-                var baseName = EndpointPolicy.StripDeviceSuffix(current, EndpointPolicy.DeviceProductName);
+                var baseName = EndpointPolicy.StripAnyDeviceSuffix(current);
                 if (!EndpointPolicy.ShouldAutoRename(baseName))
                 {
                     continue; // владелец переименовал вручную
