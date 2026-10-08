@@ -26,3 +26,7 @@ launchSettings.json
 tests/Parrhesia.Plugins.Native/out/
 tests/Parrhesia.Plugins.Native/vst3-test-plugin/out/
 src/Parrhesia.Plugins/native/vst3-shim/out/
+
+# Артефакты сборки инсталлятора (Ф5)
+/publish/
+/dist/
