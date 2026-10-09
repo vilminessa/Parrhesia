@@ -8,15 +8,16 @@ namespace Parrhesia.Audio.Processing;
 
 /// <summary>
 /// Синхронизация слотов-вставок модели с рантайм-экземплярами плагинов.
-/// Реагирует на graph.Changed КОАЛЕСЦИРУЮЩЕЙ фоновой задачей: dlopen и
-/// инициализация VST3/CLAP — секунды, UI-поток их не ждёт (P-волна).
-/// Быстрая сверка сигнатур «формат|путь|id» — загрузка/выгрузка только при
-/// реальных изменениях, переключение Enabled переиспользует экземпляры;
-/// цепочки публикуются в <see cref="GraphProcessor"/> атомарно.
-/// Владение экземплярами: менеджер; выгрузка — после подтверждения RT-покоя
-/// («снял цепочку → ждал пару блоков → dispose»), а не по фиксированному
-/// таймеру. Перед getState/prepare узел ПАУЗИРУЕТСЯ (VST3-контракт: state/setup
-/// вызовы вне process) — иначе data race с аудио-потоком роняет рантайм.
+/// Реагирует на graph.Changed коалесцирующей фоновой задачей; полные
+/// синхронизации сериализуются <c>_syncWork</c>, но dlopen/COM-инициализация
+/// (секунды) идёт ВНЕ <c>_gate</c> — UI-пути (автосейв, инспектор) ждут лок
+/// только микросекунды (R-волна: зависания на «+ слот»).
+/// Фазы одной синхронизации: A) снимок модели под локом; B) сверка/загрузка
+/// вне локов; C) атомарное применение + публикация под локом (со свежей
+/// paused-проверкой — пауза узла не должна быть перекрыта устаревшей
+/// публикацией). Перед getState/prepare узел ПАУЗИРУЕТСЯ (VST3-контракт:
+/// state/setup вызовы вне process). Владение экземплярами: менеджер;
+/// выгрузка — после RT-подтверждения покоя.
 /// </summary>
 public sealed class SlotChainManager : IDisposable
 {
@@ -24,6 +25,7 @@ public sealed class SlotChainManager : IDisposable
     private readonly GraphProcessor _processor;
     private readonly Func<PluginSlot, IAudioPlugin> _factory;
     private readonly object _gate = new();
+    private readonly object _syncWork = new();
     private readonly Dictionary<Guid, NodeState> _states = [];
     private readonly HashSet<Guid> _paused = [];
 
@@ -88,20 +90,36 @@ public sealed class SlotChainManager : IDisposable
         Sync();
     }
 
-    /// <summary>Сверяет модель со словарём экземпляров и публикует цепочки.</summary>
+    /// <summary>Полная сверка модели с экземплярами (сериализована _syncWork).</summary>
     public void Sync()
     {
-        var dropped = new List<IAudioPlugin?>();
-        lock (_gate)
+        lock (_syncWork)
         {
             if (_disposed)
             {
                 return;
             }
 
-            var errors = new List<string>();
-            var seen = new HashSet<Guid>();
-            var publish = new List<(Guid NodeId, IAudioPlugin?[] Chain)>();
+            // Модель могла меняться, пока грузили — повторяем до стабильности.
+            while (SyncOnce() && !_disposed)
+            {
+            }
+        }
+    }
+
+    /// <summary>Одна итерация сверки. true — модель изменилась во время
+    /// загрузки (устаревший результат отброшен, нужен повтор).</summary>
+    private bool SyncOnce()
+    {
+        // Фаза A: снимок модели (под локом, μs — без dlopen).
+        var plan = new List<PlanItem>();
+        var emptyDropped = new List<IAudioPlugin?>();
+        lock (_gate)
+        {
+            if (_disposed)
+            {
+                return false;
+            }
 
             foreach (var node in _graph.Nodes)
             {
@@ -110,57 +128,116 @@ public sealed class SlotChainManager : IDisposable
                     continue;
                 }
 
-                seen.Add(node.Id);
-
-                if (_paused.Contains(node.Id))
-                {
-                    // Узел на паузе: RT не должен трогать его экземпляры.
-                    publish.Add((node.Id, []));
-                    continue;
-                }
-
                 var slots = node.Slots;
-
                 if (slots.Count == 0)
                 {
+                    // Пустой шине слоты не нужны — состояние выгружаем сразу.
                     if (_states.Remove(node.Id, out var emptyState))
                     {
-                        CollectDropped(emptyState, dropped);
+                        CollectDropped(emptyState, emptyDropped);
                     }
 
-                    publish.Add((node.Id, []));
+                    plan.Add(new PlanItem(node.Id, [], string.Empty, null, false));
                     continue;
                 }
 
-                _states.TryGetValue(node.Id, out var state);
-                var identity = BuildIdentity(slots);
-
-                if (state is null || state.Identity != identity)
-                {
-                    state = Rebuild(node.Id, state, slots, identity, errors, dropped);
-                }
-                else
-                {
-                    state.Enabled = slots.Select(s => s.Enabled).ToArray();
-                }
-
-                publish.Add((node.Id, BuildChain(state)));
+                _states.TryGetValue(node.Id, out var current);
+                plan.Add(new PlanItem(node.Id, [.. slots], BuildIdentity(slots), current, false));
             }
 
             // Материализуем ключи до удалений (Dictionary запрещает мутации при перечислении).
             foreach (var id in _states.Keys.ToList())
             {
-                if (seen.Contains(id))
+                if (plan.All(p => p.Id != id))
                 {
+                    if (_states.Remove(id, out var orphan))
+                    {
+                        CollectDropped(orphan, emptyDropped);
+                    }
+
+                    plan.Add(new PlanItem(id, [], string.Empty, null, false));
+                }
+            }
+        }
+
+        // Фаза B: ВНЕ локов — обновление Enabled либо загрузка (dlopen/COM).
+        var built = new List<(Guid Id, NodeState? State)>();
+        foreach (var item in plan)
+        {
+            if (item.Slots.Count == 0)
+            {
+                built.Add((item.Id, null));
+                continue;
+            }
+
+            if (item.Current is not null && item.Current.Identity == item.Identity)
+            {
+                item.Current.Enabled = item.Slots.Select(static s => s.Enabled).ToArray();
+                built.Add((item.Id, item.Current));
+                continue;
+            }
+
+            var stopwatch = Stopwatch.StartNew();
+            Trace.WriteLine(
+                $"[Parrhesia.Audio][Info] слот: загрузка «{item.Slots[0].Name}» ({item.Slots.Count} шт.)…");
+            var state = BuildInstances(item, stopwatch);
+            built.Add((item.Id, state));
+        }
+
+        // Фаза C: атомарное применение + публикация (под локом, со свежей
+        // paused-проверкой: устаревший plan не должен перекрыть паузу узла).
+        var dropped = new List<IAudioPlugin?>();
+        var errors = new List<string>();
+        var retry = false;
+        lock (_gate)
+        {
+            if (_disposed)
+            {
+                foreach (var (_, state) in built)
+                {
+                    CollectDropped(state, emptyDropped);
+                }
+
+                Retry(emptyDropped);
+                return false;
+            }
+
+            var seen = new HashSet<Guid>();
+            var publish = new List<(Guid NodeId, IAudioPlugin?[] Chain)>();
+
+            foreach (var item in plan)
+            {
+                seen.Add(item.Id);
+
+                if (item.Slots.Count == 0)
+                {
+                    publish.Add((item.Id, []));
                     continue;
                 }
 
-                if (_states.Remove(id, out var orphan))
+                if (_paused.Contains(item.Id))
                 {
-                    CollectDropped(orphan, dropped);
+                    // Узел на паузе: RT не должен трогать его экземпляры.
+                    publish.Add((item.Id, []));
+                    continue;
                 }
 
-                publish.Add((id, []));
+                // Свежая сверка: слоты могли измениться, пока грузили.
+                var node = _graph.FindNode(item.Id);
+                var slots = node?.Slots;
+                var identity = slots is null ? null : BuildIdentity(slots);
+                if (identity != item.Identity)
+                {
+                    retry = true;
+                    var stale = built.FirstOrDefault(b => b.Id == item.Id).State;
+                    CollectDropped(stale, dropped);
+                    continue;
+                }
+
+                var state = built.FirstOrDefault(b => b.Id == item.Id).State!;
+                _states[item.Id] = state;
+                publish.Add((item.Id, BuildChain(state)));
+                errors.AddRange(state.Errors);
             }
 
             LastErrors = errors;
@@ -170,18 +247,16 @@ public sealed class SlotChainManager : IDisposable
             }
         }
 
+        Retry(emptyDropped);
+
         // Латентности могли измениться — пересбор снимка с компенсацией.
         _processor.Invalidate();
-
-        // Выгрузка вне лока: dispose ждёт RT-покоя (см. DeferredDispose).
-        foreach (var plugin in dropped)
-        {
-            DeferredDispose(plugin);
-        }
+        return retry;
     }
 
     public void Dispose()
     {
+        var pending = new List<IAudioPlugin?>();
         lock (_gate)
         {
             if (_disposed)
@@ -193,30 +268,20 @@ public sealed class SlotChainManager : IDisposable
             _graph.Changed -= OnGraphChanged;
             foreach (var state in _states.Values)
             {
-                foreach (var instance in state.Instances)
-                {
-                    _pendingDispose.Add(instance);
-                }
+                CollectDropped(state, pending);
             }
 
             _states.Clear();
             _paused.Clear();
         }
 
-        foreach (var instance in _pendingDispose)
-        {
-            DeferredDispose(instance);
-        }
-
-        _pendingDispose.Clear();
+        Retry(pending);
     }
 
-    private readonly List<IAudioPlugin?> _pendingDispose = [];
-
     /// <summary>Снимает state живых плагинов в модель (вызывается перед сохранением
-    /// профиля). Изменения, равные текущим, не поднимают Changed — без
-    /// лишних пересчётов и лишних автосейвов. Каждый узел собирается на
-    /// паузе: getState параллельно с process — data race (VST3-контракт).</summary>
+    /// профиля). Изменения, равные текущим, не поднимают Changed. Каждый узел
+    /// собирается на паузе: getState параллельно с process — data race
+    /// (VST3-контракт).</summary>
     public void CollectStates()
     {
         Guid[] nodes;
@@ -255,18 +320,27 @@ public sealed class SlotChainManager : IDisposable
 
     // ===== Внутреннее =====
 
+    /// <summary>План одной итерации: слоты узла на момент снимка + прежнее состояние.</summary>
+    private sealed record PlanItem(
+        Guid Id,
+        IReadOnlyList<PluginSlot> Slots,
+        string Identity,
+        NodeState? Current,
+        bool Paused);
+
     private sealed class NodeState
     {
         public string Identity = string.Empty;
         public string[] Signatures = [];
         public bool[] Enabled = [];
         public List<IAudioPlugin?> Instances = [];
+        public List<string> Errors = [];
     }
 
     private void OnGraphChanged(object? sender, GraphChange e) => QueueSync();
 
     /// <summary>Коалесцирующая фоновая синхронизация: загрузка плагинов (dlopen,
-    /// инициализация, COM) — секунды; UI-поток обязан оставаться живым.</summary>
+    /// COM) — секунды; UI-поток обязан оставаться живым.</summary>
     public void QueueSync()
     {
         lock (_gate)
@@ -341,8 +415,7 @@ public sealed class SlotChainManager : IDisposable
     }
 
     /// <summary>Выгрузка после подтверждения RT-покоя: цепочки уже пере-опубликованы,
-    /// ждём пару RT-блоков (или таймаут, если движок не тянет) — вместо прежних
-    /// «500 мс и надейся».</summary>
+    /// ждём пару RT-блоков (или таймаут, если движок не тянет).</summary>
     private void DeferredDispose(IAudioPlugin? instance)
     {
         if (instance is null)
@@ -362,6 +435,16 @@ public sealed class SlotChainManager : IDisposable
                 // Ошибка деструктора плагина не должна валить процесс.
             }
         });
+    }
+
+    private void Retry(List<IAudioPlugin?> instances)
+    {
+        foreach (var instance in instances)
+        {
+            DeferredDispose(instance);
+        }
+
+        instances.Clear();
     }
 
     private void CollectOne(Guid nodeId)
@@ -411,53 +494,54 @@ public sealed class SlotChainManager : IDisposable
     private static string Signature(PluginSlot slot) =>
         $"{(int)slot.Format}|{slot.Path}|{slot.PluginId}";
 
-    private static void CollectDropped(NodeState state, List<IAudioPlugin?> dropped)
+    private static void CollectDropped(NodeState? state, List<IAudioPlugin?> dropped)
     {
+        if (state is null)
+        {
+            return;
+        }
+
         foreach (var instance in state.Instances)
         {
             dropped.Add(instance);
         }
     }
 
-    private NodeState Rebuild(
-        Guid nodeId,
-        NodeState? previous,
-        IReadOnlyList<PluginSlot> slots,
-        string identity,
-        List<string> errors,
-        List<IAudioPlugin?> dropped)
+    /// <summary>Загрузка/пересоздание экземпляров плана ВНЕ локов (dlopen/COM).</summary>
+    private NodeState BuildInstances(PlanItem item, Stopwatch stopwatch)
     {
         var next = new NodeState
         {
-            Identity = identity,
-            Signatures = slots.Select(Signature).ToArray(),
-            Enabled = slots.Select(s => s.Enabled).ToArray(),
+            Identity = item.Identity,
+            Signatures = item.Slots.Select(Signature).ToArray(),
+            Enabled = item.Slots.Select(static s => s.Enabled).ToArray(),
         };
 
-        for (var i = 0; i < slots.Count; i++)
+        // Несовпавшие старые экземпляры (включая хвост удалённых слотов) —
+        // к выгрузке после публикации (DeferredDispose ждёт RT-покой).
+        var replaced = new List<IAudioPlugin?>();
+
+        for (var i = 0; i < item.Slots.Count; i++)
         {
             IAudioPlugin? instance = null;
-            if (previous is not null && i < previous.Instances.Count &&
-                i < previous.Signatures.Length && previous.Signatures[i] == next.Signatures[i])
+            if (item.Current is not null && i < item.Current.Instances.Count &&
+                i < item.Current.Signatures.Length && item.Current.Signatures[i] == next.Signatures[i])
             {
-                instance = previous.Instances[i];
+                instance = item.Current.Instances[i];
             }
             else
             {
-                if (previous is not null && i < previous.Instances.Count)
+                if (item.Current is not null && i < item.Current.Instances.Count)
                 {
-                    dropped.Add(previous.Instances[i]);
+                    replaced.Add(item.Current.Instances[i]);
                 }
 
-                var stopwatch = Stopwatch.StartNew();
-                Trace.WriteLine(
-                    $"[Parrhesia.Audio][Info] слот: загрузка «{slots[i].Name}» ({slots[i].Path})…");
                 try
                 {
-                    instance = _factory(slots[i]);
-                    if (slots[i].State is not null)
+                    instance = _factory(item.Slots[i]);
+                    if (item.Slots[i].State is not null)
                     {
-                        instance.SetState(slots[i].State);
+                        instance.SetState(item.Slots[i].State);
                     }
 
                     if (_prepared)
@@ -465,17 +549,25 @@ public sealed class SlotChainManager : IDisposable
                         instance.Prepare(_sampleRate, _maxBlockFrames, _channels);
                     }
 
+                    if (stopwatch.ElapsedMilliseconds > 10_000)
+                    {
+                        // Наблюдаемость вечно-висящей загрузки (отменить нельзя).
+                        Trace.WriteLine(
+                            $"[Parrhesia.Audio][Warn] слот: «{item.Slots[i].Name}» загружается " +
+                            $"уже {stopwatch.ElapsedMilliseconds} мс — плагин висит?");
+                    }
+
                     Trace.WriteLine(
-                        $"[Parrhesia.Audio][Info] слот: «{slots[i].Name}» загружен за " +
+                        $"[Parrhesia.Audio][Info] слот: «{item.Slots[i].Name}» загружен за " +
                         $"{stopwatch.ElapsedMilliseconds} мс");
                 }
                 catch (Exception ex)
                 {
                     // Сломанный плагин не должен ронять граф: слот молчит.
                     Trace.WriteLine(
-                        $"[Parrhesia.Audio][Error] слот: «{slots[i].Name}» ({slots[i].Path}) " +
+                        $"[Parrhesia.Audio][Error] слот: «{item.Slots[i].Name}» ({item.Slots[i].Path}) " +
                         $"не загрузился за {stopwatch.ElapsedMilliseconds} мс: {ex.Message}");
-                    errors.Add($"«{slots[i].Name}» ({slots[i].Path}): {ex.Message}");
+                    next.Errors.Add($"«{item.Slots[i].Name}» ({item.Slots[i].Path}): {ex.Message}");
                     try
                     {
                         instance?.Dispose();
@@ -492,20 +584,24 @@ public sealed class SlotChainManager : IDisposable
             next.Instances.Add(instance);
         }
 
-        if (previous is not null)
+        // Хвост удалённых слотов: старые экземпляры выгружаются после публикации.
+        if (item.Current is not null)
         {
-            // Несовпавшие старые экземпляры (включая хвост удалённых слотов).
-            for (var i = next.Instances.Count; i < previous.Instances.Count; i++)
+            for (var i = next.Instances.Count; i < item.Current.Instances.Count; i++)
             {
-                dropped.Add(previous.Instances[i]);
+                replaced.Add(item.Current.Instances[i]);
             }
         }
 
-        _states[nodeId] = next;
+        foreach (var old in replaced)
+        {
+            DeferredDispose(old);
+        }
+
         return next;
     }
 
-    private IAudioPlugin?[] BuildChain(NodeState state)
+    private static IAudioPlugin?[] BuildChain(NodeState state)
     {
         var chain = new List<IAudioPlugin?>(state.Instances.Count);
         for (var i = 0; i < state.Instances.Count; i++)

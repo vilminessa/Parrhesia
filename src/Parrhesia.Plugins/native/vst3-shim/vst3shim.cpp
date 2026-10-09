@@ -39,6 +39,34 @@ namespace
 
 thread_local std::string gLastError;
 
+// COM: каждый поток, входящий в плагин (создание/prepare/process/state),
+// обязан инициализировать COM (Steinberg hosting-гайдлайns). UI-поток WPF —
+// STA с COM; ThreadPool (фоновая загрузка) и WASAPI-поток (process) — БЕЗ
+// него, и плагины с COM-внутренностями падают/портят память. RAII: чей
+// инициализировали — тем и снимаем; чужой режим (RPC_E_CHANGED_MODE) не
+// трогаем.
+struct ComGuard
+{
+    bool owned = false;
+
+    ComGuard ()
+    {
+        const HRESULT hr = ::CoInitializeEx (nullptr, COINIT_MULTITHREADED);
+        owned = (hr == S_OK || hr == S_FALSE);
+    }
+
+    ~ComGuard ()
+    {
+        if (owned)
+        {
+            ::CoUninitialize ();
+        }
+    }
+
+    ComGuard (const ComGuard&) = delete;
+    ComGuard& operator= (const ComGuard&) = delete;
+};
+
 // Гонка Module::create одного модуля с разных потоков (параллельные
 // enumerate/create в тестах/сканере) — сериализуем все module-пути шима.
 std::mutex gModuleLock;
@@ -177,6 +205,8 @@ int __cdecl Pv3Enumerate (const char* modulePath, Pv3EnumCallback callback, void
         return Fail ("Pv3Enumerate: аргумент null");
     }
 
+    const ComGuard comGuard;
+
     std::lock_guard<std::mutex> guard (gModuleLock);
 
     std::string error;
@@ -214,6 +244,8 @@ void* __cdecl Pv3Create (const char* modulePath, const char* classId)
     {
         return FailPtr ("Pv3Create: аргумент null");
     }
+
+    const ComGuard comGuard;
 
     std::lock_guard<std::mutex> guard (gModuleLock);
 
@@ -285,6 +317,8 @@ void __cdecl Pv3Destroy (void* raw)
         return;
     }
 
+    const ComGuard comGuard;
+
     // Хост обязан снять цепочку до destroy; короткая страховка, если RT ещё
     // дорабатывает последний блок.
     {
@@ -331,6 +365,8 @@ int __cdecl Pv3Prepare (void* raw, double sampleRate, int maxBlockFrames, int ch
     {
         return Fail ("Pv3Prepare: экземпляр null");
     }
+
+    const ComGuard comGuard;
 
     if (sampleRate <= 0.0 || maxBlockFrames <= 0 || channels != 2)
     {
@@ -451,6 +487,7 @@ int __cdecl Pv3Process (void* raw, float* interleaved, int frames)
         bool Contended () const { return counter.load (std::memory_order_acquire) > 1; }
     };
 
+    const ComGuard comGuard;
     const BusyGuard busy (instance->inProcess);
     if (busy.Contended ())
     {
@@ -544,6 +581,8 @@ int __cdecl Pv3GetLatency (void* raw)
         return Fail ("Pv3GetLatency: экземпляр null");
     }
 
+    const ComGuard comGuard;
+
     return static_cast<int> (instance->processor->getLatencySamples ());
 }
 
@@ -554,6 +593,8 @@ int __cdecl Pv3GetState (void* raw, unsigned char* buffer, int capacity)
     {
         return Fail ("Pv3GetState: экземпляр null");
     }
+
+    const ComGuard comGuard;
 
     // Формат: [u32 compLen][component state][u32 ctrlLen][controller state].
     // Контроллер обязателен по VST3-спецификации (параметры живут в нём).
@@ -602,6 +643,8 @@ int __cdecl Pv3SetState (void* raw, const unsigned char* buffer, int length)
     {
         return Fail ("Pv3SetState: аргумент null");
     }
+
+    const ComGuard comGuard;
 
     if (length < static_cast<int> (sizeof (uint32_t)))
     {
@@ -672,6 +715,8 @@ int __cdecl Pv3ParamCount (void* raw)
         return Fail ("Pv3ParamCount: экземпляр null");
     }
 
+    const ComGuard comGuard;
+
     LastErrorRef ().clear ();
     ControllerGuard controller (instance);
     if (!controller)
@@ -689,6 +734,8 @@ int __cdecl Pv3GetParamInfo (void* raw, int index, Pv3ParamInfo* out)
     {
         return Fail ("Pv3GetParamInfo: аргумент null");
     }
+
+    const ComGuard comGuard;
 
     LastErrorRef ().clear ();
     ControllerGuard controller (instance);
@@ -735,6 +782,8 @@ int __cdecl Pv3ParamValueGet (void* raw, int id, double* outNormalized)
         return Fail ("Pv3ParamValueGet: аргумент null");
     }
 
+    const ComGuard comGuard;
+
     LastErrorRef ().clear ();
     ControllerGuard controller (instance);
     if (!controller)
@@ -753,6 +802,8 @@ int __cdecl Pv3ParamValueSet (void* raw, int id, double normalized)
     {
         return Fail ("Pv3ParamValueSet: экземпляр null");
     }
+
+    const ComGuard comGuard;
 
     LastErrorRef ().clear ();
     ControllerGuard controller (instance);
@@ -792,6 +843,8 @@ int __cdecl Pv3EditorOpen (void* raw, void* parentHwnd)
     {
         return Fail ("Pv3EditorOpen: аргумент null");
     }
+
+    const ComGuard comGuard;
 
     if (instance->view != nullptr)
     {
@@ -840,6 +893,8 @@ int __cdecl Pv3EditorGetSize (void* raw, int* width, int* height)
         return Fail ("Pv3EditorGetSize: аргумент null");
     }
 
+    const ComGuard comGuard;
+
     if (instance->view == nullptr)
     {
         return Fail ("Pv3EditorGetSize: редактор не открыт");
@@ -863,6 +918,8 @@ void __cdecl Pv3EditorClose (void* raw)
     {
         return;
     }
+
+    const ComGuard comGuard;
 
     instance->view->removed ();
     instance->view->release ();
