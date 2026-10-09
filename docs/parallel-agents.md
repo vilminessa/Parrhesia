@@ -206,3 +206,44 @@ git checkout dev-agPc     :: Агент Pc — фаза B1 (ресемплинг
   файлы-тексты править инструментами редактирования, не `Add-Content`.
   Выявлено и вычищено: `2.profile.json` (4 имени узлов), `docs/` (целиком),
   `install-devices.ps1` (BOM),4 build-батов (`??????` в echo/rem).
+
+## [shared] Волна В1 — кабели In/Out (2026-10-09, `0e1f9c2`+`0d289bb`)
+
+**Решение владельца**: кабельная семантика на уровне драйвера — «звук вошёл
+в Parrhesia InN → выходит из OutN» без участия приложения и без loopback
+(списки устройств не засоряются). Loopback/virtual-sink остаются только
+как «продвинутый» путь: пока приложение держит хэндл фида — кабель уступает.
+
+- **Драйвер** (`feed.cpp`/`minwavertstream.cpp`): `WriteCable` (конверт
+  16/24/32→PCM32 в кольцо), `PushRenderToFeed` из `UpdatePosition`,
+  счётчик user mode-хэндлов (CREATE/CLOSE), метки `T_CblOk`/`T_CblFmtBad`
+  в сервис-ключ. Фикс: `GetOwnFeed` не должен запрещать render-поток.
+  Статистика `PFEED_STATS` +`LoopBytes`/`Writers` (C#-зеркало синхронно!).
+- **INF**: HW-ID до `ROOT\ParrhesiaLane7` (предел `PFEED_MAX_INSTANCES=8`).
+- **Живые операции (спайк подтвердил: ребут НЕ нужен)**: remove — pnputil
+  `/remove-device` с КОРОТКИМ instance-id (`ROOT\MEDIA\000N`); create —
+  SetupAPI с ПОЛНЫМ instance-id + `CreationFlags=0`; `-Add`/`-Remove`
+  в `install-devices.ps1`. Дети (endpoints) снимать ПЕРЕД девноутом —
+  `pnputil` не каскадит (иначе призраки state=1); чистка driver store
+  после rebind (было13 устаревших oem*.inf).
+- **3 бага Ф5 в install-devices** (маскированы идемпотентностью, что
+  «идемпотентность проверена» = никогда не выполнялось): длинный instance-id
+  в pnputil; `DICD_GENERATE_ID` с hwid → `SPAPI_E_INVALID_DEVINST_NAME`;
+  `CharSet` без Unicode в `SetupDiSetDeviceRegistryProperty` → порча MULTI_SZ
+  (`HardwareID` из19 строк) → `NO_SUCH_DEVINST`.
+- **Вкладка «Кабели»**: очередь правок (add/remove/rename) в
+  `settings.json` → оранжевые строки/баннер → «Применить» = один UAC
+  (wrapper в `%TEMP%`, **UTF-8 BOM обязателен**) или «Отменить»;
+  «Перезагрузите ПК…» — только при `reboot=True`. Сверка `Reconcile`
+  самоочищает применённое (переживает перезагрузку).
+- **ДИАГНОСТИКА И РИСКИ (помнить!)**:
+  - **каждый rebind/пакетный апдейт драйвера ПЕРЕСОЗДАЁТ все endpoint GUID**
+    (было3 генерации за сессию) → сырые id в профиле ломаются →
+    БЭКЛОГ: хранить имя устройства в профиле + авто-rebind по имени;
+  - движок НЕ ретраит неудачный старт сника («ни одно назначение не
+    открылось» залипает до device-change) → БЭКЛОГ: авто-повтор;
+  - транспорт команд съедает пробел перед цифрами (`-Last N`, `-Seconds N`,
+    `$buf N`): писать через срезы массивов и `[Threading.Thread]::Sleep(N)`;
+  - helper-функции PowerShell, печатающие лог И возвращающие значение,
+    ломают присваивание (в pipeline уходят обе строки) — не использовать
+    в виде `$x = Func ...`.
