@@ -146,6 +146,47 @@ public class PluginBridgeTests
         }
     }
 
+    [Fact]
+    public void ReadyFlag_AndControlChannel_VisibleToHost()
+    {
+        var exe = FindAppExe();
+        if (exe is null)
+        {
+            _output.WriteLine("Parrhesia.App.exe не найден — проба моста пропущена.");
+            return;
+        }
+
+        var nodeId = Guid.NewGuid();
+        using var host = new PluginBridge.HostSide(nodeId, BlockFrames);
+        var child = SpawnChild(exe, nodeId, sleepMs: 0);
+        try
+        {
+            // Ready: ребёнок поднимает флаг после подготовки бэкенда (S2).
+            var deadline = Environment.TickCount64 + 5000;
+            while (!host.IsReady && Environment.TickCount64 < deadline)
+            {
+                Thread.Sleep(20);
+            }
+
+            Assert.True(host.IsReady, "флаг Ready не поднят за5 с");
+            Assert.True(host.ChildAlive(TimeSpan.FromSeconds(2)));
+
+            // Управляющий канал: state-эхо bench-бэкенда [1,2,3] через named pipe.
+            using var client = new NodeControlClient(NodeControl.PipeName(nodeId));
+            var got = client.Request(new NodeControlRequest { Op = "getState" }, TimeSpan.FromSeconds(5));
+            Assert.True(got.Ok, got.Error);
+            Assert.Equal(new byte[] { 1, 2, 3 }, Convert.FromBase64String(got.Data!));
+
+            var latency = client.Request(new NodeControlRequest { Op = "latency" }, TimeSpan.FromSeconds(5));
+            Assert.True(latency.Ok, latency.Error);
+            Assert.Equal(0, latency.Value);
+        }
+        finally
+        {
+            KillQuietly(child);
+        }
+    }
+
     private static void KillQuietly(Process process)
     {
         try

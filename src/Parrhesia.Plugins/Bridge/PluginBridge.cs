@@ -40,6 +40,9 @@ public static class PluginBridge
         public long OutTick;  // heartbeat ребёнка
 
         public long ProcessedBlocks; // счётчик ребёнка (диагностика)
+
+        /// <summary>1 — ребёнок загрузил плагин и готов к блокам.</summary>
+        public int Ready;
     }
 
     /// <summary>Размер секции: заголовок + вход + выход (interleaved f32).</summary>
@@ -85,7 +88,11 @@ public static class PluginBridge
             header->OutSeq = 0;
             header->OutTick = 0;
             header->ProcessedBlocks = 0;
+            header->Ready = 0;
         }
+
+        /// <summary>Ребёнок поднял флаг готовности (плагин загружен).</summary>
+        public bool IsReady => HeaderPtr->Ready != 0;
 
         private Header* HeaderPtr => (Header*)_base;
 
@@ -209,6 +216,17 @@ public static class PluginBridge
         }
 
         private Header* HeaderPtr => (Header*)_base;
+
+        /// <summary>Ребёнок сообщает готовность (плагин загружен) — хост ждёт флаг при спавне.
+        /// Заодно ставит heartbeat: «готов» означает «жив сейчас».</summary>
+        public void MarkReady()
+        {
+            HeaderPtr->Ready = 1;
+            HeaderPtr->OutTick = Environment.TickCount64;
+        }
+
+        /// <summary>Признак жизни без обработки блока (дыхание цикла при молчании хоста).</summary>
+        public void Heartbeat() => HeaderPtr->OutTick = Environment.TickCount64;
 
         private float* InputBuffer => (float*)(_base + sizeof(Header));
 

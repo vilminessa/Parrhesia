@@ -32,11 +32,9 @@ public partial class App : Application
         if (e.Args.Length >= 3 &&
             string.Equals(e.Args[0], "--plugin-host", StringComparison.OrdinalIgnoreCase))
         {
-            var sleep = e.Args.Length >=4 &&
-                int.TryParse(e.Args[3], out var parsedSleep)
-                ? parsedSleep
-                : 0;
-            Environment.Exit(PluginHostMode.Run(e.Args[1], int.Parse(e.Args[2]), sleep));
+            //4-й аргумент: число — bench-задержка мс; путь — spec-файл узла (VST3/CLAP).
+            var mode = e.Args.Length >= 4 ? e.Args[3] : "0";
+            Environment.Exit(PluginHostMode.Run(e.Args[1], int.Parse(e.Args[2]), mode));
             return;
         }
 

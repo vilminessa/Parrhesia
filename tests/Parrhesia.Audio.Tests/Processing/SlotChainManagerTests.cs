@@ -283,7 +283,11 @@ public class SlotChainManagerTests
         using var processor = new GraphProcessor(graph);
         processor.SetInput(source.Id, new ConstantInput(0.5f));
         var factory = new FakeFactory();
-        using var manager = new SlotChainManager(graph, processor, factory.Create);
+
+        // Узлы-плагины идут через мост-фабрику (S2): подменяем её фейком,
+        // чтобы не спавнить настоящий процесс-исполнитель.
+        using var manager = new SlotChainManager(
+            graph, processor, bridgeFactory: (_, slot) => factory.Create(slot));
 
         graph.AddSlot(plugin.Id, new PluginSlot { Path = "a.clap", PluginId = "a" });
         await manager.SyncTask;

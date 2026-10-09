@@ -24,6 +24,7 @@ public sealed class SlotChainManager : IDisposable
     private readonly AudioGraph _graph;
     private readonly GraphProcessor _processor;
     private readonly Func<PluginSlot, IAudioPlugin> _factory;
+    private readonly Func<Guid, PluginSlot, IAudioPlugin> _bridgeFactory;
     private readonly object _gate = new();
     private readonly object _syncWork = new();
     private readonly Dictionary<Guid, NodeState> _states = [];
@@ -45,11 +46,16 @@ public sealed class SlotChainManager : IDisposable
     public SlotChainManager(
         AudioGraph graph,
         GraphProcessor processor,
-        Func<PluginSlot, IAudioPlugin>? factory = null)
+        Func<PluginSlot, IAudioPlugin>? factory = null,
+        Func<Guid, PluginSlot, IAudioPlugin>? bridgeFactory = null)
     {
         _graph = graph ?? throw new ArgumentNullException(nameof(graph));
         _processor = processor ?? throw new ArgumentNullException(nameof(processor));
         _factory = factory ?? LoadPluginByFormat;
+
+        // Узлы-плагины (S-волна) всегда идут через процесс-исполнитель —
+        // единый механизм для всех VST3/CLAP без исключений.
+        _bridgeFactory = bridgeFactory ?? ProcessBridgePlugin.Create;
         _graph.Changed += OnGraphChanged;
     }
 
@@ -177,12 +183,18 @@ public sealed class SlotChainManager : IDisposable
                         CollectDropped(emptyState, emptyDropped);
                     }
 
-                    plan.Add(new PlanItem(node.Id, [], string.Empty, null, false));
+                    plan.Add(new PlanItem(node.Id, [], string.Empty, null, false, false));
                     continue;
                 }
 
                 _states.TryGetValue(node.Id, out var current);
-                plan.Add(new PlanItem(node.Id, [.. slots], BuildIdentity(slots), current, false));
+                plan.Add(new PlanItem(
+                    node.Id,
+                    [.. slots],
+                    BuildIdentity(slots),
+                    current,
+                    false,
+                    node.Kind == NodeKind.Plugin));
             }
 
             // Материализуем ключи до удалений (Dictionary запрещает мутации при перечислении).
@@ -195,7 +207,7 @@ public sealed class SlotChainManager : IDisposable
                         CollectDropped(orphan, emptyDropped);
                     }
 
-                    plan.Add(new PlanItem(id, [], string.Empty, null, false));
+                    plan.Add(new PlanItem(id, [], string.Empty, null, false, false));
                 }
             }
         }
@@ -366,7 +378,8 @@ public sealed class SlotChainManager : IDisposable
         IReadOnlyList<PluginSlot> Slots,
         string Identity,
         NodeState? Current,
-        bool Paused);
+        bool Paused,
+        bool IsPluginNode);
 
     private sealed class NodeState
     {
@@ -578,7 +591,11 @@ public sealed class SlotChainManager : IDisposable
 
                 try
                 {
-                    instance = _factory(item.Slots[i]);
+                    // Узел-плагин (S-волна) — всегда процесс-исполнитель;
+                    // шина (легаси) — прежняя in-process фабрика.
+                    instance = item.IsPluginNode
+                        ? _bridgeFactory(item.Id, item.Slots[i])
+                        : _factory(item.Slots[i]);
                     if (item.Slots[i].State is not null)
                     {
                         instance.SetState(item.Slots[i].State);
@@ -657,6 +674,8 @@ public sealed class SlotChainManager : IDisposable
 
     private void PrepareInstances(Guid nodeId)
     {
+        IAudioPlugin?[] instances;
+        int rate, maxBlockFrames, channels;
         lock (_gate)
         {
             if (_disposed || !_states.TryGetValue(nodeId, out var state))
@@ -664,22 +683,29 @@ public sealed class SlotChainManager : IDisposable
                 return;
             }
 
-            foreach (var instance in state.Instances)
-            {
-                if (instance is null)
-                {
-                    continue;
-                }
+            instances = [.. state.Instances];
+            rate = _sampleRate;
+            maxBlockFrames = _maxBlockFrames;
+            channels = _channels;
+        }
 
-                try
-                {
-                    instance.Prepare(_sampleRate, _maxBlockFrames, _channels);
-                }
-                catch (Exception ex)
-                {
-                    // Prepare-отказ оставляет слот «молчащим» (шим вернёт Fail в Process).
-                    Trace.WriteLine($"[Parrhesia.Audio][Error] слот: prepare не прошёл: {ex.Message}");
-                }
+        // Вне лока: пере-подготовка узла-плагина спавнит процесс-исполнитель
+        // (секунды) — UI-поток (автосейв/инспектор) не должен ждать.
+        foreach (var instance in instances)
+        {
+            if (instance is null)
+            {
+                continue;
+            }
+
+            try
+            {
+                instance.Prepare(rate, maxBlockFrames, channels);
+            }
+            catch (Exception ex)
+            {
+                // Prepare-отказ оставляет слот «молчащим» (шим вернёт Fail в Process).
+                Trace.WriteLine($"[Parrhesia.Audio][Error] слот: prepare не прошёл: {ex.Message}");
             }
         }
     }
