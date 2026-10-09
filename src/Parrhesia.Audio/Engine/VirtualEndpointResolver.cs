@@ -197,6 +197,17 @@ internal static class VirtualEndpointResolver
         return result;
     }
 
+    /// <summary>
+    /// Корни в детерминированном порядке: Ordinal-сортировка, как в лановой
+    /// нумерации. Первый элемент = base-инстанс (In1/Out1).
+    /// </summary>
+    internal static List<string> FindSortedDriverRootInstanceIds()
+    {
+        var roots = FindDriverRootInstanceIds();
+        roots.Sort(StringComparer.Ordinal);
+        return roots;
+    }
+
     private static void ScanForService(RegistryKey parent, string path, List<string> result)
     {
         string[] names;
@@ -258,7 +269,10 @@ internal static class VirtualEndpointResolver
         suffix = string.Empty;
         try
         {
-            foreach (var rootId in FindDriverRootInstanceIds())
+            // Тот же порядок, что в ResolveLanedEndpoints: первый корень =
+            // base-инстанс → фид базового лана (In1/Out1), иначе виртуальный
+            // sink мог бы писать не в тот lane.
+            foreach (var rootId in FindSortedDriverRootInstanceIds())
             {
                 foreach (var child in GetChildren(rootId))
                 {
@@ -288,10 +302,8 @@ internal static class VirtualEndpointResolver
         var result = new List<(int, string)>();
         try
         {
-            var roots = FindDriverRootInstanceIds();
-            roots.Sort(StringComparer.Ordinal);
             var lane = 0;
-            foreach (var rootId in roots)
+            foreach (var rootId in FindSortedDriverRootInstanceIds())
             {
                 lane++;
                 foreach (var child in GetChildren(rootId))
@@ -312,7 +324,7 @@ internal static class VirtualEndpointResolver
     }
 
     /// <summary>Прямые дети devnode'а (DEVPKEY_Device_Children, STRING_LIST).</summary>
-    private static List<string> GetChildren(string instanceId)
+    internal static List<string> GetChildren(string instanceId)
     {
         var result = new List<string>();
         if (CM_Locate_DevNodeW(out var devInst, instanceId, LocateDevNodeNormal) != CrSuccess)

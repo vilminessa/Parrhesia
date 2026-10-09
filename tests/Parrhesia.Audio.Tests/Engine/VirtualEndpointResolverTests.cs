@@ -62,6 +62,43 @@ public class VirtualEndpointResolverTests
     }
 
     [Fact]
+    public void SortedRoots_AreOrdinalOrdered()
+    {
+        var roots = VirtualEndpointResolver.FindSortedDriverRootInstanceIds();
+
+        if (roots.Count == 0)
+        {
+            return; // драйвера нет (CI)
+        }
+
+        var expected = roots.OrderBy(r => r, StringComparer.Ordinal).ToList();
+        Assert.Equal(expected, roots);
+    }
+
+    [Fact]
+    public void TryGetFeedSuffix_PicksFirstSortedRootWithEndpoints()
+    {
+        var found = VirtualEndpointResolver.TryGetFeedSuffix(out var suffix);
+
+        // Ожидание: тот же обход, но явный — первый отсортированный корень,
+        // у которого есть MMDevice-дети (base-инстанс = In1/Out1).
+        var expected = VirtualEndpointResolver.FindSortedDriverRootInstanceIds()
+            .Where(r => VirtualEndpointResolver.GetChildren(r)
+                .Any(c => c.StartsWith("SWD\\MMDEVAPI\\", StringComparison.OrdinalIgnoreCase)))
+            .Select(r => r.Replace('\\', '_'))
+            .FirstOrDefault();
+
+        if (expected is null)
+        {
+            Assert.False(found); // драйвера/endpoints нет (CI) — суффикса тоже нет
+            return;
+        }
+
+        Assert.True(found, "драйвер установлен, но суффикс фида не разобран");
+        Assert.Equal(expected, suffix);
+    }
+
+    [Fact]
     public void ResolveLanedEndpoints_LanesAreMonotonicAndIdsWellFormed()
     {
         var laned = VirtualEndpointResolver.ResolveLanedEndpoints();
