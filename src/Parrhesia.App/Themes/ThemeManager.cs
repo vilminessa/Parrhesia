@@ -57,20 +57,21 @@ public static partial class ThemeManager
             "Moon",
             new Dictionary<string, string>
             {
-                // Серо-белая гамма: светлое поле, белые карточки, тёмный
-                // текст — контраст; луна (тёмный диск) читается на светлом.
-                ["Deep"] = "#FFEDEEF1",
-                ["Panel"] = "#FFF5F6F8",
-                ["Elevated"] = "#FFFFFFFF",
-                ["Hover"] = "#FFE7E9EE",
-                ["Pressed"] = "#FFDCDFE6",
-                ["Stroke"] = "#FFD4D8DF",
-                ["StrokeStrong"] = "#FFAFB6C1",
-                ["Text"] = "#FF22252B",
-                ["TextDim"] = "#FF5D636D",
-                ["TextFaint"] = "#FF969CA6",
-                ["Accent"] = "#FF6E8CA8",
-                ["Cyan"] = "#FF3E7CA8",
+                // Палитра владельца (colorhunt f1eef2/82888d/404248/04030a):
+                // тёмно-серая ночь, светлый текст; акцент — светлый (тёмный
+                // глейк/текст на нём читается во всех контролах).
+                ["Deep"] = "#FF04030A",
+                ["Panel"] = "#FF191A21",
+                ["Elevated"] = "#FF404248",
+                ["Hover"] = "#FF5C6067",
+                ["Pressed"] = "#FF82888D",
+                ["Stroke"] = "#FF262830",
+                ["StrokeStrong"] = "#FF404248",
+                ["Text"] = "#FFF1EEF2",
+                ["TextDim"] = "#FF82888D",
+                ["TextFaint"] = "#FF575C63",
+                ["Accent"] = "#FFF1EEF2",
+                ["Cyan"] = "#FFC7C2CC",
                 ["Danger"] = "#FFC04A43",
                 ["Success"] = "#FF3E9C6A",
             },
