@@ -9,6 +9,10 @@ public enum GraphChangeKind
     RouteRemoved,
     RouteChanged,
 
+    /// <summary>Состав/имена ручных групп микшера: UI перерисовывает ленту,
+    /// автосейв сохраняет профиль; движок НЕ перезапускается (звук не меняется).</summary>
+    GroupsChanged,
+
     /// <summary>Содержимое графа заменено целиком (загрузка пресета).</summary>
     Reset,
 }

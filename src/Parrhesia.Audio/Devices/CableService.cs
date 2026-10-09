@@ -17,6 +17,14 @@ public static class CableService
     private const string FriendlyNameValue =
         "{a45c254e-df1c-4efd-8020-67d146a850e0},2";
 
+    /// <summary>
+    /// MMDevice.ID «своих» виртуальных endpoint'ов (PnP-дети root-devnode'а
+    /// драйвера); пусто — драйвер не установлен. Нужно снаружи Audio для
+    /// классификации узлов графа (зоны микшера: «виртуальные кабели»).
+    /// </summary>
+    public static IReadOnlySet<string> GetOwnEndpointIds() =>
+        VirtualEndpointResolver.ResolveVirtualEndpointIds();
+
     /// <summary>Установленные кабели в порядке ланов (сортировка instance-id).</summary>
     public static List<CableActual> GetInstalled()
     {

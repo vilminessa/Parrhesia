@@ -397,6 +397,26 @@
     <Setter Property="Padding" Value="4" />
     <Setter Property="FontSize" Value="13" />
     <Setter Property="HasDropShadow" Value="True" />
+    <Setter Property="Template">
+      <Setter.Value>
+        <!-- Собственный тёмный шаблон: дефолтный рисовал светлую колонку
+             SystemColors.Control поверх левого края пунктов (M-волна). -->
+        <ControlTemplate TargetType="{x:Type ContextMenu}">
+          <Border Background="{TemplateBinding Background}"
+                  BorderBrush="{TemplateBinding BorderBrush}"
+                  BorderThickness="{TemplateBinding BorderThickness}">
+            <ScrollViewer Margin="{TemplateBinding Padding}"
+                          Focusable="False"
+                          HorizontalScrollBarVisibility="Disabled"
+                          VerticalScrollBarVisibility="Disabled">
+              <StackPanel IsItemsHost="True"
+                          Orientation="Vertical"
+                          KeyboardNavigation.DirectionalNavigation="Cycle" />
+            </ScrollViewer>
+          </Border>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
   </Style>
 
   <Style TargetType="{x:Type MenuItem}">
@@ -405,21 +425,51 @@
     <Setter Property="Template">
       <Setter.Value>
         <ControlTemplate TargetType="{x:Type MenuItem}">
-          <Border x:Name="Bd"
-                  Background="{TemplateBinding Background}"
-                  CornerRadius="{DynamicResource Radius.S}"
-                  Margin="2"
-                  Padding="12,7">
-            <ContentPresenter ContentSource="Header"
-                              VerticalAlignment="Center"
-                              TextElement.Foreground="{TemplateBinding Foreground}" />
-          </Border>
+          <Grid>
+            <Border x:Name="Bd"
+                    Background="{TemplateBinding Background}"
+                    CornerRadius="{DynamicResource Radius.S}"
+                    Margin="2"
+                    Padding="12,7">
+              <ContentPresenter ContentSource="Header"
+                                VerticalAlignment="Center"
+                                TextElement.Foreground="{TemplateBinding Foreground}" />
+            </Border>
+            <Path x:Name="Arrow"
+                  Data="M0,0 L4,4 L0,8"
+                  Stroke="{DynamicResource Brush.TextDim}"
+                  StrokeThickness="1.5"
+                  HorizontalAlignment="Right"
+                  VerticalAlignment="Center"
+                  Margin="0,0,3,0"
+                  Opacity="0"
+                  IsHitTestVisible="False" />
+            <!-- Подменю: без Popup'а в шаблоне пункт с детьми молчит (M-волна). -->
+            <Popup x:Name="PART_Popup"
+                   IsOpen="{TemplateBinding IsSubmenuOpen}"
+                   Placement="Right"
+                   AllowsTransparency="True"
+                   Focusable="False"
+                   PopupAnimation="Fade">
+              <Border Background="{DynamicResource Brush.Elevated}"
+                      BorderBrush="{DynamicResource Brush.Stroke}"
+                      BorderThickness="1"
+                      CornerRadius="{DynamicResource Radius.S}"
+                      Padding="4">
+                <ItemsPresenter />
+              </Border>
+            </Popup>
+          </Grid>
           <ControlTemplate.Triggers>
             <Trigger Property="IsHighlighted" Value="True">
               <Setter TargetName="Bd" Property="Background" Value="{DynamicResource Brush.Hover}" />
             </Trigger>
             <Trigger Property="IsEnabled" Value="False">
               <Setter Property="Opacity" Value="0.45" />
+            </Trigger>
+            <Trigger Property="HasItems" Value="True">
+              <Setter TargetName="Arrow" Property="Opacity" Value="1" />
+              <Setter TargetName="Bd" Property="Padding" Value="12,7,26,7" />
             </Trigger>
           </ControlTemplate.Triggers>
         </ControlTemplate>
@@ -489,6 +539,48 @@
     <Setter Property="Foreground" Value="#FF14171C" />
     <Setter Property="BorderBrush" Value="{DynamicResource Brush.Accent}" />
     <Setter Property="FontWeight" Value="SemiBold" />
+  </Style>
+
+  <!--endregion -->
+
+  <!--region Chip (фильтры-чипы зон микшера) -->
+
+  <Style x:Key="Chip"
+         TargetType="{x:Type ToggleButton}">
+    <Setter Property="Cursor" Value="Hand" />
+    <Setter Property="Foreground" Value="{DynamicResource Brush.TextDim}" />
+    <Setter Property="FontSize" Value="12" />
+    <Setter Property="FontWeight" Value="SemiBold" />
+    <Setter Property="Background" Value="{DynamicResource Brush.Panel}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource Brush.Stroke}" />
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="{x:Type ToggleButton}">
+          <Border x:Name="Bd"
+                  Background="{TemplateBinding Background}"
+                  BorderBrush="{TemplateBinding BorderBrush}"
+                  BorderThickness="1"
+                  CornerRadius="{DynamicResource Radius.M}"
+                  Padding="12,5"
+                  SnapsToDevicePixels="True">
+            <ContentPresenter HorizontalAlignment="Center"
+                              VerticalAlignment="Center"
+                              RecognizesAccessKey="True" />
+          </Border>
+          <ControlTemplate.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+              <Setter TargetName="Bd" Property="Background" Value="{DynamicResource Brush.Hover}" />
+              <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource Brush.StrokeStrong}" />
+            </Trigger>
+            <Trigger Property="IsChecked" Value="True">
+              <Setter TargetName="Bd" Property="Background" Value="{DynamicResource Brush.Accent}" />
+              <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource Brush.Accent}" />
+              <Setter Property="Foreground" Value="#FF14171C" />
+            </Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
   </Style>
 
   <!--endregion -->

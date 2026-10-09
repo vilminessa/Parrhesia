@@ -6,7 +6,7 @@ namespace Parrhesia.Core.Serialization;
 
 /// <summary>
 /// Сериализация графа маршрутизации в версионированный JSON (файлы пресетов).
-/// Формат: { version, nodes[], routes[] }. Неизвестные поля игнорируются,
+/// Формат: { version, nodes[], routes[], groups[] }. Неизвестные поля игнорируются,
 /// неподдерживаемая версия — ошибка (пресеты пишутся машиной, читаем строго).
 /// </summary>
 public static class GraphSerializer
@@ -69,6 +69,16 @@ public static class GraphSerializer
                 Enabled = r.Enabled,
                 Map = r.Map.Bits,
             }).ToList(),
+            // null = «группы ещё не заводили» (стандартная пара создаётся UI).
+            Groups = graph.GroupsForSerialize is { } groups
+                ? groups.Select(g => new GroupDocument
+                {
+                    Id = g.Id,
+                    Name = g.Name,
+                    AutoFill = g.AutoFill,
+                    NodeIds = g.NodeIds,
+                }).ToList()
+                : null,
         };
 
         return JsonSerializer.Serialize(document, Options);
@@ -227,6 +237,21 @@ public static class GraphSerializer
             }
         }
 
+        // Группы микшера: мёртвые ссылки на узлы вычищаются внутри RestoreGroups;
+        // отсутствие поля оставляет группы «не инициализированными».
+        built.RestoreGroups(document.Groups is null
+            ? null
+            : document.Groups
+                .Where(g => g is not null && !string.IsNullOrWhiteSpace(g.Name))
+                .Select(g => new MixerGroup
+                {
+                    Id = string.IsNullOrWhiteSpace(g.Id) ? Guid.NewGuid().ToString("N") : g.Id,
+                    Name = g.Name.Trim(),
+                    AutoFill = g.AutoFill,
+                    NodeIds = g.NodeIds ?? [],
+                })
+                .ToList());
+
         graph = built;
         return true;
     }
@@ -330,6 +355,20 @@ public static class GraphSerializer
         public List<NodeDocument>? Nodes { get; set; }
 
         public List<RouteDocument>? Routes { get; set; }
+
+        /// <summary>Ручные группы микшера; отсутствие поля — «не инициализировано».</summary>
+        public List<GroupDocument>? Groups { get; set; }
+    }
+
+    private sealed class GroupDocument
+    {
+        public string Id { get; set; } = string.Empty;
+
+        public string Name { get; set; } = string.Empty;
+
+        public bool AutoFill { get; set; }
+
+        public List<Guid>? NodeIds { get; set; }
     }
 
     private sealed class NodeDocument

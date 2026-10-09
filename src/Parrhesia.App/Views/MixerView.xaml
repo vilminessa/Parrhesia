@@ -6,6 +6,7 @@
   <Grid Margin="20">
     <Grid.RowDefinitions>
       <RowDefinition Height="Auto" />
+      <RowDefinition Height="Auto" />
       <RowDefinition Height="*" />
       <RowDefinition Height="Auto" />
     </Grid.RowDefinitions>
@@ -59,20 +60,34 @@
       </Grid>
     </Border>
 
-    <!-- Полосы каналов -->
+    <!-- Фильтры-чипы: «Все» · авто-зоны · ручные группы · создание группы -->
     <Border Grid.Row="1"
+            Background="{DynamicResource Brush.Panel}"
+            BorderBrush="{DynamicResource Brush.Stroke}"
+            BorderThickness="1"
+            CornerRadius="{DynamicResource Radius.L}"
+            Padding="14,8"
+            Margin="0,0,0,12">
+      <ScrollViewer HorizontalScrollBarVisibility="Auto"
+                    VerticalScrollBarVisibility="Disabled">
+        <StackPanel x:Name="ChipsHost" Orientation="Horizontal" />
+      </ScrollViewer>
+    </Border>
+
+    <!-- Полосы каналов: секции-зоны сверху вниз, пульты переносятся по ширине -->
+    <Border Grid.Row="2"
             Background="{DynamicResource Brush.Elevated}"
             BorderBrush="{DynamicResource Brush.Stroke}"
             BorderThickness="1"
             CornerRadius="{DynamicResource Radius.L}">
-      <ScrollViewer HorizontalScrollBarVisibility="Auto"
-                    VerticalScrollBarVisibility="Disabled">
-        <StackPanel x:Name="StripsHost" Orientation="Horizontal" Margin="14" />
+      <ScrollViewer HorizontalScrollBarVisibility="Disabled"
+                    VerticalScrollBarVisibility="Auto">
+        <StackPanel x:Name="StripsHost" Orientation="Vertical" Margin="14" />
       </ScrollViewer>
     </Border>
 
-    <TextBlock Grid.Row="2"
-               Text="Двойной клик по имени — переименование · ПКМ — удаление · M — перекрытие · S — соло · B — обход"
+    <TextBlock Grid.Row="3"
+               Text="Двойной клик по имени — переименование · ПКМ — «В группу» и удаление · M — перекрытие · S — соло · B — обход"
                FontSize="11"
                Foreground="{DynamicResource Brush.TextFaint}"
                HorizontalAlignment="Center"

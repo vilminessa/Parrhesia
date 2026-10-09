@@ -10,12 +10,22 @@ public sealed class AudioGraph
     private readonly List<AudioNode> _nodes = [];
     private readonly List<Route> _routes = [];
 
+    /// <summary>Ручные группы микшера; null — «ещё не заводили» (см. GroupsInitialized).</summary>
+    private List<MixerGroup>? _groups;
+
     /// <summary>Поднимается после любого изменения структуры или параметров.</summary>
     public event EventHandler<GraphChange>? Changed;
 
     public IReadOnlyList<AudioNode> Nodes => _nodes;
 
     public IReadOnlyList<Route> Routes => _routes;
+
+    public IReadOnlyList<MixerGroup> Groups => _groups ?? [];
+
+    /// <summary>Группы уже создавались (для сериализации: null = «не трогали»).</summary>
+    public bool GroupsInitialized => _groups is not null;
+
+    internal List<MixerGroup>? GroupsForSerialize => _groups;
 
     public bool HasSolo => _nodes.Exists(n => n.Solo);
 
@@ -57,8 +67,138 @@ public sealed class AudioGraph
             }
         }
 
+        // Узел вычищается из всех ручных групп микшера (мёртвые ссылки не живут).
+        if (_groups is { Count: > 0 })
+        {
+            var pruned = false;
+            foreach (var group in _groups)
+            {
+                pruned |= group.NodeIds.Remove(id);
+            }
+
+            if (pruned)
+            {
+                Raise(GraphChangeKind.GroupsChanged);
+            }
+        }
+
         Raise(GraphChangeKind.NodeRemoved, node: node);
         return true;
+    }
+
+    // ── Ручные группы микшера (M-волна «зоны») ──────────────────────────
+
+    /// <summary>Создаёт ручную группу и поднимает <see cref="GraphChangeKind.GroupsChanged"/>.</summary>
+    public MixerGroup AddGroup(string name, bool autoFill = false)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+
+        _groups ??= [];
+        var group = new MixerGroup
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Name = name.Trim(),
+            AutoFill = autoFill,
+        };
+        _groups.Add(group);
+        Raise(GraphChangeKind.GroupsChanged);
+        return group;
+    }
+
+    public bool RenameGroup(string id, string name)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+
+        var group = _groups?.Find(g => g.Id == id);
+        if (group is null)
+        {
+            return false;
+        }
+
+        var trimmed = name.Trim();
+        if (group.Name == trimmed)
+        {
+            return true;
+        }
+
+        group.Name = trimmed;
+        Raise(GraphChangeKind.GroupsChanged);
+        return true;
+    }
+
+    public bool RemoveGroup(string id)
+    {
+        var removed = _groups?.RemoveAll(g => g.Id == id) > 0;
+        if (removed)
+        {
+            Raise(GraphChangeKind.GroupsChanged);
+        }
+
+        return removed;
+    }
+
+    /// <summary>Группа, в которую входит узел (null — узел только в авто-зоне).</summary>
+    public MixerGroup? FindGroupOf(Guid nodeId) =>
+        _groups?.Find(g => g.NodeIds.Contains(nodeId));
+
+    /// <summary>
+    /// Переносит узел в группу (move-семантика: из всех остальных групп
+    /// вычищается — стрип не должен дублироваться в ленте). groupId = null —
+    /// «из группы убрать». Неизвестная группа — ArgumentException.
+    /// </summary>
+    public void SetNodeGroup(Guid nodeId, string? groupId)
+    {
+        _groups ??= [];
+        var changed = false;
+        foreach (var group in _groups)
+        {
+            changed |= group.NodeIds.Remove(nodeId);
+        }
+
+        if (groupId is not null)
+        {
+            var target = _groups.Find(g => g.Id == groupId)
+                ?? throw new ArgumentException($"Неизвестная группа {groupId}.", nameof(groupId));
+            if (!target.NodeIds.Contains(nodeId))
+            {
+                target.NodeIds.Add(nodeId);
+                changed = true;
+            }
+        }
+
+        if (changed)
+        {
+            Raise(GraphChangeKind.GroupsChanged);
+        }
+    }
+
+    /// <summary>Восстановление групп из JSON: фильтрует ссылки на несуществующие
+    /// узлы; переданный null оставляет группы «не инициализированными».</summary>
+    internal void RestoreGroups(List<MixerGroup>? groups)
+    {
+        if (groups is null)
+        {
+            _groups = null;
+            return;
+        }
+
+        _groups = groups;
+        PruneGroups();
+    }
+
+    /// <summary>Вычищает из групп id несуществующих узлов (без события —
+    /// вызывается внутри Reset/десериализации, событие поднимет вызывающий).</summary>
+    private void PruneGroups()
+    {
+        if (_groups is null)
+        {
+            return;
+        }
+
+        foreach (var group in _groups)
+        {
+            group.NodeIds.RemoveAll(id => !_nodes.Exists(n => n.Id == id));
+        }
     }
 
     public AudioNode? FindNode(Guid id) => _nodes.Find(n => n.Id == id);
@@ -634,6 +774,10 @@ public sealed class AudioGraph
                 Enabled = route.Enabled,
             });
         }
+
+        // Ручные группы переживают замену (имена сохраняются), но ссылки на
+        // исчезнувшие узлы вычищаются — мёртвых стрипов в ленте не бывает.
+        PruneGroups();
 
         Raise(GraphChangeKind.Reset);
     }

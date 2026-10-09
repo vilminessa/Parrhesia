@@ -162,6 +162,16 @@ internal sealed class MixerStrip : Border
     /// <summary>ПКМ → удалить.</summary>
     public event Action<MixerStrip>? DeleteRequested;
 
+    /// <summary>«В группу ▸» — наполняется MixerView при каждом открытии меню
+    /// (список ручных групп динамический).</summary>
+    public MenuItem GroupMenuItem { get; private set; } = null!;
+
+    /// <summary>«Из группы убрать» — включается, когда узел состоит в группе.</summary>
+    public MenuItem UngroupMenuItem { get; private set; } = null!;
+
+    /// <summary>Перенос узла в группу по id либо null — «из группы убрать».</summary>
+    public event Action<MixerStrip, string?>? AssignGroupRequested;
+
     public event Action<MixerStrip>? MuteToggled;
 
     public event Action<MixerStrip>? SoloToggled;
@@ -257,10 +267,17 @@ internal sealed class MixerStrip : Border
         var rename = new MenuItem { Header = "Переименовать" };
         rename.Click += (_, _) => RenameRequested?.Invoke(this);
 
+        GroupMenuItem = new MenuItem { Header = "В группу", IsEnabled = false };
+
+        UngroupMenuItem = new MenuItem { Header = "Из группы убрать", IsEnabled = false };
+        UngroupMenuItem.Click += (_, _) => AssignGroupRequested?.Invoke(this, null);
+
         var delete = new MenuItem { Header = "Удалить" };
         delete.Click += (_, _) => DeleteRequested?.Invoke(this);
 
         menu.Items.Add(rename);
+        menu.Items.Add(GroupMenuItem);
+        menu.Items.Add(UngroupMenuItem);
         menu.Items.Add(new Separator());
         menu.Items.Add(delete);
 
