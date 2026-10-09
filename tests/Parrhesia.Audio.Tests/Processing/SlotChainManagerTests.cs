@@ -1,13 +1,19 @@
+using System.Diagnostics;
 using Parrhesia.Audio.Processing;
 using Parrhesia.Core.Graph;
 using Parrhesia.Plugins;
 
 namespace Parrhesia.Audio.Tests.Processing;
 
+/// <summary>
+/// P-волна: загрузка плагинов ушла в фон (UI не ждёт dlopen), цепочки
+/// публикуются без выгрузки disabled-экземпляров, getState/prepare идут на
+/// паузе узла (вне process — VST3-контракт).
+/// </summary>
 public class SlotChainManagerTests
 {
     [Fact]
-    public void Sync_LoadsInstanceAndPublishesChain()
+    public async Task Sync_LoadsInstanceAndPublishesChain()
     {
         var graph = new AudioGraph();
         var source = graph.AddNode("Вход", NodeKind.Source);
@@ -23,6 +29,7 @@ public class SlotChainManagerTests
         using var manager = new SlotChainManager(graph, processor, factory.Create);
 
         graph.AddSlot(bus.Id, new PluginSlot { Path = "a.clap", PluginId = "a", Name = "A" });
+        await manager.SyncTask;
 
         Assert.Equal(1, factory.Created);
         // Сумма на sink: сухая0,5 + влажная (0,5×2) =1,5.
@@ -31,7 +38,7 @@ public class SlotChainManagerTests
     }
 
     [Fact]
-    public void ToggleEnabled_ReusesInstanceWithoutReload()
+    public async Task ToggleEnabled_ReusesInstanceWithoutReload()
     {
         var (graph, source, bus, sink) = BuildGraph();
         using var processor = new GraphProcessor(graph);
@@ -39,16 +46,47 @@ public class SlotChainManagerTests
         var factory = new FakeFactory();
         using var manager = new SlotChainManager(graph, processor, factory.Create);
         graph.AddSlot(bus.Id, new PluginSlot { Path = "a.clap", PluginId = "a" });
+        await manager.SyncTask;
 
         graph.SetSlotEnabled(bus.Id, 0, false);
+        await manager.SyncTask;
 
         Assert.Equal(1, factory.Created); // переключение Enabled не перезагружает DLL
         // Слот выключен: сухая0,5 + влажная0,5 =1,0.
         Assert.Equal(1.0f, Process(processor, sink.Id)[0], 3);
 
         graph.SetSlotEnabled(bus.Id, 0, true);
+        await manager.SyncTask;
         Assert.Equal(1, factory.Created);
         // Слот включён: сухая0,5 + влажная (0,5×2) =1,5.
+        Assert.Equal(1.5f, Process(processor, sink.Id)[0], 3);
+    }
+
+    [Fact]
+    public async Task DisabledSlot_InstanceSurvivesReEnable()
+    {
+        // Регрессия P-волны: публикация цепочки БЕЗ disabled-слота раньше
+        // вела к отложенной выгрузке живого экземпляра — re-enable работал
+        // на освобождённой памяти (AV в рантайме).
+        var (graph, source, bus, sink) = BuildGraph();
+        using var processor = new GraphProcessor(graph);
+        processor.SetInput(source.Id, new ConstantInput(0.5f));
+        var factory = new FakeFactory();
+        using var manager = new SlotChainManager(graph, processor, factory.Create);
+        graph.AddSlot(bus.Id, new PluginSlot { Path = "a.clap", PluginId = "a" });
+        await manager.SyncTask;
+
+        graph.SetSlotEnabled(bus.Id, 0, false);
+        await manager.SyncTask;
+        await Task.Delay(700); // прежний баг: dispose через «греc-таймер»
+
+        var instance = factory.Instances[0];
+        Assert.False(instance.Disposed);
+
+        graph.SetSlotEnabled(bus.Id, 0, true);
+        await manager.SyncTask;
+
+        Assert.Same(instance, factory.Instances[0]);
         Assert.Equal(1.5f, Process(processor, sink.Id)[0], 3);
     }
 
@@ -60,21 +98,24 @@ public class SlotChainManagerTests
         var factory = new FakeFactory();
         using var manager = new SlotChainManager(graph, processor, factory.Create);
         graph.AddSlot(bus.Id, new PluginSlot { Path = "a.clap", PluginId = "a" });
+        await manager.SyncTask;
 
         var first = factory.Instances[0];
 
         graph.RemoveSlot(bus.Id, 0);
         graph.AddSlot(bus.Id, new PluginSlot { Path = "b.clap", PluginId = "b" });
+        await manager.SyncTask;
 
         Assert.Equal(2, factory.Created);
         Assert.False(first.Disposed); // отложенная выгрузка — RT мог ещё держать
 
-        await Task.Delay(700);
+        // Выгрузка — по подтверждению RT-покоя либо таймауту (движок не тянет).
+        await Task.Delay(1200);
         Assert.True(first.Disposed);
     }
 
     [Fact]
-    public void LoadFailure_CollectsErrorAndKeepsPassthrough()
+    public async Task LoadFailure_CollectsErrorAndKeepsPassthrough()
     {
         var (graph, source, bus, sink) = BuildGraph();
         using var processor = new GraphProcessor(graph);
@@ -85,6 +126,7 @@ public class SlotChainManagerTests
             _ => throw new PluginLoadException("нет модуля"));
 
         graph.AddSlot(bus.Id, new PluginSlot { Path = "битый.clap", PluginId = "x", Name = "Битый" });
+        await manager.SyncTask;
 
         Assert.Single(manager.LastErrors);
         Assert.Contains("нет модуля", manager.LastErrors[0]);
@@ -93,13 +135,14 @@ public class SlotChainManagerTests
     }
 
     [Fact]
-    public void Prepare_PropagatesFormatToInstances()
+    public async Task Prepare_PropagatesFormatToInstances()
     {
         var (graph, _, bus, _) = BuildGraph();
         using var processor = new GraphProcessor(graph);
         var factory = new FakeFactory();
         using var manager = new SlotChainManager(graph, processor, factory.Create);
         graph.AddSlot(bus.Id, new PluginSlot { Path = "a.clap", PluginId = "a" });
+        await manager.SyncTask;
 
         manager.Prepare(44100, 4410, 2);
 
@@ -120,8 +163,10 @@ public class SlotChainManagerTests
         var factory = new FakeFactory();
         using var manager = new SlotChainManager(graph, processor, factory.Create);
         graph.AddSlot(bus.Id, new PluginSlot { Path = "a.clap", PluginId = "a" });
+        await manager.SyncTask;
 
         graph.SetNodeGain(bus.Id, 0.5f); // безобидная правка → Changed → ре-публикация
+        await manager.SyncTask;
 
         await Task.Delay(700);
         Assert.False(factory.Instances[0].Disposed);
@@ -135,6 +180,7 @@ public class SlotChainManagerTests
         var factory = new FakeFactory { State = [7, 7, 7] };
         using var manager = new SlotChainManager(graph, processor, factory.Create);
         graph.AddSlot(bus.Id, new PluginSlot { Path = "a.clap", PluginId = "a" });
+        await manager.SyncTask;
 
         var changes = 0;
         void Count(object? _, GraphChange e) => changes++;
@@ -150,7 +196,7 @@ public class SlotChainManagerTests
     }
 
     [Fact]
-    public void ReplaceWith_KeepsInstancesByIdentity()
+    public async Task ReplaceWith_KeepsInstancesByIdentity()
     {
         // Переключение профилей (ReplaceWith сохраняет id узлов) не должно
         // перезагружать плагины при совпадении path/id.
@@ -159,12 +205,67 @@ public class SlotChainManagerTests
         var factory = new FakeFactory();
         using var manager = new SlotChainManager(graph, processor, factory.Create);
         graph.AddSlot(bus.Id, new PluginSlot { Path = "a.clap", PluginId = "a" });
+        await manager.SyncTask;
 
         var copy = new AudioGraph();
         copy.ReplaceWith(graph);
         graph.ReplaceWith(copy);
+        await manager.SyncTask;
 
         Assert.Equal(1, factory.Created);
+    }
+
+    [Fact]
+    public async Task Sync_LoadsInBackground_NotBlockingCaller()
+    {
+        // UI-поток: клик «+ слот» не должен ждать dlopen (секунды у реальных
+        // VST3) — загрузка уходит в фон (P-волна «зависание»).
+        var (graph, _, bus, _) = BuildGraph();
+        using var processor = new GraphProcessor(graph);
+        var factory = new FakeFactory { CreateDelayMs = 300 };
+        using var manager = new SlotChainManager(graph, processor, factory.Create);
+
+        var stopwatch = Stopwatch.StartNew();
+        graph.AddSlot(bus.Id, new PluginSlot { Path = "медленный.vst3", PluginId = "slow" });
+        var elapsed = stopwatch.ElapsedMilliseconds;
+
+        Assert.True(elapsed < 250, $"AddSlot занял {elapsed} мс — загрузка на вызывающем потоке");
+        await manager.SyncTask;
+        Assert.Equal(1, factory.Created);
+    }
+
+    [Fact]
+    public async Task CollectStates_NeverOverlapsProcess()
+    {
+        // VST3-контракт: getState параллельно с process — data race, роняющая
+        // рантайм. Пауза цепочки перед снимком исключает пересечение.
+        var (graph, source, bus, sink) = BuildGraph();
+        using var processor = new GraphProcessor(graph);
+        processor.SetInput(source.Id, new ConstantInput(0.5f));
+        var factory = new FakeFactory { Racing = true };
+        using var manager = new SlotChainManager(graph, processor, factory.Create);
+        graph.AddSlot(bus.Id, new PluginSlot { Path = "a.clap", PluginId = "a" });
+        await manager.SyncTask;
+
+        var pumping = true;
+        var pump = Task.Run(() =>
+        {
+            while (Volatile.Read(ref pumping))
+            {
+                Process(processor, sink.Id, frames: 16);
+            }
+        });
+
+        for (var i = 0; i < 10; i++)
+        {
+            manager.CollectStates();
+            await Task.Delay(10);
+        }
+
+        Volatile.Write(ref pumping, false);
+        await pump;
+
+        Assert.False(factory.Instances[0].OverlapDetected);
     }
 
     private static (AudioGraph Graph, AudioNode Source, AudioNode Bus, AudioNode Sink) BuildGraph()
@@ -207,10 +308,26 @@ public class SlotChainManagerTests
 
         public byte[]? State { get; set; }
 
+        /// <summary>Искусственная задержка «dlopen» (мс) для теста фона.</summary>
+        public int CreateDelayMs { get; set; }
+
+        /// <summary>Создавать плагин, ловящий пересечение process/getState.</summary>
+        public bool Racing { get; set; }
+
         public IAudioPlugin Create(PluginSlot slot)
         {
+            if (CreateDelayMs > 0)
+            {
+                Thread.Sleep(CreateDelayMs);
+            }
+
             Created++;
             var plugin = new FakePlugin(slot.Path) { State = State };
+            if (Racing)
+            {
+                plugin.RaceWatch = true;
+            }
+
             Instances.Add(plugin);
             return plugin;
         }
@@ -218,6 +335,8 @@ public class SlotChainManagerTests
 
     private sealed class FakePlugin(string path) : IAudioPlugin
     {
+        private int _busy;
+
         public string Name => path;
         public int LatencySamples => 0;
         public bool Prepared { get; private set; }
@@ -225,6 +344,11 @@ public class SlotChainManagerTests
         public int SampleRate { get; private set; }
         public int MaxBlock { get; private set; }
         public byte[]? State { get; set; }
+
+        /// <summary>Включает «гонку-ловушку»: GetState фиксирует пересечение с Process.</summary>
+        public bool RaceWatch { get; set; }
+
+        public bool OverlapDetected { get; private set; }
 
         public void Prepare(int sampleRate, int maxBlockFrames, int channels)
         {
@@ -235,13 +359,28 @@ public class SlotChainManagerTests
 
         public void Process(Span<float> interleaved, int frames)
         {
+            if (RaceWatch)
+            {
+                Interlocked.Increment(ref _busy);
+                Thread.Sleep(1); // имитация работы плагина внутри process
+                Interlocked.Decrement(ref _busy);
+            }
+
             for (var i = 0; i < interleaved.Length; i++)
             {
                 interleaved[i] *= 2f;
             }
         }
 
-        public byte[]? GetState() => State;
+        public byte[]? GetState()
+        {
+            if (RaceWatch && Volatile.Read(ref _busy) != 0)
+            {
+                OverlapDetected = true;
+            }
+
+            return State;
+        }
 
         public void SetState(byte[]? state) => State = state;
 

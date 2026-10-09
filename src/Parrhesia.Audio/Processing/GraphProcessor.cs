@@ -84,9 +84,10 @@ public sealed class GraphProcessor : IDisposable
 
     /// <summary>
     /// Атомарно публикует цепочку плагинов узла: RT-поток читает свежий
-    /// массив со следующего блока. Выгружается с отложенным грейсом (500 мс)
-    /// только то, чего НЕТ в новой цепочке — ре-публикация тех же экземпляров
-    /// (каждый graph.Changed) не должна их убивать; RT мог ещё держать ссылку.
+    /// массив со следующего блока. Владелец жизненного цикла экземпляров —
+    /// SlotChainManager (снимок цепочки может исключать выключенные слоты —
+    /// процессор НЕ выгружает то, чего нет в публикации, иначе disabled-слот
+    /// уничтожался бы и re-enable работал на освобождённой памяти).
     /// </summary>
     public void SetSlotChain(Guid nodeId, IAudioPlugin?[] chain)
     {
@@ -99,31 +100,14 @@ public sealed class GraphProcessor : IDisposable
         }
 
         holder.Plugins = chain;
-        foreach (var old in previous)
-        {
-            if (old is not null && Array.IndexOf(chain, old) < 0)
-            {
-                ScheduleDispose(old);
-            }
-        }
     }
 
-    private static void ScheduleDispose(IAudioPlugin plugin) =>
-        _ = Task.Delay(500).ContinueWith(
-            _ =>
-            {
-                try
-                {
-                    plugin.Dispose();
-                }
-                catch
-                {
-                    // Ошибка деструктора плагина не должна валить процесс.
-                }
-            },
-            CancellationToken.None,
-            TaskContinuationOptions.None,
-            TaskScheduler.Default);
+    /// <summary>Число завершённых RT-блоков (PullCount): якорь для пауз цепочек.</summary>
+    private long _pullCount;
+
+    /// <summary>Счётчик RT-блоков — хост ждёт его приращение, чтобы узнать,
+    /// что RT-поток отработал после снятия цепочки (пауза перед getState/destroy).</summary>
+    public long PullCount => Volatile.Read(ref _pullCount);
 
     /// <summary>Суммарная латентность активной цепочки узла (в кадрах).</summary>
     public int ChainLatency(Guid nodeId)
@@ -192,6 +176,8 @@ public sealed class GraphProcessor : IDisposable
     /// </summary>
     public void ProcessBlock(Guid sinkId, Span<float> output, int frames)
     {
+        Interlocked.Increment(ref _pullCount);
+
         var samples = frames * _channels;
         if (samples > output.Length)
         {

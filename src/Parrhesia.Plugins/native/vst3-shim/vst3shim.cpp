@@ -8,6 +8,8 @@
 #define PARR_VST3_SHIM_EXPORTS
 #include "parr_vst3.h"
 
+#include <windows.h>
+
 #include <public.sdk/source/vst/hosting/module.h>
 #include <public.sdk/source/vst/hosting/plugprovider.h>
 #include <public.sdk/source/vst/hosting/hostclasses.h>
@@ -71,6 +73,10 @@ struct Instance
     int maxBlock = 0;
     int channels = 0;
     bool prepared = false;
+
+    // Страховка от UB: process против prepare/destroy. Хост держит паузу
+    // цепочки (SlotChainManager), шим дополнительно не даёт пересечься.
+    std::atomic<int> inProcess {0};
 
     // Параметры: Set (main-thread) копит в SPSC-кольцо, Process (audio)
     // доставляет очередью в inputParameterChanges и чистит её.
@@ -279,6 +285,17 @@ void __cdecl Pv3Destroy (void* raw)
         return;
     }
 
+    // Хост обязан снять цепочку до destroy; короткая страховка, если RT ещё
+    // дорабатывает последний блок.
+    {
+        const auto deadline = GetTickCount64 () + 200;
+        while (instance->inProcess.load (std::memory_order_acquire) != 0 &&
+               GetTickCount64 () < deadline)
+        {
+            Sleep (1);
+        }
+    }
+
     // Редактор закрывается первым (view не должен пережить плагина).
     Pv3EditorClose (instance);
 
@@ -318,6 +335,11 @@ int __cdecl Pv3Prepare (void* raw, double sampleRate, int maxBlockFrames, int ch
     if (sampleRate <= 0.0 || maxBlockFrames <= 0 || channels != 2)
     {
         return Fail ("Pv3Prepare: нужен стерео-формат и корректный rate/block");
+    }
+
+    if (instance->inProcess.load (std::memory_order_acquire) != 0)
+    {
+        return Fail ("Pv3Prepare: идёт process — снимите цепочку и повторите");
     }
 
     LastErrorRef ().clear ();
@@ -415,6 +437,24 @@ int __cdecl Pv3Process (void* raw, float* interleaved, int frames)
     if (!instance->prepared)
     {
         return Fail ("Pv3Process: не подготовлен (Pv3Prepare)");
+    }
+
+    // RAII-счётчик: prepare/destroy видят «идёт process» и отказывают.
+    struct BusyGuard
+    {
+        std::atomic<int>& counter;
+        explicit BusyGuard (std::atomic<int>& c) : counter (c)
+        {
+            counter.fetch_add (1, std::memory_order_acq_rel);
+        }
+        ~BusyGuard () { counter.fetch_sub (1, std::memory_order_acq_rel); }
+        bool Contended () const { return counter.load (std::memory_order_acquire) > 1; }
+    };
+
+    const BusyGuard busy (instance->inProcess);
+    if (busy.Contended ())
+    {
+        return Fail ("Pv3Process: параллельный вызов (prepare/destroy в работе)");
     }
 
     if (frames <= 0)

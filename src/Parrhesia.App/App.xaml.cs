@@ -2,6 +2,7 @@
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Windows;
+using Microsoft.Win32;
 
 namespace Parrhesia.App;
 
@@ -19,6 +20,8 @@ public partial class App : Application
 
         var console = Array.IndexOf(e.Args, "--console") >= 0;
         InitializeLogging(console);
+        InstallCrashHooks();
+        TryEnableCrashDumps();
 
         AppServices.Initialize();
 
@@ -86,6 +89,59 @@ public partial class App : Application
             Trace.WriteLine(args.ExceptionObject?.ToString() ?? "(нет объекта исключения)");
             Trace.Flush();
         };
+    }
+
+    /// <summary>
+    /// Перехватчики «тихих» путей: исключение в фоновой задаче и на диспетчере.
+    /// Нативные AV рантайма этими хуками не ловятся — для них дампы WER
+    /// (см. <see cref="TryEnableCrashDumps"/>).
+    /// </summary>
+    private void InstallCrashHooks()
+    {
+        DispatcherUnhandledException += (_, args) =>
+        {
+            Trace.WriteLine("[Parrhesia] НЕПЕРЕХВАЧЕННОЕ ИСКЛЮЧЕНИЕ (диспетчер):");
+            Trace.WriteLine(args.Exception.ToString());
+            Trace.Flush();
+        };
+
+        TaskScheduler.UnobservedTaskException += (_, args) =>
+        {
+            Trace.WriteLine("[Parrhesia] НЕПЕРЕХВАЧЕННОЕ ИСКЛЮЧЕНИЕ (задача):");
+            Trace.WriteLine(args.Exception?.ToString() ?? "(нет исключения)");
+            Trace.Flush();
+            args.SetObserved();
+        };
+    }
+
+    /// <summary>
+    /// WER LocalDumps (HKCU — без админа): мини-дампы крэшей в
+    /// %LOCALAPPDATA%\CrashDumps. Нативный AV внутри VST3-хоста без дампа
+    /// не локализуется; существующая ручная настройка не перезаписывается.
+    /// </summary>
+    private static void TryEnableCrashDumps()
+    {
+        try
+        {
+            using var key = Registry.CurrentUser.CreateSubKey(
+                @"Software\Microsoft\Windows\Windows Error Reporting\LocalDumps\Parrhesia.App.exe");
+            if (key is null || key.GetValue("DumpFolder") is not null)
+            {
+                return;
+            }
+
+            key.SetValue(
+                "DumpFolder",
+                Environment.ExpandEnvironmentVariables(@"%LOCALAPPDATA%\CrashDumps"),
+                RegistryValueKind.ExpandString);
+            key.SetValue("DumpType", 1, RegistryValueKind.DWord); // мини-дамп
+            key.SetValue("DumpCount", 3, RegistryValueKind.DWord);
+            Trace.WriteLine("[Parrhesia] включены мини-дампы WER: %LOCALAPPDATA%\\CrashDumps");
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine($"[Parrhesia] не удалось включить WER-дампы: {ex.Message}");
+        }
     }
 
     [DllImport("kernel32.dll", SetLastError = true)]
