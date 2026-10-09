@@ -24,6 +24,9 @@ public struct ParrhesiaFeedStats
 
     /// <summary>Отброшено кабелем по водяному знаку (кап задержки; В1).</summary>
     public ulong CableDropped;
+
+    /// <summary>Размер кольца, Б — прямая задержка кабеля (мс = Bytes /384).</summary>
+    public ulong LevelBytes;
 }
 
 /// <summary>
@@ -186,6 +189,72 @@ public sealed class DriverFeed : IDisposable
         {
             Marshal.FreeHGlobal(buffer);
         }
+    }
+
+    /// <summary>
+    /// Внешний read-only снимок статистики фида (M-волна): открывает фид
+    /// ТОЛЬКО на чтение (GENERIC_READ) — драйвер не считает такой хэндл
+    /// писателем, кабель во время диагностики НЕ замирает. Для UI/лога.
+    /// </summary>
+    public static bool TryReadStatsShared(out ParrhesiaFeedStats stats)
+    {
+        stats = default;
+        var suffix = VirtualEndpointResolver.TryGetFeedSuffix(out var s) ? s : null;
+        var candidates = string.IsNullOrEmpty(suffix)
+            ? new[] { DevicePath }
+            : new[] { PathFor(suffix!), DevicePath };
+
+        foreach (var path in candidates)
+        {
+            var handle = NativeMethods.CreateFileW(
+                path,
+                NativeMethods.GenericRead,
+                (uint)(FileShare.ReadWrite | FileShare.Read),
+                IntPtr.Zero,
+                FileMode.Open,
+                0,
+                IntPtr.Zero);
+            if (handle.IsInvalid)
+            {
+                handle.Dispose();
+                continue;
+            }
+
+            try
+            {
+                var size = Marshal.SizeOf<ParrhesiaFeedStats>();
+                var buffer = Marshal.AllocHGlobal(size);
+                try
+                {
+                    var ok = NativeMethods.DeviceIoControl(
+                        handle,
+                        IoctlGetStats,
+                        IntPtr.Zero,
+                        0,
+                        buffer,
+                        (uint)size,
+                        out var returned,
+                        IntPtr.Zero);
+                    if (!ok || returned < size)
+                    {
+                        continue;
+                    }
+
+                    stats = Marshal.PtrToStructure<ParrhesiaFeedStats>(buffer);
+                    return true;
+                }
+                finally
+                {
+                    Marshal.FreeHGlobal(buffer);
+                }
+            }
+            finally
+            {
+                handle.Dispose();
+            }
+        }
+
+        return false;
     }
 
     /// <summary>

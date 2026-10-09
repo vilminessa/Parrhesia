@@ -368,7 +368,7 @@ public class GraphProcessorTests
     }
 
     [Fact]
-    public void TwoSinksInSameEpoch_ReadEachInputExactlyOnce()
+    public void TwoSinks_DisjointInputs_EachReadOnlyByItsOwnSink()
     {
         var graph = new AudioGraph();
         var s1 = graph.AddNode("A", NodeKind.Source);
@@ -384,21 +384,15 @@ public class GraphProcessorTests
         processor.SetInput(s1.Id, in1);
         processor.SetInput(s2.Id, in2);
 
-        // Четыре пулла подряд БЕЗ перевода эпохи (2 сника ×2): без
-        // эпохального кэша каждый пулл дренажил кольца заново — при2+
-        // выходах второй пулл видел пустоту («под» в полную скорость).
-        var t0 = Environment.TickCount64;
+        //4 пулла (2 сника ×2): чужой вход НЕ дренажится (раньше каждый пулл
+        //читал ВСЕ кольца — при2+ выходах второй пулл видел пустоту).
         var a1 = Raw(processor, sink1.Id);
         var b1 = Raw(processor, sink2.Id);
         var a2 = Raw(processor, sink1.Id);
         var b2 = Raw(processor, sink2.Id);
-        if (Environment.TickCount64 - t0 >= 10)
-        {
-            return; // пересекли границу эпохи10мс — не детерминировано
-        }
 
-        Assert.Equal(1, in1.ReadCalls);
-        Assert.Equal(1, in2.ReadCalls);
+        Assert.Equal(2, in1.ReadCalls); // ровно по числу пуллов СВОЕГО сника
+        Assert.Equal(2, in2.ReadCalls);
         Assert.Equal(1f, a1[0]);
         Assert.Equal(2f, b1[0]);
         Assert.Equal(1f, a2[0]);
@@ -406,7 +400,7 @@ public class GraphProcessorTests
     }
 
     [Fact]
-    public void Invalidate_ForcesRecomputeWithinSameEpoch()
+    public void SequentialPulls_AlwaysFresh_NoCaching()
     {
         var graph = new AudioGraph();
         var source = graph.AddNode("Вход", NodeKind.Source);
@@ -417,29 +411,39 @@ public class GraphProcessorTests
         var input = new CountingInput(1f);
         processor.SetInput(source.Id, input);
 
+        // Контракт: каждый пулл = свежее чтение входа (кэша нет).
         _ = Raw(processor, sink.Id);
-        Assert.Equal(1, input.ReadCalls);
-
-        // Второй пулл в той же эпохе — из кэша (без повторного чтения).
-        _ = Raw(processor, sink.Id);
-        Assert.Equal(1, input.ReadCalls);
-
-        // Смена входа сбрасывает эпохальные буферы.
-        processor.SetInput(source.Id, input);
         _ = Raw(processor, sink.Id);
         Assert.Equal(2, input.ReadCalls);
 
-        // Явная инвалидация (правки графа) тоже.
         processor.Invalidate();
         _ = Raw(processor, sink.Id);
         Assert.Equal(3, input.ReadCalls);
     }
 
+    [Fact]
+    public void MixerStats_ReflectPulls()
+    {
+        var graph = new AudioGraph();
+        var source = graph.AddNode("Вход", NodeKind.Source);
+        var sink = graph.AddNode("Выход", NodeKind.Sink);
+        graph.AddRoute(source.Id, sink.Id, out _);
+
+        using var processor = new GraphProcessor(graph);
+        processor.SetInput(source.Id, new ConstantInput(1f));
+
+        _ = Process(processor, sink.Id, frames: 480);
+
+        var stats = processor.GetMixerStats();
+        Assert.Equal(480, stats.LastFrames);
+        Assert.True(stats.CpuUsPerBlock > 0);
+        Assert.True(stats.BlocksPerSec >= 0);
+    }
+
     private static float[] Process(GraphProcessor processor, Guid sinkId, int frames = 8)
     {
-        // Семантика старых тестов: каждый вызов = новый аудио-цикл.
-        // Runtime этого НЕ делает — там работает эпохальный кэш (см.
-        // TwoSinksInSameEpoch); тесты переводят эпоху вручную.
+        // Семантика тестов: Invalidate фиксирует снимок графа перед блоком
+        // (в рантайме это делает подписка Changed).
         processor.Invalidate();
         return Raw(processor, sinkId, frames);
     }

@@ -14,6 +14,12 @@ public interface IAudioEngine : IDisposable
     /// <summary>Текущее состояние (потокобезопасный снимок, xrun-счётчики включены).</summary>
     EngineStatus Status { get; }
 
+    /// <summary>
+    /// Поэтапный отчёт задержки тракта (M-волна): захват → кольца → кабель →
+    /// микшер → выводы + список текущих проблем. Снимок для UI/лога, RT-путь не трогает.
+    /// </summary>
+    LatencyReport GetLatencyReport();
+
     /// <summary>Пик (linear, |x|) последнего блока узла — для метров UI. Потокобезопасно.</summary>
     float GetPeak(Guid nodeId);
 

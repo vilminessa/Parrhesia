@@ -59,8 +59,9 @@ typedef struct _PFEED_STATS
     LONG      ReaderActive;    // 1 — поток захвата держит фид
     LONG      FormatMismatch;  // 1 — формат потока не совпал с каноническим
     ULONGLONG LoopBytes;       // принято кабельным циклом (render → фид)
-    LONG      Writers;         // открыто user mode-хэндлов фида (0 → кабель активен)
+    LONG      Writers;         // открыто WRITE-хэндлов фида (0 → кабель активен)
     ULONGLONG CableDropped;    // отброшено кабелем: уровень > PFEED_CABLE_HIGH (кап задержки)
+    ULONGLONG LevelBytes;      // размер кольца, Б — ПРЯМАЯ задержка кабеля (мс = /384000)
 } PFEED_STATS, *PPFEED_STATS;
 
 class CParrhesiaFeed
@@ -81,10 +82,12 @@ public:
     // проверены вызывающим против PFEED_*). Конверт в PCM32 на лету, ≤DISPATCH.
     void WriteCable(_In_reads_bytes_(len) const BYTE *src, _In_ ULONG len, _In_ ULONG bitsPerSample);
 
-    // Пользовательские писатели: CREATE/CLOSE хэндла \\.\ParrhesiaFeed_*.
-    // Пока Writers > 0 приложение-обработчик держит путь — кабель уступает.
-    void AddWriter();
-    void RemoveWriter();
+    // Учёт хэндлов: Writers считается ТОЛЬКО по хэндлам с write-доступом
+    // (M-волна) — диагностика открывает фид GENERIC_READ и НЕ замирает кабель.
+    // NoteHandleCleanup идемпотентен (CLOSE без CLEANUP-флага — no-op).
+    void NoteHandleCreate(_In_ VOID *fileObject, _In_ BOOLEAN writer);
+    void NoteHandleCleanup(_In_ VOID *fileObject);
+
     BOOLEAN HasWriters();
 
     // Выдача блока потоку захвата (≤ DISPATCH_LEVEL). При нехватке — тишина.
@@ -111,7 +114,11 @@ private:
     ULONGLONG           m_CableDrop;   // отброшено кабелем по водяному знаку
     const void         *m_Owner;
     LONG                m_FormatMismatch;
-    LONG                m_Writers;     // открытых user mode-хэндлов
+    LONG                m_Writers;     // write-хэндлов (список ниже)
+
+    // FileObject'ы write-хэндлов (для корректного декремента на CLEANUP).
+    static const LONG   MaxWriterHandles = 8;
+    VOID               *m_WriterFO[MaxWriterHandles];
 };
 
 // ===== Инстансы (per-adapter feed; см. М2-lanes) =====

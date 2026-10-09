@@ -4,6 +4,7 @@
   <Grid Margin="20">
     <Grid.RowDefinitions>
       <RowDefinition Height="Auto" />
+      <RowDefinition Height="Auto" />
       <RowDefinition Height="*" />
     </Grid.RowDefinitions>
 
@@ -78,8 +79,81 @@
       </Grid>
     </Border>
 
-    <!-- Сетка метров -->
+    <!-- Задержка по этапам тракта (M-волна) -->
     <Border Grid.Row="1"
+            Background="{DynamicResource Brush.Panel}"
+            BorderBrush="{DynamicResource Brush.Stroke}"
+            BorderThickness="1"
+            CornerRadius="8"
+            Padding="16,10"
+            Margin="0,0,0,14">
+      <StackPanel>
+        <Grid Margin="0,0,0,8">
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="Auto" />
+            <ColumnDefinition Width="Auto" />
+            <ColumnDefinition Width="*" />
+          </Grid.ColumnDefinitions>
+
+          <TextBlock Text="Задержка по этапам"
+                     Foreground="{DynamicResource Brush.Text}"
+                     FontSize="13"
+                     FontWeight="SemiBold"
+                     VerticalAlignment="Center" />
+          <TextBlock x:Name="LatencyTotalText"
+                     Grid.Column="1"
+                     Text="—"
+                     Foreground="{DynamicResource Brush.Cyan}"
+                     FontSize="13"
+                     FontWeight="SemiBold"
+                     Margin="14,0,0,0"
+                     VerticalAlignment="Center" />
+          <TextBlock x:Name="LatencyIssuesText"
+                     Grid.Column="2"
+                     Text=""
+                     Foreground="{DynamicResource Brush.Danger}"
+                     FontSize="12"
+                     FontWeight="SemiBold"
+                     Margin="14,0,0,0"
+                     VerticalAlignment="Center"
+                     TextTrimming="CharacterEllipsis"
+                     Visibility="Collapsed" />
+        </Grid>
+
+        <ItemsControl x:Name="LatencyList" MaxHeight="200">
+          <ItemsControl.ItemTemplate>
+            <DataTemplate>
+              <Grid Margin="0,1">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="240" />
+                  <ColumnDefinition Width="80" />
+                  <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="{Binding Name}"
+                           Foreground="{DynamicResource Brush.Text}"
+                           FontSize="12"
+                           TextTrimming="CharacterEllipsis" />
+                <TextBlock Grid.Column="1"
+                           Text="{Binding Ms, StringFormat={}{0:0.0} мс}"
+                           Foreground="{DynamicResource Brush.Cyan}"
+                           FontSize="12"
+                           FontWeight="SemiBold"
+                           HorizontalAlignment="Right" />
+                <TextBlock Grid.Column="2"
+                           Text="{Binding Detail}"
+                           Foreground="{DynamicResource Brush.TextFaint}"
+                           FontSize="11"
+                           Margin="12,0,0,0"
+                           TextTrimming="CharacterEllipsis" />
+              </Grid>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+      </StackPanel>
+    </Border>
+
+    <!-- Сетка метров -->
+    <Border Grid.Row="2"
             Background="{DynamicResource Brush.Elevated}"
             BorderBrush="{DynamicResource Brush.Stroke}"
             BorderThickness="1"

@@ -1,8 +1,12 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using Parrhesia.Core.Graph;
 using Parrhesia.Plugins;
 
 namespace Parrhesia.Audio.Processing;
+
+/// <summary>Метрики микшера для отчёта задержки (M-волна).</summary>
+public sealed record MixerStats(double CpuUsPerBlock, double BlocksPerSec, int LastFrames);
 
 /// <summary>
 /// Микширующее ядро: обход графа за один аудиоблок.
@@ -32,21 +36,25 @@ public sealed class GraphProcessor : IDisposable
     private GraphSnapshot _snapshot;
 
     /// <summary>
-    /// Эпоха смешивания (сетка2мс — меньше минимального WASAPI-периода
-    /// ~2.67мс, поэтому каждый пулл реально свежий): вход каждого узла
-    /// дренажится РОВНО РАЗ на эпоху, ветка сника считается РОВНО РАЗ.
-    /// Без этого каждый пулл каждого сника читал кольца заново: при2+
-    /// выходах второй пулл видел пустоту («под» в полную скорость, сигнал
-    /// выходов перемежался тишиной — «ломаный» звук).
+    /// Смешивание (мьютекс пулов): раньше здесь был эпохальный кэш (2мс) —
+    /// он добавлял повторы/дыры при частых или разных-по-размеру пулах сников.
+    /// Нынешняя модель: каждый пулл СВЕЖИЙ, но читает входы РОВНО СВОЕЙ
+    /// ветки (upstream по рёбрам, включая disabled-маршруты — их источники
+    /// остаются «живыми» для метрик). Для disjoint-схемы (у владельца:
+    /// Микрофон→In1, Захват→Динамики) каждый вход читается ровно СВОИМ
+    /// потребителем — двойного дренажа и пустых блоков нет.
+    /// Внимание: общий (shared) вход, питающий несколько сников, читается
+    /// каждым из них — для таких схем позже нужен отдельный латч.
     /// </summary>
-    private const int MixEpochMs = 2;
+    private readonly object _mixGate = new();
 
-    private readonly object _epochGate = new();
-    private long _epochStamp = -1;
-    private int _epochSamples;
-
-    /// <summary>Узлы, посчитанные в текущую эпоху (дренаж источников и суммы — по разу).</summary>
-    private readonly HashSet<Guid> _epochComputed = [];
+    // --- Метрики микшера (под _mixGate) ---
+    private long _mixBlocks;
+    private long _mixCpuTicks;
+    private int _mixLastFrames;
+    private long _mixWindowStamp;
+    private long _mixWindowBlocks;
+    private double _mixBlocksPerSec;
 
     public GraphProcessor(AudioGraph graph, int channels = 2)
     {
@@ -70,9 +78,6 @@ public sealed class GraphProcessor : IDisposable
         {
             _inputs[nodeId] = input;
         }
-
-        // Вход изменился — буферы эпохи устарели.
-        Volatile.Write(ref _epochStamp, -1);
     }
 
     public void ClearInputs() => _inputs.Clear();
@@ -151,10 +156,6 @@ public sealed class GraphProcessor : IDisposable
         var snapshot = GraphSnapshot.Build(_graph, ChainLatency);
         PrepareEdgeDelays(snapshot);
         Volatile.Write(ref _snapshot, snapshot);
-
-        // Новый снимок — эпохальные буферы устарели (иначе правки гейнов
-        // и привязок не применялись бы до конца эпохи).
-        Volatile.Write(ref _epochStamp, -1);
     }
 
     /// <summary>
@@ -198,18 +199,31 @@ public sealed class GraphProcessor : IDisposable
             frames = samples / _channels;
         }
 
-        var epoch = Environment.TickCount64 / MixEpochMs;
-        lock (_epochGate)
+        lock (_mixGate)
         {
+            var started = Stopwatch.GetTimestamp();
             var snapshot = Volatile.Read(ref _snapshot);
-
-            if (epoch != _epochStamp || samples != _epochSamples)
-            {
-                ResetEpoch(epoch, samples);
-            }
-
             EnsureBuffers(snapshot, samples);
-            ComputeEpoch(snapshot, samples);
+
+            // Только своя ветка: чужие входы не читаются (иначе каждый пулл
+            // дренажил бы ВСЕ кольца — при2+ выходах второй пулл видел пустоту).
+            var upstream = CollectUpstream(sinkId, snapshot);
+            foreach (var node in snapshot.Nodes) // топологический порядок
+            {
+                if (!upstream.Contains(node.Id))
+                {
+                    continue;
+                }
+
+                if (node.Kind == NodeKind.Source)
+                {
+                    ProcessSource(node, snapshot, samples);
+                }
+                else
+                {
+                    ProcessSumming(node, snapshot, samples);
+                }
+            }
 
             if (samples == 0)
             {
@@ -247,51 +261,65 @@ public sealed class GraphProcessor : IDisposable
             {
                 output[samples..].Clear();
             }
+
+            _mixBlocks++;
+            _mixCpuTicks += Stopwatch.GetTimestamp() - started;
+            _mixLastFrames = frames;
         }
     }
 
-    /// <summary>Начало новой эпохи: буферы и отметки расчёта сбрасываются.</summary>
-    private void ResetEpoch(long epoch, int samples)
+    /// <summary>Снимок метрик микшера (для отчёта задержки; окно ~0.5 с для частоты пуллов).</summary>
+    public MixerStats GetMixerStats()
     {
-        Volatile.Write(ref _epochStamp, epoch);
-        _epochSamples = samples;
-        _epochComputed.Clear();
+        lock (_mixGate)
+        {
+            var now = Stopwatch.GetTimestamp();
+            if (_mixWindowStamp == 0)
+            {
+                _mixWindowStamp = now;
+                _mixWindowBlocks = _mixBlocks;
+            }
+            else
+            {
+                var elapsedSec = (now - _mixWindowStamp) / (double)Stopwatch.Frequency;
+                if (elapsedSec >= 0.5)
+                {
+                    _mixBlocksPerSec = (_mixBlocks - _mixWindowBlocks) / elapsedSec;
+                    _mixWindowStamp = now;
+                    _mixWindowBlocks = _mixBlocks;
+                }
+            }
+
+            var cpuUs = _mixBlocks > 0
+                ? (_mixCpuTicks * 1_000_000.0 / Stopwatch.Frequency) / _mixBlocks
+                : 0;
+
+            return new MixerStats(cpuUs, _mixBlocksPerSec, _mixLastFrames);
+        }
     }
 
     /// <summary>
-    /// Расчёт графа на эпоху: источники дренаживаются РОВНО РАЗ
-    /// (латч — и потребление равно частоте записи при любом числе сников,
-    /// и метры источников живут даже без маршрутов), суммирование — раз в
-    /// эпоху для всех узлов (как в прежней модели — но на уже прочитанных
-    /// блоках). Повторные пулы сников в пределах эпохи идут в кэш.
+    /// Узлы, из которых достижим <paramref name="sinkId"/> (обход назад по
+    /// рёбрам). Рёбра берутся ВСЕ (включая disabled): источник с выключенным
+    /// маршрутом остаётся в ветке — его сигнал читается и метрится.
     /// </summary>
-    private void ComputeEpoch(GraphSnapshot snapshot, int samples)
+    private static HashSet<Guid> CollectUpstream(Guid sinkId, GraphSnapshot snapshot)
     {
-        foreach (var node in snapshot.Nodes)
+        var result = new HashSet<Guid> { sinkId };
+        var changed = true;
+        while (changed)
         {
-            if (node.Kind != NodeKind.Source)
+            changed = false;
+            foreach (var edge in snapshot.Edges)
             {
-                continue;
-            }
-
-            if (_epochComputed.Add(node.Id))
-            {
-                ProcessSource(node, snapshot, samples);
+                if (result.Contains(edge.To) && result.Add(edge.From))
+                {
+                    changed = true;
+                }
             }
         }
 
-        foreach (var node in snapshot.Nodes)
-        {
-            if (node.Kind == NodeKind.Source)
-            {
-                continue;
-            }
-
-            if (_epochComputed.Add(node.Id))
-            {
-                ProcessSumming(node, snapshot, samples);
-            }
-        }
+        return result;
     }
 
     private static int SnapshotChannelCount(GraphSnapshot snapshot, Guid nodeId)

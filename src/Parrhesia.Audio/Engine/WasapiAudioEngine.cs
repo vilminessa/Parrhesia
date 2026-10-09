@@ -367,6 +367,7 @@ public sealed class WasapiAudioEngine : IAudioEngine
             _lastLoggedUnderflow = 0;
             _lastFeedDropped = 0;
             _lastFeedUnderrun = 0;
+            _cableDropBaselineSet = false; // база потерь кабеля — заново на каждом старте
             _statsTimer = new Timer(_ => LogStatsIfChanged(), null, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5));
             var sinkLatency = _players.Count == 0
                 ? string.Empty
@@ -1271,6 +1272,114 @@ public sealed class WasapiAudioEngine : IAudioEngine
     }
 
     /// <summary>Раз в5 секунд пишет дельту xrun — только если под-счётчик растёт.</summary>
+    private void LogLatencySummary()
+    {
+        try
+        {
+            var report = GetLatencyReport();
+            if (report.Stages.Count == 0)
+            {
+                return;
+            }
+
+            var slow = report.Slowest;
+            LogMessage(
+                EngineLogLevel.Info,
+                $"задержка: итого≈{report.TotalMs:0} мс [{report.Level.ToString().ToLowerInvariant()}]" +
+                (slow is null ? string.Empty : $" · макс «{slow.Name}» {slow.Ms:0.0} мс") +
+                (report.Issues.Count > 0 ? " · " + string.Join("; ", report.Issues) : string.Empty));
+        }
+        catch (Exception)
+        {
+            // Диагностика не должна ронять таймер статистики.
+        }
+    }
+
+    /// <summary>База счётчиков потерь кабеля (стартовый прогрев — не «потеря»); флаг — т.к. ulong.</summary>
+    private ulong _cableDropBaseline;
+    private bool _cableDropBaselineSet;
+
+    /// <summary>Поэтапный отчёт задержки (M-волна) — см. <see cref="LatencyReport"/>.</summary>
+    public LatencyReport GetLatencyReport()
+    {
+        if (!_running)
+        {
+            return LatencyReport.Build([], ["движок не запущен"]);
+        }
+
+        var stages = new List<LatencyStage>();
+        var issues = new List<string>();
+        var serious = false;
+        double rate;
+
+        lock (_gate)
+        {
+            rate = Math.Max(1, _sampleRate * (double)_channels);
+
+            foreach (var binding in _sources)
+            {
+                if (binding.Failed)
+                {
+                    continue;
+                }
+
+                stages.Add(new LatencyStage(
+                    $"Захват «{binding.Name}» — клиент",
+                    binding.Recorder.LatencyMilliseconds,
+                    binding.Recorder.LowLatencyActive ? "low-latency (IAudioClient3)" : "обычный shared"));
+
+                stages.Add(new LatencyStage(
+                    $"Кольцо «{binding.Name}»",
+                    binding.Ring.Available * 1000.0 / rate,
+                    $"свежесть входа · xrun под/переп {binding.Ring.UnderrunSamples}/{binding.Ring.OverflowSamples}"));
+            }
+        }
+
+        // Кабель — вне _gate: файловый ввод-вывод (read-only хэндл не замирает кабель).
+        if (DriverFeed.TryReadStatsShared(out var feed))
+        {
+            stages.Add(new LatencyStage(
+                "Кабель In→Out — уровень",
+                feed.LevelBytes / 384.0,
+                $"кольцо {feed.LevelBytes} Б · потеряно всего {feed.DroppedBytes + feed.CableDropped} Б"));
+
+            // Серьёзна только НОВАЯ потеря (дельта к базе первого отчёта):
+            // стартовый прогрев (окно до захвата Out1) — не «потеря звука».
+            var totalLoss = feed.DroppedBytes + feed.CableDropped;
+            if (!_cableDropBaselineSet)
+            {
+                _cableDropBaseline = totalLoss;
+                _cableDropBaselineSet = true;
+            }
+            else if (totalLoss > _cableDropBaseline)
+            {
+                issues.Add($"кабель: потеряно {totalLoss - _cableDropBaseline} Б с прошлого отчёта");
+                serious = true;
+            }
+        }
+
+        lock (_gate)
+        {
+            var mix = _processor.GetMixerStats();
+            stages.Add(new LatencyStage(
+                "Микшер (граф)",
+                mix.LastFrames * 1000.0 / Math.Max(1, _sampleRate),
+                $"блок {mix.LastFrames} фр · CPU {mix.CpuUsPerBlock:0.0} мкс · {mix.BlocksPerSec:0} бл/с"));
+
+            var namesMatch = _players.Count > 0 && _players.Count == _sinkNames.Length;
+            for (var i = 0; i < _players.Count; i++)
+            {
+                var detail = _players[i].LowLatencyActive ? "low-latency (IAudioClient3)" : "обычный shared";
+                stages.Add(new LatencyStage(
+                    namesMatch ? $"Вывод «{_sinkNames[i]}» — клиент" : $"Вывод — клиент {i + 1}",
+                    _players[i].LatencyMilliseconds,
+                    detail));
+            }
+        }
+
+        return LatencyReport.Build(stages, issues, serious);
+    }
+
     private void LogStatsIfChanged()
     {
         if (!_running)
@@ -1278,6 +1387,7 @@ public sealed class WasapiAudioEngine : IAudioEngine
             return;
         }
 
+        LogLatencySummary();
         long underflow = 0;
         long overflow = 0;
         foreach (var source in _sources)

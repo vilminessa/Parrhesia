@@ -3,6 +3,7 @@ using System.Windows;
 using System.Windows.Controls;
 using Parrhesia.App.Controls;
 using Parrhesia.App.Rendering;
+using Parrhesia.Audio.Engine;
 
 namespace Parrhesia.App.Views;
 
@@ -151,9 +152,49 @@ public partial class DiagnosticsView : UserControl
         var cpuPercent = 100.0 * cpuUsed.TotalMilliseconds / wall / Environment.ProcessorCount;
         CpuText.Text = cpuPercent.ToString("0") + " %";
 
+        RefreshLatency();
+
         _frames = 0;
         _windowStart = now;
         _lastCpuTime = _process.TotalProcessorTime;
         _lastCpuWall = now;
     }
+
+    /// <summary>Поэтапная задержка тракта: список, итог, цвет, проблемы (M-волна).</summary>
+    private void RefreshLatency()
+    {
+        try
+        {
+            var report = AppServices.Engine.GetLatencyReport();
+            LatencyList.ItemsSource = report.Stages;
+            LatencyTotalText.Text = $"итого ≈{report.TotalMs:0} мс";
+
+            var brush = report.Level switch
+            {
+                LatencyLevel.Ok => LevelBrush("Brush.Success"),
+                LatencyLevel.Warn => LevelBrush("Brush.Accent"),
+                _ => LevelBrush("Brush.Danger"),
+            };
+
+            LatencyTotalText.Foreground = brush;
+            if (report.Issues.Count == 0)
+            {
+                LatencyIssuesText.Visibility = Visibility.Collapsed;
+            }
+            else
+            {
+                LatencyIssuesText.Visibility = Visibility.Visible;
+                LatencyIssuesText.Text = "⚠ " + string.Join(" · ", report.Issues);
+                LatencyIssuesText.Foreground = LevelBrush("Brush.Danger");
+            }
+        }
+        catch (Exception)
+        {
+            // Диагностика не должна ронять тик отрисовки.
+        }
+    }
+
+    private System.Windows.Media.Brush LevelBrush(string key) =>
+        TryFindResource(key) as System.Windows.Media.Brush
+            ?? System.Windows.Media.Brushes.White;
 }

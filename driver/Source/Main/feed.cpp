@@ -67,6 +67,10 @@ NTSTATUS CParrhesiaFeed::Init()
     m_Owner = NULL;
     m_FormatMismatch = 0;
     m_Writers = 0;
+    for (LONG i = 0; i < MaxWriterHandles; i++)
+    {
+        m_WriterFO[i] = NULL;
+    }
 
     BYTE *buffer = (BYTE *)ExAllocatePool2(POOL_FLAG_NON_PAGED, PFEED_RING_BYTES, VIRTUALAUDIODRIVER_POOLTAG);
     if (buffer == NULL)
@@ -143,22 +147,67 @@ void CParrhesiaFeed::Write(const BYTE *src, ULONG len)
     KeReleaseSpinLock(&m_Lock, oldIrql);
 }
 
-void CParrhesiaFeed::AddWriter()
+void CParrhesiaFeed::NoteHandleCreate(VOID *fileObject, BOOLEAN writer)
 {
+    if (!writer || fileObject == NULL)
+    {
+        return; // read-only хэндл (диагностика) кабель не замирает
+    }
+
     KIRQL oldIrql;
     KeAcquireSpinLock(&m_Lock, &oldIrql);
-    m_Writers++;
+
+    BOOLEAN known = FALSE;
+    LONG free = -1;
+    for (LONG i = 0; i < MaxWriterHandles; i++)
+    {
+        if (m_WriterFO[i] == fileObject)
+        {
+            known = TRUE;
+            break;
+        }
+
+        if (m_WriterFO[i] == NULL && free < 0)
+        {
+            free = i;
+        }
+    }
+
+    if (!known && free >= 0)
+    {
+        // Переполнение слота не поднимает Writers: лучше оставить кабель
+        // активным при экзотических >8 параллельных писателях, чем получить
+        // залипший флаг без пары для декремента.
+        m_WriterFO[free] = fileObject;
+        m_Writers++;
+    }
+
     KeReleaseSpinLock(&m_Lock, oldIrql);
 }
 
-void CParrhesiaFeed::RemoveWriter()
+void CParrhesiaFeed::NoteHandleCleanup(VOID *fileObject)
 {
+    if (fileObject == NULL)
+    {
+        return;
+    }
+
     KIRQL oldIrql;
     KeAcquireSpinLock(&m_Lock, &oldIrql);
-    if (m_Writers > 0)
+    for (LONG i = 0; i < MaxWriterHandles; i++)
     {
-        m_Writers--;
+        if (m_WriterFO[i] == fileObject)
+        {
+            m_WriterFO[i] = NULL;
+            if (m_Writers > 0)
+            {
+                m_Writers--;
+            }
+
+            break;
+        }
     }
+
     KeReleaseSpinLock(&m_Lock, oldIrql);
 }
 
@@ -313,8 +362,13 @@ void CParrhesiaFeed::Read(BYTE *dst, ULONG len)
 
     if (available < len)
     {
+        // Недостача — тишиной. Позиция чтения НЕ обгоняет фронт записи:
+        // иначе уровень (WritePos-ReadPos) уходит в минус, watermark в
+        // WriteCable видит ULONGLONG-underflow как «переполнение» и
+        // дропает весь вход (журнал M-волны: «сброшено по капу»).
         RtlZeroMemory(dst + available, len - available);
-        m_ReadPos += (len - available);
+        ULONGLONG target = m_ReadPos + (len - available);
+        m_ReadPos = (target > m_WritePos) ? m_WritePos : target;
     }
 
     m_Delivered += len;
@@ -384,6 +438,7 @@ void CParrhesiaFeed::GetStats(PPFEED_STATS stats)
     stats->LoopBytes = m_Loop;
     stats->Writers = m_Writers;
     stats->CableDropped = m_CableDrop;
+    stats->LevelBytes = (m_WritePos >= m_ReadPos) ? (m_WritePos - m_ReadPos) : 0;
     KeReleaseSpinLock(&m_Lock, oldIrql);
 }
 
@@ -683,17 +738,17 @@ static NTSTATUS FeedCreateClose(_In_ PDEVICE_OBJECT DeviceObject, _In_ PIRP Irp)
     const INT feedIndex = FeedIndexOfDevice(DeviceObject);
     if (feedIndex >= 0)
     {
-        // Кабельный цикл (В1): факт user mode-хэндла на фиде означает, что
-        // путь контролирует приложение (виртуальный sink) — кабель уступает.
         const UCHAR major = IoGetCurrentIrpStackLocation(Irp)->MajorFunction;
         if (major == IRP_MJ_CREATE)
         {
-            g_Feeds[feedIndex].Feed.AddWriter();
+            // Kабель уступает только WRITE-хэндлам (приложение-писатель);
+            // read-only (диагностика UI) кабель НЕ замирает — M-волна.
+            PIO_STACK_LOCATION irpSp = IoGetCurrentIrpStackLocation(Irp);
+            const ACCESS_MASK access = irpSp->Parameters.Create.SecurityContext->DesiredAccess;
+            const BOOLEAN writer = (access & (FILE_WRITE_DATA | FILE_APPEND_DATA | GENERIC_WRITE)) != 0;
+            g_Feeds[feedIndex].Feed.NoteHandleCreate(irpSp->FileObject, writer);
         }
-        else if (major == IRP_MJ_CLOSE)
-        {
-            g_Feeds[feedIndex].Feed.RemoveWriter();
-        }
+        // Декремент — в CLEANUP (ровно один раз на хэндл, до CLOSE).
 
         Irp->IoStatus.Status = STATUS_SUCCESS;
         Irp->IoStatus.Information = 0;
@@ -715,8 +770,12 @@ static NTSTATUS FeedCleanup(_In_ PDEVICE_OBJECT DeviceObject, _In_ PIRP Irp)
 {
     PAGED_CODE();
 
-    if (FeedIndexOfDevice(DeviceObject) >= 0)
+    const INT feedIndex = FeedIndexOfDevice(DeviceObject);
+    if (feedIndex >= 0)
     {
+        // Ровно один CLEANUP на хэндл — здесь снимаем write-учёт (идемпотентно).
+        g_Feeds[feedIndex].Feed.NoteHandleCleanup(
+            IoGetCurrentIrpStackLocation(Irp)->FileObject);
         Irp->IoStatus.Status = STATUS_SUCCESS;
         Irp->IoStatus.Information = 0;
         IoCompleteRequest(Irp, IO_NO_INCREMENT);
