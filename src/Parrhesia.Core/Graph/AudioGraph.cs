@@ -733,6 +733,23 @@ public sealed class AudioGraph
     }
 
     /// <summary>
+    /// Высота пульта в микшере (px). Косметика: поднимает
+    /// <see cref="GraphChangeKind.AppearanceChanged"/> — звук не меняется,
+    /// движок не перезапускается, автосейв сохраняет профиль.
+    /// </summary>
+    public void SetNodeStripHeight(Guid id, int height)
+    {
+        var node = FindNode(id) ?? throw new ArgumentException($"Узел {id:N} не найден.", nameof(id));
+        if (node.StripHeight == height)
+        {
+            return;
+        }
+
+        node.StripHeight = height;
+        Raise(GraphChangeKind.AppearanceChanged, node: node);
+    }
+
+    /// <summary>
     /// Атомарно заменяет содержимое графа копиями <paramref name="source"/>
     /// и поднимает одно событие <see cref="GraphChangeKind.Reset"/>.
     /// Идентичность графа сохраняется — подписчики (движок, UI) продолжают работать.
@@ -761,6 +778,7 @@ public sealed class AudioGraph
                 DeviceId = node.DeviceId,
                 X = node.X,
                 Y = node.Y,
+                StripHeight = node.StripHeight,
             };
             copy.SlotsInternal.AddRange(node.SlotsInternal);
             _nodes.Add(copy);

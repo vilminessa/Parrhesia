@@ -49,6 +49,7 @@ public static class GraphSerializer
                 Device = n.DeviceId,
                 X = n.X,
                 Y = n.Y,
+                StripHeight = n.StripHeight,
                 Slots = n.Slots.Count > 0
                     ? n.Slots.Select(s => new SlotDocument
                     {
@@ -157,6 +158,7 @@ public static class GraphSerializer
             node.DeviceId = nodeDocument.Device;
             node.X = nodeDocument.X;
             node.Y = nodeDocument.Y;
+            node.StripHeight = nodeDocument.StripHeight;
 
             if (nodeDocument.Slots is { Count: > 0 })
             {
@@ -396,6 +398,9 @@ public static class GraphSerializer
         public double? X { get; set; }
 
         public double? Y { get; set; }
+
+        /// <summary>Высота пульта в микшере (px); null — дефолт. Косметика.</summary>
+        public int? StripHeight { get; set; }
 
         /// <summary>Слоты-вставки эффектов (только у шин); null — слотов нет.</summary>
         public List<SlotDocument>? Slots { get; set; }

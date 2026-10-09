@@ -1884,6 +1884,12 @@ public partial class GraphView : UserControl
             return;
         }
 
+        // Косметика микшера (состав групп, высота пульта) — холст не зависит от неё.
+        if (change.Kind is GraphChangeKind.GroupsChanged or GraphChangeKind.AppearanceChanged)
+        {
+            return;
+        }
+
         // Перетаскивание: позиция уже применена к элементу — достаточно кабелей.
         if (change.Kind == GraphChangeKind.NodeChanged &&
             _draggedNode is not null &&

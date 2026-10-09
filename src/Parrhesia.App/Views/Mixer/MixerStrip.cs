@@ -20,17 +20,38 @@ internal sealed class MixerStrip : Border
     private const double PeakHoldSeconds = 0.8;
     private const float PeakFallPerSecond = 1.2f;
 
+    /// <summary>Дефолтная высота пульта: компакт, чтобы вся лента влезала в окно.</summary>
+    public const double DefaultCardHeight = 200;
+
+    /// <summary>Границы ресайза за нижний край (px); кратны шагу — снап всегда попадает в диапазон.</summary>
+    public const double MinCardHeight = 160;
+    public const double MaxCardHeight = 424;
+
+    /// <summary>Шаг привязки высоты при перетаскивании.</summary>
+    public const double CardHeightSnap = 8;
+
+    /// <summary>Ниже высоты — компакт-режим: подпись устройства уходит в тултип.</summary>
+    private const double CompactBelow = 230;
+
+    /// <summary>Минимальная высота зоны метра/фейдера (не даём им схлопнуться).</summary>
+    private const double MeterAreaMin = 40;
+
     private readonly TextBlock _nameText;
     private readonly TextBlock _dbText;
     private readonly TextBlock _deviceText;
     private readonly Button _muteButton;
     private readonly Button _soloButton;
     private readonly Button _bypassButton;
+    private readonly Border _handle;
 
     private float _peak;
     private double _holdUntil;
     private bool _syncingFader;
     private DateTime _lastNameClick;
+
+    private bool _dragging;
+    private double _dragStartY;
+    private double _dragStartHeight;
 
     public MixerStrip(AudioNode node)
     {
@@ -44,6 +65,7 @@ internal sealed class MixerStrip : Border
         CornerRadius = new CornerRadius(8);
         VerticalAlignment = VerticalAlignment.Top;
         Margin = new Thickness(0, 0, 10, 0);
+        Height = ClampCardHeight(node.StripHeight ?? DefaultCardHeight);
 
         // Акцентная полоса по типу узла.
         var accent = new Border
@@ -104,10 +126,11 @@ internal sealed class MixerStrip : Border
         {
             Orientation = Orientation.Horizontal,
             HorizontalAlignment = HorizontalAlignment.Center,
-            VerticalAlignment = VerticalAlignment.Top,
+            VerticalAlignment = VerticalAlignment.Stretch,
         };
         meters.Children.Add(Meter);
         meters.Children.Add(Fader);
+        meters.SizeChanged += (_, e) => OnMetersResized(e);
 
         _muteButton = BuildChoiceButton("M", OnMuteClick);
         _soloButton = BuildChoiceButton("S", OnSoloClick);
@@ -132,19 +155,50 @@ internal sealed class MixerStrip : Border
             ToolTip = DescribeDevice(node),
         };
 
+        // Хэндл-грип: перетаскивание за нижний край меняет высоту пульта.
+        var gripBrush = ResolveBrush("Brush.Stroke", "#FF262B33");
+        _handle = new Border
+        {
+            Height = 8,
+            Background = Brushes.Transparent,
+            Cursor = Cursors.SizeNS,
+            ToolTip = "Потяните нижний край — высота пульта (двойной клик — дефолт)",
+        };
+        _handle.MouseEnter += (_, _) =>
+        {
+            if (!_dragging)
+            {
+                _handle.Background = gripBrush;
+            }
+        };
+        _handle.MouseLeave += (_, _) =>
+        {
+            if (!_dragging)
+            {
+                _handle.Background = Brushes.Transparent;
+            }
+        };
+        _handle.MouseLeftButtonDown += OnResizeStart;
+        _handle.MouseMove += OnResizeMove;
+        _handle.MouseLeftButtonUp += OnResizeEnd;
+
         var root = new DockPanel();
         DockPanel.SetDock(accent, Dock.Top);
         DockPanel.SetDock(header, Dock.Top);
         DockPanel.SetDock(_dbText, Dock.Top);
+        DockPanel.SetDock(_handle, Dock.Bottom);
         DockPanel.SetDock(buttons, Dock.Bottom);
         DockPanel.SetDock(_deviceText, Dock.Bottom);
         root.Children.Add(accent);
+        root.Children.Add(_handle);
         root.Children.Add(buttons);
         root.Children.Add(_deviceText);
         root.Children.Add(header);
         root.Children.Add(_dbText);
         root.Children.Add(meters);
         Child = root;
+
+        SizeChanged += (_, _) => ApplyCompactMode();
 
         BuildContextMenu();
         ApplyStates();
@@ -180,6 +234,9 @@ internal sealed class MixerStrip : Border
 
     /// <summary>Фейдер двигается (линейный гейн).</summary>
     public event Action<MixerStrip, float>? GainChanged;
+
+    /// <summary>Ресайз завершён (отпустили мышь / сброс) — MixerView сохраняет высоту в узел.</summary>
+    public event Action<MixerStrip>? HeightCommitted;
 
     /// <summary>Обновление из модели: имя, дБ, состояния кнопок, устройство.</summary>
     public void RefreshFromNode()
@@ -314,6 +371,99 @@ internal sealed class MixerStrip : Border
     private void OnSoloClick(object sender, RoutedEventArgs e) => SoloToggled?.Invoke(this);
 
     private void OnBypassClick(object sender, RoutedEventArgs e) => BypassToggled?.Invoke(this);
+
+    // ── Ресайз пульта за нижний край ──────────────────────────────────────
+
+    /// <summary>Ограничение высоты допустимым диапазоном (пурия-функция, для UI и тестов).</summary>
+    public static double ClampCardHeight(double height) =>
+        Math.Min(MaxCardHeight, Math.Max(MinCardHeight, height));
+
+    /// <summary>Привязка высоты к шагу (пурия-функция, для UI и тестов).</summary>
+    internal static double SnapCardHeight(double height) =>
+        Math.Round(height / CardHeightSnap) * CardHeightSnap;
+
+    /// <summary>Применяет высоту из модели (null → дефолт) с клампом.</summary>
+    public void ApplyHeight(int? stripHeight)
+    {
+        var target = ClampCardHeight(stripHeight ?? DefaultCardHeight);
+        if (Math.Abs(Height - target) > 0.5)
+        {
+            Height = target;
+        }
+    }
+
+    private void OnResizeStart(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ClickCount == 2)
+        {
+            // Двойной клик по хэндлу — сброс высоты в дефолт.
+            Height = DefaultCardHeight;
+            if (_dragging)
+            {
+                _dragging = false;
+                _handle.ReleaseMouseCapture();
+                _handle.Background = Brushes.Transparent;
+            }
+
+            HeightCommitted?.Invoke(this);
+            e.Handled = true;
+            return;
+        }
+
+        _dragging = true;
+        _dragStartY = e.GetPosition(this).Y;
+        _dragStartHeight = double.IsNaN(Height) ? DefaultCardHeight : Height;
+        _handle.CaptureMouse();
+        e.Handled = true;
+    }
+
+    private void OnResizeMove(object sender, MouseEventArgs e)
+    {
+        if (!_dragging || !_handle.IsMouseCaptured)
+        {
+            return;
+        }
+
+        var delta = e.GetPosition(this).Y - _dragStartY;
+        Height = ClampCardHeight(SnapCardHeight(_dragStartHeight + delta));
+    }
+
+    private void OnResizeEnd(object sender, MouseButtonEventArgs e)
+    {
+        if (_dragging)
+        {
+            _dragging = false;
+            _handle.ReleaseMouseCapture();
+            _handle.Background = Brushes.Transparent;
+            HeightCommitted?.Invoke(this);
+        }
+
+        e.Handled = true;
+    }
+
+    /// <summary>Метр и фейдер тянутся под доступную высоту зоны (ресайз живой).</summary>
+    private void OnMetersResized(SizeChangedEventArgs e)
+    {
+        var area = Math.Max(MeterAreaMin, e.NewSize.Height - 10);
+        if (Math.Abs(Meter.Height - area) > 0.5)
+        {
+            Meter.Height = area;
+            Fader.Height = area;
+        }
+    }
+
+    /// <summary>Компакт-режим: при малой высоте подпись устройства уходит в тултип пульта.</summary>
+    private void ApplyCompactMode()
+    {
+        var compact = ActualHeight > 0 && ActualHeight < CompactBelow;
+        var visible = compact ? Visibility.Collapsed : Visibility.Visible;
+        if (_deviceText.Visibility != visible)
+        {
+            _deviceText.Visibility = visible;
+        }
+
+        ToolTip = compact ? DescribeDevice(Node) : null;
+    }
 
     private static double SliderValue(float gain)
     {

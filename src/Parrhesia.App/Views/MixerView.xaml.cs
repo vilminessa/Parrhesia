@@ -204,6 +204,15 @@ public partial class MixerView : UserControl
                 QueueRebuild();
                 break;
 
+            case GraphChangeKind.AppearanceChanged:
+                if (e.Node is not null && _strips.TryGetValue(e.Node.Id, out var resizedStrip))
+                {
+                    // Высота пульта применена без пересборки ленты (иначе сорвался бы drag).
+                    resizedStrip.ApplyHeight(e.Node.StripHeight);
+                }
+
+                break;
+
             case GraphChangeKind.NodeChanged:
                 if (e.Node is not null
                     && _stripZone.TryGetValue(e.Node.Id, out var builtZone)
@@ -280,18 +289,24 @@ public partial class MixerView : UserControl
                     continue;
                 }
             }
-            else if (section.Nodes.Count == 0 && !section.Manual)
+            else if (section.Nodes.Count == 0)
             {
-                // В «Все» пустые авто-зоны не мусорят; ручные группы видны всегда.
+                // «Все»: пустые блоки (в т.ч. ручные группы) не занимают места —
+                // место выделяется по надобности: чип-фильтр покажет блок с подсказкой.
                 continue;
             }
 
-            var block = new StackPanel { Margin = new Thickness(0, 0, 26, 18) };
+            var block = new StackPanel
+            {
+                Width = MasonryPanel.BlockWidth,
+                Margin = new Thickness(0, 0, MasonryPanel.Gap, MasonryPanel.Gap),
+            };
             block.Children.Add(new TextBlock
             {
                 Text = section.Title,
                 FontSize = 10,
                 FontWeight = FontWeights.SemiBold,
+                TextTrimming = TextTrimming.CharacterEllipsis,
                 Foreground = (Brush)(section.Manual
                     ? TryFindResource("Brush.TextDim") ?? Brushes.Gray
                     : TryFindResource("Brush.TextFaint") ?? Brushes.Gray),
@@ -380,6 +395,8 @@ public partial class MixerView : UserControl
         strip.DeleteRequested += OnDeleteRequested;
         strip.AssignGroupRequested += (_, groupId) => AppServices.Graph.SetNodeGroup(strip.Node.Id, groupId);
         strip.ContextMenu!.Opened += (_, _) => PopulateGroupMenu(strip);
+        strip.HeightCommitted += s =>
+            AppServices.Graph.SetNodeStripHeight(s.Node.Id, (int)Math.Round(s.Height));
         return strip;
     }
 

@@ -64,6 +64,12 @@ public sealed class AudioNode
 
     public double? Y { get; internal set; }
 
+    /// <summary>
+    /// Высота пульта в микшере (px). Хранится в модели, как и X/Y, — персистится
+    /// в профиле и переживает рестарт. null — высота по умолчанию (компакт).
+    /// </summary>
+    public int? StripHeight { get; internal set; }
+
     public bool HasInput => Kind is NodeKind.Bus or NodeKind.Sink;
 
     public bool HasOutput => Kind is NodeKind.Source or NodeKind.Bus;
