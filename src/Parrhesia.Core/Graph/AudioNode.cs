@@ -78,6 +78,13 @@ public sealed class AudioNode
     /// </summary>
     public Dictionary<string, bool> FxEnabled { get; internal set; } = [];
 
+    /// <summary>
+    /// Колонка эффектов пульта открыта (продвинутый вид карточки, L-волна).
+    /// Режим живёт в узле (как высота) — у каждого пульта свой; null/выкл =
+    /// обычный пульт112px.
+    /// </summary>
+    public bool? FxExpanded { get; internal set; }
+
     public bool HasInput => Kind is NodeKind.Bus or NodeKind.Sink;
 
     public bool HasOutput => Kind is NodeKind.Source or NodeKind.Bus;

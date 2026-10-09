@@ -65,8 +65,7 @@ internal sealed class MixerStrip : Border
         Node = node;
         _advanced = advanced;
 
-        Width = advanced ? AdvancedCardWidth : 112;
-        Padding = new Thickness(10, 0, 10, 10);
+        Width = advanced ? AdvancedCardWidth : 112;        Padding = new Thickness(10, 0, 10, 10);
         Background = ResolveBrush("Brush.Elevated", "#FF1B1F26");
         BorderBrush = ResolveBrush("Brush.Stroke", "#FF262B33");
         BorderThickness = new Thickness(1);
@@ -105,9 +104,20 @@ internal sealed class MixerStrip : Border
         {
             FontSize = 11,
             Foreground = ResolveBrush("Brush.Cyan", "#FF35D0C8"),
-            Margin = new Thickness(0, 3, 0, 0),
+            TextTrimming = TextTrimming.CharacterEllipsis,
             Text = FormatDb(node.Gain),
+            VerticalAlignment = VerticalAlignment.Center,
         };
+
+        // Строка громкости: дБ слева + пилюля режима «FX» справа (per-пульт).
+        var fxPill = BuildFxModePill();
+        var dbRow = new Grid { Margin = new Thickness(0, 3, 0, 0) };
+        dbRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        dbRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        Grid.SetColumn(_dbText, 0);
+        Grid.SetColumn(fxPill, 1);
+        dbRow.Children.Add(_dbText);
+        dbRow.Children.Add(fxPill);
 
         Meter = new LedMeterControl
         {
@@ -193,7 +203,7 @@ internal sealed class MixerStrip : Border
         var root = new DockPanel();
         DockPanel.SetDock(accent, Dock.Top);
         DockPanel.SetDock(header, Dock.Top);
-        DockPanel.SetDock(_dbText, Dock.Top);
+        DockPanel.SetDock(dbRow, Dock.Top);
         DockPanel.SetDock(_handle, Dock.Bottom);
         DockPanel.SetDock(buttons, Dock.Bottom);
         DockPanel.SetDock(_deviceText, Dock.Bottom);
@@ -202,7 +212,7 @@ internal sealed class MixerStrip : Border
         root.Children.Add(buttons);
         root.Children.Add(_deviceText);
         root.Children.Add(header);
-        root.Children.Add(_dbText);
+        root.Children.Add(dbRow);
         root.Children.Add(meters);
 
         if (_advanced)
@@ -228,6 +238,23 @@ internal sealed class MixerStrip : Border
 
         BuildContextMenu();
         ApplyStates();
+    }
+
+    /// <summary>Пилюля «FX» в строке громкости: переключает продвинутый вид пульта.</summary>
+    private ToggleButton BuildFxModePill()
+    {
+        var pill = new ToggleButton
+        {
+            Style = (Style)Application.Current!.FindResource("Chip")!,
+            Content = "FX",
+            FontSize = 9,
+            IsChecked = _advanced,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(6, 0, 0, 0),
+            ToolTip = "Колонка эффектов пульта: EQ, Comp, Gate, Denoise (ЛКМ — вкл/выкл, ПКМ по чипу — настройки)",
+        };
+        pill.Click += (_, _) => FxModeToggled?.Invoke(this, pill.IsChecked == true);
+        return pill;
     }
 
     /// <summary>Колонка эффектов (продвинутый режим): чипы-заглушки.
@@ -324,6 +351,12 @@ internal sealed class MixerStrip : Border
 
     /// <summary>ПКМ по чипу эффектора — открыть окно настроек.</summary>
     public event Action<MixerStrip, string>? FxSettingsRequested;
+
+    /// <summary>Пилюля «FX» переключена — продвинутый вид карточки (per-пульт).</summary>
+    public event Action<MixerStrip, bool>? FxModeToggled;
+
+    /// <summary>У этого пульта открыта колонка эффектов (продвинутый вид).</summary>
+    public bool IsFxExpanded => _advanced;
 
     /// <summary>Обновление из модели: имя, дБ, состояния кнопок, устройство, чипы FX.</summary>
     public void RefreshFromNode()

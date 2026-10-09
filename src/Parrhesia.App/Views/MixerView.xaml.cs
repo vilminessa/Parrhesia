@@ -206,10 +206,18 @@ public partial class MixerView : UserControl
                 break;
 
             case GraphChangeKind.AppearanceChanged:
-                if (e.Node is not null && _strips.TryGetValue(e.Node.Id, out var resizedStrip))
+                if (e.Node is not null && _strips.TryGetValue(e.Node.Id, out var changedStrip))
                 {
-                    // Высота пульта применена без пересборки ленты (иначе сорвался бы drag).
-                    resizedStrip.ApplyHeight(e.Node.StripHeight);
+                    if (changedStrip.IsFxExpanded != (e.Node.FxExpanded == true))
+                    {
+                        // Конструкция карточки изменилась (пилюля FX) — пересборка ленты.
+                        QueueRebuild();
+                    }
+                    else
+                    {
+                        // Высота применяется на месте (иначе сорвался бы drag).
+                        changedStrip.ApplyHeight(e.Node.StripHeight);
+                    }
                 }
 
                 break;
@@ -299,8 +307,9 @@ public partial class MixerView : UserControl
 
             var block = new StackPanel
             {
-                Width = MasonryPanel.BlockWidth,
-                Margin = new Thickness(0, 0, MasonryPanel.Gap, MasonryPanel.Gap),
+                // Ширина не фиксируется: блок занимает свой «остаток строки»
+                // (L-волна) — пульты уходят вниз только при нехватке горизонтали.
+                Margin = new Thickness(0, 0, BlocksGridPanel.Gap, BlocksGridPanel.Gap),
             };
             block.Children.Add(new TextBlock
             {
@@ -387,7 +396,7 @@ public partial class MixerView : UserControl
 
     private MixerStrip CreateStrip(AudioNode node)
     {
-        var strip = new MixerStrip(node, AppServices.Settings.IsAdvancedMixer);
+        var strip = new MixerStrip(node, node.FxExpanded == true);
         strip.MuteToggled += s => AppServices.Graph.SetNodeMute(s.Node.Id, !s.Node.Mute);
         strip.SoloToggled += s => AppServices.Graph.SetNodeSolo(s.Node.Id, !s.Node.Solo);
         strip.BypassToggled += s => AppServices.Graph.SetNodeBypass(s.Node.Id, !s.Node.Bypassed);
@@ -401,6 +410,8 @@ public partial class MixerView : UserControl
         strip.FxToggleRequested += (s, fx, on) => AppServices.Graph.SetNodeFx(s.Node.Id, fx, on);
         strip.FxSettingsRequested += (s, fx) =>
             EffectSettingsWindow.Show(Window.GetWindow(this), s.Node, fx);
+        strip.FxModeToggled += (s, expanded) =>
+            AppServices.Graph.SetNodeFxExpanded(s.Node.Id, expanded);
         return strip;
     }
 
@@ -426,17 +437,6 @@ public partial class MixerView : UserControl
         }
 
         ChipsHost.Children.Clear();
-
-        // Режимы слева + разделитель: сегмент управления компановкой пультов.
-        ChipsHost.Children.Add(BuildModeSegment());
-        ChipsHost.Children.Add(new Border
-        {
-            Width = 1,
-            Height = 20,
-            Background = TryFindResource("Brush.Stroke") as Brush ?? Brushes.Gray,
-            Margin = new Thickness(4, 0, 14, 0),
-            VerticalAlignment = VerticalAlignment.Center,
-        });
 
         ChipsHost.Children.Add(MakeChip(
             "all", "Все", sections.Sum(s => s.Nodes.Count), "Все пульты, разложенные по зонам"));
@@ -470,62 +470,6 @@ public partial class MixerView : UserControl
         }
 
         ChipsHost.Children.Add(MakeChip(AddChipTag, "+ группа", 0, "Создать ручную группу"));
-    }
-
-    /// <summary>Сегмент режимов микшера (K-волна): Обычный / Продвинутый.</summary>
-    private StackPanel BuildModeSegment()
-    {
-        var advanced = AppServices.Settings.IsAdvancedMixer;
-        var segment = new StackPanel
-        {
-            Orientation = Orientation.Horizontal,
-            Margin = new Thickness(0, 0, 2, 0),
-        };
-
-        segment.Children.Add(MakeModeButton(
-            "Обычный",
-            !advanced,
-            "Пульт как всегда: источник, громкость, M/S/B",
-            () => SetMixerMode("normal")));
-
-        var advancedButton = MakeModeButton(
-            "Продвинутый",
-            advanced,
-            "К пульту добавляется колонка эффектов: EQ, Comp, Gate, Denoise (ЛКМ — вкл/выкл, ПКМ — настройки)",
-            () => SetMixerMode("advanced"));
-
-        // Стык двух пилюль в один сегмент.
-        advancedButton.Margin = new Thickness(-6, 0, 0, 0);
-        segment.Children.Add(advancedButton);
-        return segment;
-    }
-
-    private ToggleButton MakeModeButton(string title, bool isChecked, string tooltip, Action onClick)
-    {
-        var button = new ToggleButton
-        {
-            Style = (Style)FindResource("Chip")!,
-            Content = title,
-            IsChecked = isChecked,
-            ToolTip = tooltip,
-        };
-        button.Click += (_, _) => onClick();
-        return button;
-    }
-
-    private void SetMixerMode(string mode)
-    {
-        if (string.Equals(AppServices.Settings.MixerMode, mode, StringComparison.OrdinalIgnoreCase))
-        {
-            return;
-        }
-
-        AppServices.Settings.MixerMode = mode;
-        AppServices.Settings.Save();
-
-        // Карточки пультов другой конструкции — полная пересборка ленты;
-        // высоты (из узлов), фильтр и masonry-упаковка сохраняются.
-        RebuildStrips();
     }
 
     private ToggleButton MakeChip(string key, string title, int count, string tooltip)

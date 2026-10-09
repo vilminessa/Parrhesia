@@ -51,6 +51,7 @@ public static class GraphSerializer
                 Y = n.Y,
                 StripHeight = n.StripHeight,
                 Fx = n.FxEnabled.Count > 0 ? n.FxEnabled : null,
+                FxExpanded = n.FxExpanded,
                 Slots = n.Slots.Count > 0
                     ? n.Slots.Select(s => new SlotDocument
                     {
@@ -161,6 +162,7 @@ public static class GraphSerializer
             node.Y = nodeDocument.Y;
             node.StripHeight = nodeDocument.StripHeight;
             node.FxEnabled = nodeDocument.Fx ?? [];
+            node.FxExpanded = nodeDocument.FxExpanded;
 
             if (nodeDocument.Slots is { Count: > 0 })
             {
@@ -406,6 +408,9 @@ public static class GraphSerializer
 
         /// <summary>Состояния эффекторов пульта (id → включён); null — ничего не включено.</summary>
         public Dictionary<string, bool>? Fx { get; set; }
+
+        /// <summary>Колонка эффектов открыта; null/false — обычный пульт.</summary>
+        public bool? FxExpanded { get; set; }
 
         /// <summary>Слоты-вставки эффектов (только у шин); null — слотов нет.</summary>
         public List<SlotDocument>? Slots { get; set; }

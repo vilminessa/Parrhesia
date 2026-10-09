@@ -10,9 +10,6 @@ public sealed class AppSettings
     /// <summary>Режим отображения схемы: "single" (бандл) или "mastering" (по-канальные порты).</summary>
     public string GraphViewMode { get; set; } = "single";
 
-    /// <summary>Режим микшера: "normal" (пульт без FX) или "advanced" (колонка эффекторов).</summary>
-    public string MixerMode { get; set; } = "normal";
-
     /// <summary>
     /// Устройство мониторинга (MMDeviceId, DeviceSpec-формат или пусто — выкл.):
     /// реальный вывод, звучащий параллельно виртуальному снику.
@@ -45,10 +42,6 @@ public sealed class AppSettings
 
     public bool IsExpandedView =>
         string.Equals(GraphViewMode, "mastering", StringComparison.OrdinalIgnoreCase);
-
-    /// <summary>Продвинутый режим микшера (колонка эффектов на пульте).</summary>
-    public bool IsAdvancedMixer =>
-        string.Equals(MixerMode, "advanced", StringComparison.OrdinalIgnoreCase);
 
     public static AppSettings Load()
     {

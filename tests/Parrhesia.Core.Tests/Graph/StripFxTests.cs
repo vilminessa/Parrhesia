@@ -90,4 +90,59 @@ public class StripFxTests
 
         Assert.True(Assert.Single(target.Nodes).FxEnabled["denoise"]);
     }
+
+    [Fact]
+    public void SetNodeFxExpanded_TogglesPerStrip_AndRaisesAppearanceChanged()
+    {
+        var graph = new AudioGraph();
+        var mic = graph.AddNode("Микрофон", NodeKind.Source);
+        var bus = graph.AddNode("Шина", NodeKind.Bus);
+        Assert.Null(mic.FxExpanded);
+
+        List<GraphChange> changes = [];
+        graph.Changed += (_, e) => changes.Add(e);
+
+        graph.SetNodeFxExpanded(mic.Id, true);
+        Assert.True(mic.FxExpanded);
+        Assert.Null(bus.FxExpanded); // режим живёт в узле — у каждого пульта свой
+        var change = Assert.Single(changes);
+        Assert.Equal(GraphChangeKind.AppearanceChanged, change.Kind);
+        Assert.Equal(mic.Id, change.Node!.Id);
+
+        // Возврат в обычный вид хранится как null (JSON без поля).
+        changes.Clear();
+        graph.SetNodeFxExpanded(mic.Id, false);
+        Assert.Null(mic.FxExpanded);
+        Assert.Single(changes);
+
+        // То же состояние — без события.
+        changes.Clear();
+        graph.SetNodeFxExpanded(mic.Id, false);
+        Assert.Empty(changes);
+    }
+
+    [Fact]
+    public void SetNodeFxExpanded_UnknownNode_Throws()
+    {
+        var graph = new AudioGraph();
+        Assert.Throws<ArgumentException>(() => graph.SetNodeFxExpanded(Guid.NewGuid(), true));
+    }
+
+    [Fact]
+    public void Serialize_FxExpanded_RoundTrip_AndLegacy()
+    {
+        var graph = new AudioGraph();
+        var node = graph.AddNode("Микрофон", NodeKind.Source);
+        graph.SetNodeFxExpanded(node.Id, true);
+
+        var json = GraphSerializer.Serialize(graph);
+        Assert.Contains("\"fxExpanded\": true", json);
+        Assert.True(Assert.Single(GraphSerializer.Deserialize(json).Nodes).FxExpanded);
+
+        // Обычный вид — поля нет (null → JSON-молчание).
+        graph.SetNodeFxExpanded(node.Id, false);
+        var plain = GraphSerializer.Serialize(graph);
+        Assert.DoesNotContain("fxExpanded", plain);
+        Assert.Null(Assert.Single(GraphSerializer.Deserialize(plain).Nodes).FxExpanded);
+    }
 }

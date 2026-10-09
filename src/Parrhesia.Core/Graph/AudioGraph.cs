@@ -769,6 +769,24 @@ public sealed class AudioGraph
     }
 
     /// <summary>
+    /// Открывает/закрывает колонку эффектов пульта (L-волна: режим per-пульт).
+    /// Косметика структуры карточки: <see cref="GraphChangeKind.AppearanceChanged"/> —
+    /// MixerView пересобирает ленту; движок игнорирует, автосейв сохраняет.
+    /// </summary>
+    public void SetNodeFxExpanded(Guid id, bool expanded)
+    {
+        var node = FindNode(id) ?? throw new ArgumentException($"Узел {id:N} не найден.", nameof(id));
+        var value = expanded ? (bool?)true : null;
+        if (node.FxExpanded == value)
+        {
+            return;
+        }
+
+        node.FxExpanded = value;
+        Raise(GraphChangeKind.AppearanceChanged, node: node);
+    }
+
+    /// <summary>
     /// Атомарно заменяет содержимое графа копиями <paramref name="source"/>
     /// и поднимает одно событие <see cref="GraphChangeKind.Reset"/>.
     /// Идентичность графа сохраняется — подписчики (движок, UI) продолжают работать.
@@ -799,6 +817,7 @@ public sealed class AudioGraph
                 Y = node.Y,
                 StripHeight = node.StripHeight,
                 FxEnabled = new Dictionary<string, bool>(node.FxEnabled),
+                FxExpanded = node.FxExpanded,
             };
             copy.SlotsInternal.AddRange(node.SlotsInternal);
             _nodes.Add(copy);

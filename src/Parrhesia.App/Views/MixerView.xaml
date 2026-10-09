@@ -75,7 +75,7 @@
       </ScrollViewer>
     </Border>
 
-    <!-- Полосы каналов: блоки-зоны упакованы masonry (колонки), прокрутка — фолбэк -->
+    <!-- Полосы каналов: блоки-зоны текут слева направо, вниз — только при нехватке ширины -->
     <Border Grid.Row="2"
             Background="{DynamicResource Brush.Elevated}"
             BorderBrush="{DynamicResource Brush.Stroke}"
@@ -83,7 +83,7 @@
             CornerRadius="{DynamicResource Radius.L}">
       <ScrollViewer HorizontalScrollBarVisibility="Disabled"
                     VerticalScrollBarVisibility="Auto">
-        <local:MasonryPanel x:Name="StripsHost" Margin="14" />
+        <local:BlocksGridPanel x:Name="StripsHost" Margin="14" />
       </ScrollViewer>
     </Border>
 
