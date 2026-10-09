@@ -932,8 +932,6 @@ public partial class GraphView : UserControl
 
     // ===== Инспектор =====
 
-    private sealed record DeviceChoice(string Name, string? Value);
-
     private void RefreshInspector()
     {
         if (_selectedNode is { } element && _graph.FindNode(element.Node.Id) is { } node)
@@ -1494,8 +1492,12 @@ public partial class GraphView : UserControl
 
         if (NodeDeviceBox.ItemsSource is List<DeviceChoice> items && items.Count > 0)
         {
-            var target = items.FirstOrDefault(c => c.Value == node.DeviceId) ?? items[0];
-            if (!ReferenceEquals(NodeDeviceBox.SelectedItem, target))
+            // Sticky-привязки (F1): Resolve возвращает фантом с ТЕМ ЖЕ id,
+            // если устройство временно пропало (BT уснул) — привязка узла
+            // не стирается (см. DeviceSelection).
+            var target = DeviceSelection.Resolve(node.DeviceId, items);
+            if (target is not null &&
+                (NodeDeviceBox.SelectedItem is not DeviceChoice current || current.Value != target.Value))
             {
                 NodeDeviceBox.SelectedItem = target;
             }
