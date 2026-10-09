@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -55,6 +56,11 @@ public partial class GraphView : UserControl
     private bool _syncingMode;
 
     private Guid _deviceNodeId = Guid.Empty;
+
+    /// <summary>Версия/флаг фонового построения списка устройств (см. SyncDeviceChoices).</summary>
+    private int _deviceChoicesVersion;
+
+    private Guid? _deviceChoicesPending;
 
     /// <summary>Мастеринг-режим отображения портов (иначе бандл).</summary>
     private bool _expandedView;
@@ -1436,8 +1442,10 @@ public partial class GraphView : UserControl
     /// <summary>
     /// Список устройств для узла. Перестраивается только при смене узла:
     /// перечисление устройств — COM-вызов, его нельзя делать на каждой тяге гейна.
+    /// ВАЖНО: COM идёт в фоне — при массовой смене устройств (churn кабелей)
+    /// синхронный вызов в UI-потоке виснул («схема зависла»).
     /// </summary>
-    private void SyncDeviceChoices(AudioNode node)
+    private async void SyncDeviceChoices(AudioNode node)
     {
         if (node.Kind == NodeKind.Bus)
         {
@@ -1453,12 +1461,38 @@ public partial class GraphView : UserControl
 
         if (_deviceNodeId != node.Id || NodeDeviceBox.ItemsSource is not List<DeviceChoice>)
         {
-            var choices = BuildDeviceChoices(node);
+            if (_deviceChoicesPending == node.Id)
+            {
+                NodeDeviceBox.IsEnabled = false; // уже строится для этого узла
+                return;
+            }
+
+            _deviceChoicesPending = node.Id;
+            var version = ++_deviceChoicesVersion;
+            var nodeId = node.Id;
+
+            List<DeviceChoice> choices;
+            try
+            {
+                choices = await Task.Run(() => BuildDeviceChoices(node));
+            }
+            catch (Exception ex)
+            {
+                Trace.WriteLine($"[Parrhesia] список устройств недоступен: {ex.Message}");
+                choices = [];
+            }
+
+            if (version != _deviceChoicesVersion || !IsLoaded)
+            {
+                return; // запрос устарел (кликнули другой узел/вкладку)
+            }
+
+            _deviceChoicesPending = null;
             NodeDeviceBox.ItemsSource = choices;
-            _deviceNodeId = node.Id;
+            _deviceNodeId = nodeId;
         }
 
-        if (NodeDeviceBox.ItemsSource is List<DeviceChoice> items)
+        if (NodeDeviceBox.ItemsSource is List<DeviceChoice> items && items.Count > 0)
         {
             var target = items.FirstOrDefault(c => c.Value == node.DeviceId) ?? items[0];
             if (!ReferenceEquals(NodeDeviceBox.SelectedItem, target))

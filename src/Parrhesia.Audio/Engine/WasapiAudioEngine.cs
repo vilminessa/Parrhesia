@@ -276,8 +276,9 @@ public sealed class WasapiAudioEngine : IAudioEngine
 
             // 4. Сборка выходов: каждый тянет свой блок, все сериализованы общим замком.
             var startStreaming = new List<Action>();
-            foreach (var sink in opened)
+            for (var sinkIndex = 0; sinkIndex < opened.Count; sinkIndex++)
             {
+                var sink = opened[sinkIndex];
                 _startStage = "выходы";
                 IWaveProvider provider = new GraphWaveProvider(_processor, sink.Plan.NodeId, engineFormat);
 
@@ -305,8 +306,45 @@ public sealed class WasapiAudioEngine : IAudioEngine
                 }
                 else
                 {
-                    sink.Player!.Init(provider);
-                    startStreaming.Add(sink.Player.Play);
+                    try
+                    {
+                        sink.Player!.Init(provider);
+                    }
+                    catch (Exception ex)
+                    {
+                        // Устройство с другим mix-форматом (напр. Speakers@44100 при
+                        // движке48000): low-latency отказывает жёстко («was required»).
+                        // Переоткрываем в обычном shared-режиме — WASAPI сам
+                        // конвертирует (AutoConvertPcm), как и до low-latency.
+                        LogMessage(
+                            EngineLogLevel.Warning,
+                            $"Назначение «{sink.Plan.Name}»: low-latency недоступен — обычный shared ({ex.Message})");
+
+                        var oldPlayer = sink.Player!;
+                        oldPlayer.Dispose();
+                        var plain = new WasapiPlayerBuilder()
+                            .WithDevice(sink.Device!)
+                            .WithSharedMode()
+                            .WithEventSync()
+                            .WithLatency(OutputLatencyMs)
+                            .Build();
+                        plain.Init(provider);
+
+                        var replaced = sink with { Player = plain };
+                        opened[sinkIndex] = replaced;
+                        for (var pi = 0; pi < _players.Count; pi++)
+                        {
+                            if (ReferenceEquals(_players[pi], oldPlayer))
+                            {
+                                _players[pi] = plain;
+                                break;
+                            }
+                        }
+
+                        sink = replaced;
+                    }
+
+                    startStreaming.Add(sink.Player!.Play);
                 }
             }
 
