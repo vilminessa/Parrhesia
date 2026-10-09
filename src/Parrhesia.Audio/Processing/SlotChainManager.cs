@@ -163,7 +163,7 @@ public sealed class SlotChainManager : IDisposable
 
             foreach (var node in _graph.Nodes)
             {
-                if (node.Kind != NodeKind.Bus)
+                if (node.Kind is not (NodeKind.Bus or NodeKind.Plugin))
                 {
                     continue;
                 }

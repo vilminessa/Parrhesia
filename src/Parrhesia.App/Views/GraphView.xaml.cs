@@ -967,6 +967,7 @@ public partial class GraphView : UserControl
             {
                 NodeKind.Source => "Источник",
                 NodeKind.Bus => "Шина",
+                NodeKind.Plugin => "Плагин",
                 _ => "Назначение",
             };
             NodeSection.Visibility = Visibility.Visible;
@@ -993,9 +994,10 @@ public partial class GraphView : UserControl
             NodeMuteBox.IsChecked = node.Mute;
             NodeSoloBox.IsChecked = node.Solo;
 
-            // Слоты эффектов — только у шин.
-            SlotsSection.Visibility = node.Kind == NodeKind.Bus ? Visibility.Visible : Visibility.Collapsed;
-            if (node.Kind == NodeKind.Bus)
+            // Слоты эффектов — у шин (легаси) и узлов-плагинов (S-волна).
+            var hasSlots = node.Kind is NodeKind.Bus or NodeKind.Plugin;
+            SlotsSection.Visibility = hasSlots ? Visibility.Visible : Visibility.Collapsed;
+            if (hasSlots)
             {
                 RebuildSlotRows(node);
             }
@@ -1376,7 +1378,7 @@ public partial class GraphView : UserControl
 
         if (_selectedNode is not { } element ||
             _graph.FindNode(element.Node.Id) is not { } node ||
-            node.Kind != NodeKind.Bus)
+            node.Kind is not (NodeKind.Bus or NodeKind.Plugin))
         {
             return;
         }
@@ -1445,7 +1447,7 @@ public partial class GraphView : UserControl
     /// </summary>
     private async void SyncDeviceChoices(AudioNode node)
     {
-        if (node.Kind == NodeKind.Bus)
+        if (node.Kind is NodeKind.Bus or NodeKind.Plugin)
         {
             NodeDeviceBox.IsEnabled = false;
             if (NodeDeviceBox.ItemsSource is not null)

@@ -382,6 +382,7 @@ public partial class MixerView : UserControl
 
         AddZone(MixerZone.Inputs);
         AddZone(MixerZone.VirtualCables);
+        AddZone(MixerZone.Processing);
         AddZone(MixerZone.Unbound);
 
         foreach (var group in graph.Groups)
@@ -443,7 +444,11 @@ public partial class MixerView : UserControl
 
         foreach (var zone in new[]
         {
-            MixerZone.Inputs, MixerZone.VirtualCables, MixerZone.Unbound, MixerZone.Outputs,
+            MixerZone.Inputs,
+            MixerZone.VirtualCables,
+            MixerZone.Processing,
+            MixerZone.Unbound,
+            MixerZone.Outputs,
         })
         {
             var key = "zone:" + zone;
@@ -510,6 +515,7 @@ public partial class MixerView : UserControl
     {
         MixerZone.Inputs => "Источники на реальных устройствах: микрофоны, захват, loopback",
         MixerZone.VirtualCables => "Источники из наших виртуальных кабелей (Parrhesia In/Out)",
+        MixerZone.Processing => "Узлы-плагины: VST3/CLAP-обработка в отдельном процессе",
         MixerZone.Unbound => "Источники без привязки устройства",
         _ => "Шины и назначения — итоговая маршрутизация звука",
     };

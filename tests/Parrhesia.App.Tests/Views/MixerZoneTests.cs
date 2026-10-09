@@ -106,4 +106,15 @@ public class MixerZoneTests
         Assert.Equal("Прочее", MixerZoneInfo.Label(MixerZone.Unbound));
         Assert.Equal("Шины и выводы", MixerZoneInfo.Label(MixerZone.Outputs));
     }
+
+    [Fact]
+    public void PluginNode_IsProcessingZone()
+    {
+        var graph = new AudioGraph();
+        var node = graph.AddNode("Эквалайзер", NodeKind.Plugin);
+
+        Assert.Equal(MixerZone.Processing, MixerZoneInfo.Of(node, new HashSet<string>()));
+        Assert.Equal("ОБРАБОТКА", MixerZoneInfo.Title(MixerZone.Processing));
+        Assert.Equal("Обработка", MixerZoneInfo.Label(MixerZone.Processing));
+    }
 }

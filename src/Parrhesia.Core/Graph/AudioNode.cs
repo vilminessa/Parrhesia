@@ -85,9 +85,9 @@ public sealed class AudioNode
     /// </summary>
     public bool? FxExpanded { get; internal set; }
 
-    public bool HasInput => Kind is NodeKind.Bus or NodeKind.Sink;
+    public bool HasInput => Kind is NodeKind.Bus or NodeKind.Sink or NodeKind.Plugin;
 
-    public bool HasOutput => Kind is NodeKind.Source or NodeKind.Bus;
+    public bool HasOutput => Kind is NodeKind.Source or NodeKind.Bus or NodeKind.Plugin;
 
     public override string ToString() => $"{Kind}:{Name}";
 }

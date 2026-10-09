@@ -268,6 +268,32 @@ public class SlotChainManagerTests
         Assert.False(factory.Instances[0].OverlapDetected);
     }
 
+    [Fact]
+    public async Task PluginNode_GetChain_PublishedAndProcessed()
+    {
+        // S-волна: узел-плагин получает слот-вставку и обрабатывает сигнал
+        // (суммарный вход → плагин ×2 → выход), как шина.
+        var graph = new AudioGraph();
+        var source = graph.AddNode("Вход", NodeKind.Source);
+        var plugin = graph.AddNode("Компрессор", NodeKind.Plugin);
+        var sink = graph.AddNode("Выход", NodeKind.Sink);
+        graph.AddRoute(source.Id, plugin.Id, out _);
+        graph.AddRoute(plugin.Id, sink.Id, out _);
+
+        using var processor = new GraphProcessor(graph);
+        processor.SetInput(source.Id, new ConstantInput(0.5f));
+        var factory = new FakeFactory();
+        using var manager = new SlotChainManager(graph, processor, factory.Create);
+
+        graph.AddSlot(plugin.Id, new PluginSlot { Path = "a.clap", PluginId = "a" });
+        await manager.SyncTask;
+
+        Assert.Equal(1, factory.Created);
+        Assert.Empty(manager.LastErrors);
+        // Сигнал:0,5 → плагин ×2 =1,0 на sink.
+        Assert.Equal(1.0f, Process(processor, sink.Id)[0], 3);
+    }
+
     [Theory]
     [InlineData("C4A8E5D10123456789ABCDEF01234567", true)]
     [InlineData("c4ae5d10123456789abcdef012345678", true)]

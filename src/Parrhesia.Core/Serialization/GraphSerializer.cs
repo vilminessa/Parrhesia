@@ -150,7 +150,13 @@ public static class GraphSerializer
                 return false;
             }
 
-            var node = built.AddNode(nodeDocument.Name!, nodeDocument.Kind, nodeDocument.Id);
+            // Миграция S-волны: шина со слотами в старых профилях становится
+            // узлом-плагином (слот-вставка — единственная обработка узла).
+            var kind = nodeDocument.Kind == NodeKind.Bus && (nodeDocument.Slots?.Count ?? 0) > 0
+                ? NodeKind.Plugin
+                : nodeDocument.Kind;
+
+            var node = built.AddNode(nodeDocument.Name!, kind, nodeDocument.Id);
             node.Gain = nodeDocument.Gain;
             node.Mute = nodeDocument.Mute;
             node.Solo = nodeDocument.Solo;
@@ -166,9 +172,9 @@ public static class GraphSerializer
 
             if (nodeDocument.Slots is { Count: > 0 })
             {
-                if (nodeDocument.Kind != NodeKind.Bus)
+                if (nodeDocument.Kind is not (NodeKind.Bus or NodeKind.Plugin))
                 {
-                    error = $"Узел «{nodeDocument.Name}»: слоты эффектов возможны только у шин.";
+                    error = $"Узел «{nodeDocument.Name}»: слоты эффектов возможны только у шин и узлов-плагинов.";
                     return false;
                 }
 
@@ -412,7 +418,7 @@ public static class GraphSerializer
         /// <summary>Колонка эффектов открыта; null/false — обычный пульт.</summary>
         public bool? FxExpanded { get; set; }
 
-        /// <summary>Слоты-вставки эффектов (только у шин); null — слотов нет.</summary>
+        /// <summary>Слоты-вставки эффектов (шины — легаси, узлы-плагины — S-волна); null — слотов нет.</summary>
         public List<SlotDocument>? Slots { get; set; }
     }
 

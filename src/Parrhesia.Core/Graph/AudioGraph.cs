@@ -607,8 +607,9 @@ public sealed class AudioGraph
     // ===== Слоты-вставки эффектов (только шины) =====
 
     /// <summary>
-    /// Добавляет слот-вставку в конец цепочки шины. Слоты доступны только
-    /// у шин — вставка обрабатывает её суммарный сигнал.
+    /// Добавляет слот-вставку в конец цепочки обработки узла. Слоты доступны
+    /// шинам (легаси-путь) и узлам-плагинам (S-волна) — вставка гонит
+    /// суммарный сигнал узла.
     /// </summary>
     public void AddSlot(Guid nodeId, PluginSlot slot)
     {
@@ -693,10 +694,10 @@ public sealed class AudioGraph
     private AudioNode FindSlotNode(Guid id)
     {
         var node = FindNode(id) ?? throw new ArgumentException($"Узел {id:N} не найден.", nameof(id));
-        if (node.Kind != NodeKind.Bus)
+        if (node.Kind is not (NodeKind.Bus or NodeKind.Plugin))
         {
             throw new ArgumentException(
-                $"Слоты эффектов доступны только у шин (узел «{node.Name}» — {node.Kind}).",
+                $"Слоты эффектов доступны у шин и узлов-плагинов (узел «{node.Name}» — {node.Kind}).",
                 nameof(id));
         }
 

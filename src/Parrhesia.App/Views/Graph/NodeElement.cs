@@ -308,7 +308,7 @@ internal sealed class NodeElement : Border
     private void UpdateFxBadge()
     {
         var count = Node.Slots.Count;
-        var visible = Node.Kind == NodeKind.Bus && count > 0;
+        var visible = Node.Kind is NodeKind.Bus or NodeKind.Plugin && count > 0;
         _fxBadge.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
         if (visible && _fxBadge.Child is TextBlock label)
         {
@@ -467,6 +467,7 @@ internal sealed class NodeElement : Border
     {
         NodeKind.Source => "вход",
         NodeKind.Bus => "шина",
+        NodeKind.Plugin => "обработка",
         _ => "выход",
     };
 

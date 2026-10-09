@@ -16,6 +16,11 @@ public enum MixerZone
     /// <summary>Источник без привязки устройства (или с неразбираемым DeviceId).</summary>
     Unbound,
 
+    /// <summary>
+    /// Зона узла-плагина: обработка сигнала (VST3/CLAP в отдельном процессе).
+    /// </summary>
+    Processing,
+
     /// <summary>Шины и назначения — не «пульты входов», но в микшере нужны.</summary>
     Outputs,
 }
@@ -31,6 +36,11 @@ public static class MixerZoneInfo
     {
         ArgumentNullException.ThrowIfNull(node);
         ArgumentNullException.ThrowIfNull(ownEndpointIds);
+
+        if (node.Kind == NodeKind.Plugin)
+        {
+            return MixerZone.Processing;
+        }
 
         if (node.Kind is NodeKind.Bus or NodeKind.Sink)
         {
@@ -62,6 +72,7 @@ public static class MixerZoneInfo
     {
         MixerZone.Inputs => "УСТРОЙСТВА ВВОДА",
         MixerZone.VirtualCables => "ВИРТУАЛЬНЫЕ КАБЕЛИ",
+        MixerZone.Processing => "ОБРАБОТКА",
         MixerZone.Unbound => "ПРОЧЕЕ",
         _ => "ШИНЫ И ВЫВОДЫ",
     };
@@ -71,6 +82,7 @@ public static class MixerZoneInfo
     {
         MixerZone.Inputs => "Устройства ввода",
         MixerZone.VirtualCables => "Виртуальные кабели",
+        MixerZone.Processing => "Обработка",
         MixerZone.Unbound => "Прочее",
         _ => "Шины и выводы",
     };
