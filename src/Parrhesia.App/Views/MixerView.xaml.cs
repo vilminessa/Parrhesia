@@ -5,6 +5,7 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Media;
 using Parrhesia.App.Controls;
 using Parrhesia.App.Rendering;
+using Parrhesia.App.Views.Effects;
 using Parrhesia.App.Views.Mixer;
 using Parrhesia.Audio.Devices;
 using Parrhesia.Audio.Engine;
@@ -386,7 +387,7 @@ public partial class MixerView : UserControl
 
     private MixerStrip CreateStrip(AudioNode node)
     {
-        var strip = new MixerStrip(node);
+        var strip = new MixerStrip(node, AppServices.Settings.IsAdvancedMixer);
         strip.MuteToggled += s => AppServices.Graph.SetNodeMute(s.Node.Id, !s.Node.Mute);
         strip.SoloToggled += s => AppServices.Graph.SetNodeSolo(s.Node.Id, !s.Node.Solo);
         strip.BypassToggled += s => AppServices.Graph.SetNodeBypass(s.Node.Id, !s.Node.Bypassed);
@@ -397,6 +398,9 @@ public partial class MixerView : UserControl
         strip.ContextMenu!.Opened += (_, _) => PopulateGroupMenu(strip);
         strip.HeightCommitted += s =>
             AppServices.Graph.SetNodeStripHeight(s.Node.Id, (int)Math.Round(s.Height));
+        strip.FxToggleRequested += (s, fx, on) => AppServices.Graph.SetNodeFx(s.Node.Id, fx, on);
+        strip.FxSettingsRequested += (s, fx) =>
+            EffectSettingsWindow.Show(Window.GetWindow(this), s.Node, fx);
         return strip;
     }
 
@@ -423,6 +427,17 @@ public partial class MixerView : UserControl
 
         ChipsHost.Children.Clear();
 
+        // Режимы слева + разделитель: сегмент управления компановкой пультов.
+        ChipsHost.Children.Add(BuildModeSegment());
+        ChipsHost.Children.Add(new Border
+        {
+            Width = 1,
+            Height = 20,
+            Background = TryFindResource("Brush.Stroke") as Brush ?? Brushes.Gray,
+            Margin = new Thickness(4, 0, 14, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+        });
+
         ChipsHost.Children.Add(MakeChip(
             "all", "Все", sections.Sum(s => s.Nodes.Count), "Все пульты, разложенные по зонам"));
 
@@ -433,6 +448,13 @@ public partial class MixerView : UserControl
         {
             var key = "zone:" + zone;
             var count = sections.FirstOrDefault(s => s.Key == key)?.Nodes.Count ?? 0;
+            if (count == 0)
+            {
+                // Пустая авто-зона не тратит ширину строки чипов: фильтровать нечего
+                // (в ленте её блок и так скрыт). Ручные группы показываются всегда.
+                continue;
+            }
+
             ChipsHost.Children.Add(MakeChip(key, MixerZoneInfo.Label(zone), count, ZoneTooltip(zone)));
         }
 
@@ -448,6 +470,62 @@ public partial class MixerView : UserControl
         }
 
         ChipsHost.Children.Add(MakeChip(AddChipTag, "+ группа", 0, "Создать ручную группу"));
+    }
+
+    /// <summary>Сегмент режимов микшера (K-волна): Обычный / Продвинутый.</summary>
+    private StackPanel BuildModeSegment()
+    {
+        var advanced = AppServices.Settings.IsAdvancedMixer;
+        var segment = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Margin = new Thickness(0, 0, 2, 0),
+        };
+
+        segment.Children.Add(MakeModeButton(
+            "Обычный",
+            !advanced,
+            "Пульт как всегда: источник, громкость, M/S/B",
+            () => SetMixerMode("normal")));
+
+        var advancedButton = MakeModeButton(
+            "Продвинутый",
+            advanced,
+            "К пульту добавляется колонка эффектов: EQ, Comp, Gate, Denoise (ЛКМ — вкл/выкл, ПКМ — настройки)",
+            () => SetMixerMode("advanced"));
+
+        // Стык двух пилюль в один сегмент.
+        advancedButton.Margin = new Thickness(-6, 0, 0, 0);
+        segment.Children.Add(advancedButton);
+        return segment;
+    }
+
+    private ToggleButton MakeModeButton(string title, bool isChecked, string tooltip, Action onClick)
+    {
+        var button = new ToggleButton
+        {
+            Style = (Style)FindResource("Chip")!,
+            Content = title,
+            IsChecked = isChecked,
+            ToolTip = tooltip,
+        };
+        button.Click += (_, _) => onClick();
+        return button;
+    }
+
+    private void SetMixerMode(string mode)
+    {
+        if (string.Equals(AppServices.Settings.MixerMode, mode, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        AppServices.Settings.MixerMode = mode;
+        AppServices.Settings.Save();
+
+        // Карточки пультов другой конструкции — полная пересборка ленты;
+        // высоты (из узлов), фильтр и masonry-упаковка сохраняются.
+        RebuildStrips();
     }
 
     private ToggleButton MakeChip(string key, string title, int count, string tooltip)

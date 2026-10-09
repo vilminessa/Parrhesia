@@ -36,6 +36,9 @@ internal sealed class MixerStrip : Border
     /// <summary>Минимальная высота зоны метра/фейдера (не даём им схлопнуться).</summary>
     private const double MeterAreaMin = 40;
 
+    /// <summary>Ширина карточки в продвинутом режиме (вся ширина блока masonry).</summary>
+    public const double AdvancedCardWidth = 240;
+
     private readonly TextBlock _nameText;
     private readonly TextBlock _dbText;
     private readonly TextBlock _deviceText;
@@ -43,6 +46,10 @@ internal sealed class MixerStrip : Border
     private readonly Button _soloButton;
     private readonly Button _bypassButton;
     private readonly Border _handle;
+    private readonly bool _advanced;
+
+    /// <summary>Чипы эффекторов (id → кнопка) для синхронизации из модели.</summary>
+    private readonly Dictionary<string, ToggleButton> _fxChips = [];
 
     private float _peak;
     private double _holdUntil;
@@ -53,11 +60,12 @@ internal sealed class MixerStrip : Border
     private double _dragStartY;
     private double _dragStartHeight;
 
-    public MixerStrip(AudioNode node)
+    public MixerStrip(AudioNode node, bool advanced)
     {
         Node = node;
+        _advanced = advanced;
 
-        Width = 112;
+        Width = advanced ? AdvancedCardWidth : 112;
         Padding = new Thickness(10, 0, 10, 10);
         Background = ResolveBrush("Brush.Elevated", "#FF1B1F26");
         BorderBrush = ResolveBrush("Brush.Stroke", "#FF262B33");
@@ -196,13 +204,86 @@ internal sealed class MixerStrip : Border
         root.Children.Add(header);
         root.Children.Add(_dbText);
         root.Children.Add(meters);
-        Child = root;
+
+        if (_advanced)
+        {
+            // Две колонки: классический пульт (90 = сегодняшняя внутренняя ширина)
+            // + FX-поле на всё остальное (блок masonry не меняется — 240+10=250).
+            var grid = new Grid();
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(90) });
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            Grid.SetColumn(root, 0);
+            var fxColumn = BuildFxColumn();
+            Grid.SetColumn(fxColumn, 1);
+            grid.Children.Add(root);
+            grid.Children.Add(fxColumn);
+            Child = grid;
+        }
+        else
+        {
+            Child = root;
+        }
 
         SizeChanged += (_, _) => ApplyCompactMode();
 
         BuildContextMenu();
         ApplyStates();
     }
+
+    /// <summary>Колонка эффектов (продвинутый режим): чипы-заглушки.
+    /// ЛКМ — вкл/выкл, ПКМ — окно настроек эффектора.</summary>
+    private Border BuildFxColumn()
+    {
+        var panel = new StackPanel { Margin = new Thickness(10, 2, 0, 0) };
+        panel.Children.Add(new TextBlock
+        {
+            Text = "ЭФФЕКТЫ",
+            FontSize = 9,
+            FontWeight = FontWeights.SemiBold,
+            Foreground = ResolveBrush("Brush.TextFaint", "#FF5C6472"),
+            Margin = new Thickness(0, 0, 0, 6),
+        });
+
+        var chipStyle = (Style)Application.Current!.FindResource("Chip")!;
+        foreach (var (fxId, label) in FxInfo.All)
+        {
+            var chip = new ToggleButton
+            {
+                Style = chipStyle,
+                Content = label,
+                Height = 24,
+                FontSize = 11,
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                Margin = new Thickness(0, 0, 0, 4),
+                IsChecked = IsFxOn(fxId),
+                ToolTip = "ЛКМ — включить/выключить · ПКМ — настройки эффектора",
+            };
+
+            // ПКМ не должен открывать контекстное меню пульта — только окно эффектора.
+            chip.PreviewMouseRightButtonDown += (_, e) => e.Handled = true;
+            chip.MouseRightButtonUp += (_, e) =>
+            {
+                e.Handled = true;
+                FxSettingsRequested?.Invoke(this, fxId);
+            };
+            chip.Click += (_, _) => FxToggleRequested?.Invoke(this, fxId, chip.IsChecked == true);
+
+            _fxChips[fxId] = chip;
+            panel.Children.Add(chip);
+        }
+
+        return new Border
+        {
+            BorderBrush = ResolveBrush("Brush.Stroke", "#FF262B33"),
+            BorderThickness = new Thickness(1, 0, 0, 0),
+            Padding = new Thickness(10, 0, 0, 0),
+            VerticalAlignment = VerticalAlignment.Stretch,
+            Child = panel,
+        };
+    }
+
+    private bool IsFxOn(string fxId) =>
+        Node.FxEnabled.TryGetValue(fxId, out var on) && on;
 
     public AudioNode Node { get; }
 
@@ -238,13 +319,28 @@ internal sealed class MixerStrip : Border
     /// <summary>Ресайз завершён (отпустили мышь / сброс) — MixerView сохраняет высоту в узел.</summary>
     public event Action<MixerStrip>? HeightCommitted;
 
-    /// <summary>Обновление из модели: имя, дБ, состояния кнопок, устройство.</summary>
+    /// <summary>Чип эффектора переключён ЛКМ (id, вкл) — MixerView применит к графу.</summary>
+    public event Action<MixerStrip, string, bool>? FxToggleRequested;
+
+    /// <summary>ПКМ по чипу эффектора — открыть окно настроек.</summary>
+    public event Action<MixerStrip, string>? FxSettingsRequested;
+
+    /// <summary>Обновление из модели: имя, дБ, состояния кнопок, устройство, чипы FX.</summary>
     public void RefreshFromNode()
     {
         _nameText.Text = Node.Name;
         _dbText.Text = FormatDb(Node.Gain);
         _deviceText.Text = DescribeDevice(Node);
         _deviceText.ToolTip = _deviceText.Text;
+
+        foreach (var (fxId, chip) in _fxChips)
+        {
+            var on = IsFxOn(fxId);
+            if (chip.IsChecked != on)
+            {
+                chip.IsChecked = on;
+            }
+        }
 
         if (!_syncingFader && Math.Abs(Fader.Value - SliderValue(Node.Gain)) > 0.01)
         {

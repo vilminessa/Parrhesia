@@ -750,6 +750,25 @@ public sealed class AudioGraph
     }
 
     /// <summary>
+    /// Включает/выключает эффектор пульта (id см. FxInfo). Поднимает
+    /// <see cref="GraphChangeKind.NodeChanged"/>: UI обновит чипы, движок
+    /// применит, когда эффекты заработают; автосейв сохранит профиль.
+    /// </summary>
+    public void SetNodeFx(Guid id, string fx, bool enabled)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(fx);
+
+        var node = FindNode(id) ?? throw new ArgumentException($"Узел {id:N} не найден.", nameof(id));
+        if (node.FxEnabled.TryGetValue(fx, out var current) && current == enabled)
+        {
+            return;
+        }
+
+        node.FxEnabled[fx] = enabled;
+        Raise(GraphChangeKind.NodeChanged, node: node);
+    }
+
+    /// <summary>
     /// Атомарно заменяет содержимое графа копиями <paramref name="source"/>
     /// и поднимает одно событие <see cref="GraphChangeKind.Reset"/>.
     /// Идентичность графа сохраняется — подписчики (движок, UI) продолжают работать.
@@ -779,6 +798,7 @@ public sealed class AudioGraph
                 X = node.X,
                 Y = node.Y,
                 StripHeight = node.StripHeight,
+                FxEnabled = new Dictionary<string, bool>(node.FxEnabled),
             };
             copy.SlotsInternal.AddRange(node.SlotsInternal);
             _nodes.Add(copy);

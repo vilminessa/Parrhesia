@@ -70,6 +70,14 @@ public sealed class AudioNode
     /// </summary>
     public int? StripHeight { get; internal set; }
 
+    /// <summary>
+    /// Состояния эффекторов пульта по стабильным id ("eq", "comp", "gate",
+    /// "denoise" — см. FxInfo). Отсутствие ключа = выключено. Контракт для
+    /// волны эффектов: включение звучания поднимет NodeChanged через
+    /// <see cref="AudioGraph.SetNodeFx"/>.
+    /// </summary>
+    public Dictionary<string, bool> FxEnabled { get; internal set; } = [];
+
     public bool HasInput => Kind is NodeKind.Bus or NodeKind.Sink;
 
     public bool HasOutput => Kind is NodeKind.Source or NodeKind.Bus;

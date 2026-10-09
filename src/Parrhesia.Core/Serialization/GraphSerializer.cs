@@ -50,6 +50,7 @@ public static class GraphSerializer
                 X = n.X,
                 Y = n.Y,
                 StripHeight = n.StripHeight,
+                Fx = n.FxEnabled.Count > 0 ? n.FxEnabled : null,
                 Slots = n.Slots.Count > 0
                     ? n.Slots.Select(s => new SlotDocument
                     {
@@ -159,6 +160,7 @@ public static class GraphSerializer
             node.X = nodeDocument.X;
             node.Y = nodeDocument.Y;
             node.StripHeight = nodeDocument.StripHeight;
+            node.FxEnabled = nodeDocument.Fx ?? [];
 
             if (nodeDocument.Slots is { Count: > 0 })
             {
@@ -401,6 +403,9 @@ public static class GraphSerializer
 
         /// <summary>Высота пульта в микшере (px); null — дефолт. Косметика.</summary>
         public int? StripHeight { get; set; }
+
+        /// <summary>Состояния эффекторов пульта (id → включён); null — ничего не включено.</summary>
+        public Dictionary<string, bool>? Fx { get; set; }
 
         /// <summary>Слоты-вставки эффектов (только у шин); null — слотов нет.</summary>
         public List<SlotDocument>? Slots { get; set; }
