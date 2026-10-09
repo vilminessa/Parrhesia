@@ -1581,25 +1581,50 @@ Arguments:
 
 --*/
 {
-    if (ByteDisplacement == 0 || m_bCapture || !m_FeedFormatOk || m_pWfExt == NULL)
+    // Позиция инкрементируется ПОСЛЕ этого вызова: push покрывает
+    // [linear, linear + ByteDisplacement).
+    if (m_bCapture || !m_FeedFormatOk || m_pWfExt == NULL || ByteDisplacement == 0)
     {
+        m_CableLastLinear = m_ullLinearPosition;
+        return;
+    }
+
+    // Не-RUN (пауза/стоп): кабель не пишет, отметка подтягивается —
+    // иначе в паузе кольцо набирало бы задержку на стоящем потоке.
+    if (m_KsState != KSSTATE_RUN)
+    {
+        m_CableLastLinear = m_ullLinearPosition;
+        return;
+    }
+
+    // Ресет позиции (STOP обнулил linear): пересинк БЕЗ записи — первый
+    // сегмент DMA после остановки может содержать устаревшие данные.
+    if (m_ullLinearPosition < m_CableLastLinear)
+    {
+        m_CableLastLinear = m_ullLinearPosition;
         return;
     }
 
     CParrhesiaFeed* feed = GetOwnFeed();
     if (feed == NULL || feed->HasWriters())
     {
+        // Фида нет либо путь контролирует приложение (виртуальный sink) —
+        // пропускаем период, но позицию отслеживаем (без дублей после).
+        m_CableLastLinear = m_ullLinearPosition + ByteDisplacement;
         return;
     }
 
     ULONG bufferOffset = m_ullLinearPosition % m_ulDmaBufferSize;
-    while (ByteDisplacement > 0)
+    ULONG remaining = ByteDisplacement;
+    while (remaining > 0)
     {
-        ULONG runWrite = min(ByteDisplacement, m_ulDmaBufferSize - bufferOffset);
+        ULONG runWrite = min(remaining, m_ulDmaBufferSize - bufferOffset);
         feed->WriteCable(m_pDmaBuffer + bufferOffset, runWrite, m_pWfExt->Format.wBitsPerSample);
         bufferOffset = (bufferOffset + runWrite) % m_ulDmaBufferSize;
-        ByteDisplacement -= runWrite;
+        remaining -= runWrite;
     }
+
+    m_CableLastLinear = m_ullLinearPosition + ByteDisplacement;
 }
 
 //=============================================================================

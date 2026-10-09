@@ -19,7 +19,12 @@ namespace Parrhesia.Audio.Engine;
 /// </summary>
 public sealed class WasapiAudioEngine : IAudioEngine
 {
-    private const int OutputLatencyMs = 50;
+    // Фолбэк-латентность (мс), если IAudioClient3 low-latency недоступен:
+    // запрос20мс (было50); сами клиенты идут через WithLowLatency(true).
+    private const int OutputLatencyMs = 20;
+
+    // Фолбэк-буфер capture (мс) при отказе low-latency; дефолт NAudio =100.
+    private const int CaptureBufferMs = 30;
     private static readonly TimeSpan StatsResetDelay = TimeSpan.FromMilliseconds(1500);
 
     /// <summary>Кольцо на ~0.35 с — запас на джиттер и дрейф часов устройств.</summary>
@@ -151,6 +156,14 @@ public sealed class WasapiAudioEngine : IAudioEngine
         _startStage = "инициализация";
         try
         {
+            // Переименование — САМОЕ ПЕРВОЕ: после обновления драйвера
+            // endpoints приходят с системными именами («Динамики»/«Набор
+            // микрофонов»), а перепривязка по имени (E3) ищет «Parrhesia
+            // InN/OutN». Раньше rename стоял ПОСЛЕ открытия сников: при
+            // отказе сников он не достигался, а без него E3 не находил
+            // совпадений — замкнутый круг.
+            ApplyVirtualEndpointNames();
+
             // 1. Планы назначений: все сники с валидной привязкой (loopback как выход запрещён).
             var plans = new List<SinkPlan>();
             foreach (var node in _graph.Nodes)
@@ -214,7 +227,7 @@ public sealed class WasapiAudioEngine : IAudioEngine
                     continue;
                 }
 
-                if (!TryResolveDevice(plan.Spec, DataFlow.Render, out var device))
+                if (!TryResolveDevice(plan.Spec, DataFlow.Render, out var device, plan.NodeId))
                 {
                     skipped++;
                     continue;
@@ -226,6 +239,8 @@ public sealed class WasapiAudioEngine : IAudioEngine
                         .WithDevice(device)
                         .WithSharedMode()
                         .WithEventSync()
+                        .WithLowLatency(true)
+                        .WithMmcssThreadPriority("Pro Audio")
                         .WithLatency(OutputLatencyMs)
                         .Build();
 
@@ -304,12 +319,6 @@ public sealed class WasapiAudioEngine : IAudioEngine
             _sinkNames = opened.Select(Describe).ToArray();
             _sinkName = Describe(primary);
 
-            // Имена endpoints: «Parrhesia In/Out» вместо системных заглушек
-            // (только если имя ещё дефолтное — выбор владельца сохраняем).
-            // Работает при любом тракте: resolver вернёт только наши
-            // endpoints, при пустом наборе — no-op.
-            ApplyVirtualEndpointNames();
-
             // Цепочки слотов: загрузка/подготовка плагинов под формат движка
             // (max-блок100 мс — больше обоих путей вывода: player50 мс, помпа10 мс).
             _slotChains.Prepare(engineFormat.SampleRate, engineFormat.SampleRate / 10, engineFormat.Channels);
@@ -359,10 +368,16 @@ public sealed class WasapiAudioEngine : IAudioEngine
             _lastFeedDropped = 0;
             _lastFeedUnderrun = 0;
             _statsTimer = new Timer(_ => LogStatsIfChanged(), null, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5));
+            var sinkLatency = _players.Count == 0
+                ? string.Empty
+                : ", латентности выходов " + string.Join(
+                    "/",
+                    _players.Select(p =>
+                        $"{p.LatencyMilliseconds} мс{(p.LowLatencyActive ? string.Empty : " (стандарт)")}"));
             LogMessage(
                 EngineLogLevel.Info,
                 $"Движок запущен: {_sampleRate} Гц, выходов {_sinkNames.Length} ({string.Join(", ", _sinkNames)}), " +
-                $"источников {_sources.Count}" +
+                $"источников {_sources.Count}{sinkLatency}" +
                 (skipped > 0 ? $", назначений пропущено {skipped}" : string.Empty));
             StatusChanged?.Invoke(this, EventArgs.Empty);
             _ = ResetStatsLater();
@@ -472,7 +487,11 @@ public sealed class WasapiAudioEngine : IAudioEngine
                 continue;
             }
 
-            if (!TryResolveDevice(spec, spec.Loopback ? DataFlow.Render : DataFlow.Capture, out var device))
+            if (!TryResolveDevice(
+                    spec,
+                    spec.Loopback ? DataFlow.Render : DataFlow.Capture,
+                    out var device,
+                    node.Id))
             {
                 continue;
             }
@@ -506,7 +525,14 @@ public sealed class WasapiAudioEngine : IAudioEngine
             var builder = new WasapiRecorderBuilder()
                 .WithDevice(device)
                 .WithEventSync()
-                .WithFormat(WaveFormat.CreateIeeeFloatWaveFormat(engineFormat.SampleRate, engineFormat.Channels));
+                .WithLowLatency(true)
+                .WithBufferLength(CaptureBufferMs)
+                .WithMmcssThreadPriority("Pro Audio");
+            // WithFormat НЕ передаём: low-latency shared capture требует
+            // формат = device mix format (иначе NAudio отказывает от
+            // IAudioClient3 и переоткрывает поток). Mix format наших
+            // endpoints = float32/48к/2к = формат движка; для остальных
+            // устройств расхождение съест SourceFormatAdapter (см. ниже).
             if (spec.Loopback)
             {
                 builder = builder.WithLoopbackCapture();
@@ -575,7 +601,9 @@ public sealed class WasapiAudioEngine : IAudioEngine
             var delayMs = (Stopwatch.GetTimestamp() - binding.StartTimestamp) * 1000.0 / Stopwatch.Frequency;
             LogMessage(
                 EngineLogLevel.Info,
-                $"«{binding.Name}»: первые данные через {delayMs:0} мс");
+                $"«{binding.Name}»: первые данные через {delayMs:0} мс, " +
+                $"латентность {binding.Recorder.LatencyMilliseconds} мс " +
+                $"(low-latency: {binding.Recorder.LowLatencyActive})");
         }
 
         var source = MemoryMarshal.Cast<byte, float>(data);
@@ -665,7 +693,10 @@ public sealed class WasapiAudioEngine : IAudioEngine
 
             var builder = new WasapiRecorderBuilder()
                 .WithDevice(binding.Device)
-                .WithEventSync();
+                .WithEventSync()
+                .WithLowLatency(true)
+                .WithBufferLength(CaptureBufferMs)
+                .WithMmcssThreadPriority("Pro Audio");
             if (binding.Loopback)
             {
                 builder = builder.WithLoopbackCapture();
@@ -799,6 +830,8 @@ public sealed class WasapiAudioEngine : IAudioEngine
                 .WithDevice(device)
                 .WithSharedMode()
                 .WithEventSync()
+                .WithLowLatency(true)
+                .WithMmcssThreadPriority("Pro Audio")
                 .WithLatency(OutputLatencyMs)
                 .Build();
 
@@ -949,33 +982,129 @@ public sealed class WasapiAudioEngine : IAudioEngine
         _bindings = [];
     }
 
-    private bool TryResolveDevice(DeviceSpec spec, DataFlow expectedFlow, out MMDevice device)
+    private bool TryResolveDevice(
+        DeviceSpec spec,
+        DataFlow expectedFlow,
+        out MMDevice device,
+        Guid? rebindNode = null)
     {
         device = null!;
-        try
+        if (spec.Target == DeviceSpecTarget.ById)
         {
-            if (spec.Target == DeviceSpecTarget.ById)
+            if (TryOpenById(spec.DeviceId, expectedFlow, out device))
             {
-                var found = _enumerator.GetDevice(spec.DeviceId);
-                if (found.DataFlow != expectedFlow)
-                {
-                    LogMessage(
-                        EngineLogLevel.Error,
-                        $"Устройство {spec} — не тот поток данных ({found.DataFlow}, ожидался {expectedFlow})");
-                    found.Dispose();
-                    return false;
-                }
-
-                device = found;
                 return true;
             }
 
+            // GUID исчез (переустановка/обновление драйвера пересоздаёт все
+            // endpoints) — пробуем найти устройство по имени из кэша и
+            // перепривязываем узел графа (профиль сохраняется автосейвом).
+            if (rebindNode is Guid nodeId &&
+                TryRebindByName(spec, expectedFlow, out var newId, out var reopened))
+            {
+                var newSpec = new DeviceSpec(spec.Loopback, DeviceSpecTarget.ById, newId);
+                _graph.SetNodeDevice(nodeId, newSpec.ToString());
+                LogMessage(
+                    EngineLogLevel.Info,
+                    $"Привязка восстановлена по имени ({spec.DeviceId} → {newId}): «{DeviceNameCache.GetName(newId)}»");
+                device = reopened;
+                return true;
+            }
+
+            LogMessage(
+                EngineLogLevel.Error,
+                $"Устройство {spec} недоступно: не найдено (переустановка драйвера?)");
+            return false;
+        }
+
+        try
+        {
             var flow = spec.Target == DeviceSpecTarget.DefaultCapture ? DataFlow.Capture : DataFlow.Render;
             return _enumerator.TryGetDefaultAudioEndpoint(flow, Role.Multimedia, out device!);
         }
         catch (Exception ex)
         {
             LogMessage(EngineLogLevel.Error, $"Устройство {spec} недоступно: {ex.Message}");
+            return false;
+        }
+    }
+
+    /// <summary>Открытие по id: успех → запоминаем имя в кэше (E3).</summary>
+    private bool TryOpenById(string id, DataFlow expectedFlow, out MMDevice device)
+    {
+        device = null!;
+        try
+        {
+            var found = _enumerator.GetDevice(id);
+            if (found.DataFlow != expectedFlow)
+            {
+                LogMessage(
+                    EngineLogLevel.Error,
+                    $"Устройство {id} — не тот поток данных ({found.DataFlow}, ожидался {expectedFlow})");
+                found.Dispose();
+                return false;
+            }
+
+            DeviceNameCache.Update(id, found.FriendlyName);
+            device = found;
+            return true;
+        }
+        catch (Exception)
+        {
+            return false; // id не найден — дальше перепривязка или лог вызывающего
+        }
+    }
+
+    /// <summary>
+    /// Поиск замены по имени из кэша: одно ЗАМКНУТОЕ совпадение в активных
+    /// устройствах потока → открыто и возвращено;0/несколько → false.
+    /// </summary>
+    private bool TryRebindByName(
+        DeviceSpec spec,
+        DataFlow flow,
+        out string newId,
+        out MMDevice device)
+    {
+        newId = string.Empty;
+        device = null!;
+
+        var name = DeviceNameCache.GetName(spec.DeviceId);
+        if (string.IsNullOrEmpty(name))
+        {
+            return false;
+        }
+
+        try
+        {
+            using var active = _enumerator.EnumerateAudioEndPoints(flow, DeviceState.Active);
+            var candidates = new List<(string Id, string Name)>();
+            foreach (var item in active)
+            {
+                try
+                {
+                    candidates.Add((item.ID, item.FriendlyName));
+                }
+                finally
+                {
+                    item.Dispose();
+                }
+            }
+
+            var match = DeviceNameCache.PickUniqueByName(candidates, name);
+            if (match is null)
+            {
+                return false;
+            }
+
+            device = _enumerator.GetDevice(match);
+            newId = match;
+            return true;
+        }
+        catch (Exception ex)
+        {
+            LogMessage(EngineLogLevel.Warning, $"Перепривязка по имени не удалась: {ex.Message}");
+            device = null!;
+            newId = string.Empty;
             return false;
         }
     }

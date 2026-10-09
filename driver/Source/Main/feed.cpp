@@ -63,6 +63,7 @@ NTSTATUS CParrhesiaFeed::Init()
     m_WritePos = m_ReadPos = 0;
     m_Written = m_Delivered = m_Dropped = m_Underrun = 0;
     m_Loop = 0;
+    m_CableDrop = 0;
     m_Owner = NULL;
     m_FormatMismatch = 0;
     m_Writers = 0;
@@ -200,6 +201,16 @@ void CParrhesiaFeed::WriteCable(const BYTE *src, ULONG len, ULONG bitsPerSample)
 
     if (m_Buffer == NULL)
     {
+        KeReleaseSpinLock(&m_Lock, oldIrql);
+        return;
+    }
+
+    // Водяной знак: уровень выше капа (~85 мс) — блок отбрасывается,
+    // задержка кабеля не растёт безгранично (см. PFEED_CABLE_HIGH_BYTES).
+    ULONGLONG levelNow = m_WritePos - m_ReadPos;
+    if (levelNow >= PFEED_CABLE_HIGH_BYTES)
+    {
+        m_CableDrop += outBytes;
         KeReleaseSpinLock(&m_Lock, oldIrql);
         return;
     }
@@ -372,6 +383,7 @@ void CParrhesiaFeed::GetStats(PPFEED_STATS stats)
     stats->FormatMismatch = m_FormatMismatch;
     stats->LoopBytes = m_Loop;
     stats->Writers = m_Writers;
+    stats->CableDropped = m_CableDrop;
     KeReleaseSpinLock(&m_Lock, oldIrql);
 }
 

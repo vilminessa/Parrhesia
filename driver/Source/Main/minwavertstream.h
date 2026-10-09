@@ -90,6 +90,11 @@ protected:
     BOOLEAN                     m_FeedClaimed = FALSE;
     BOOLEAN                     m_FeedFormatOk = FALSE;
 
+    // Кабель (В1): последняя вытолкнутая линейная позиция. После STOP/Init
+    // позиция обнуляется — без этой отметки сегмент DMA писался бы ВТОРОЙ
+    // раз (повтор старых сэмплов = искажения).
+    ULONGLONG                   m_CableLastLinear = 0;
+
     // Feed СВОЕГО адаптера (lanes, М2): и для capture, и для render
     // (кабельный цикл). NULL — нет адаптера/фида.
     CParrhesiaFeed* GetOwnFeed() const;

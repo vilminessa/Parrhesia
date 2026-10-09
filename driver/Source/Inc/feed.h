@@ -28,6 +28,12 @@ Abstract:
 #define PFEED_BYTES_PER_SEC (PFEED_RATE * PFEED_FRAME_BYTES)       // 384000
 #define PFEED_RING_BYTES    (1u << 18)                             // 256 КБ ≈ 0.68 с
 
+// Водяной знак кабельного цикла: при уровне ≥ ~85 мс входящий блок
+// отбрасывается (CableDropped) — задержка кабеля каплена, набег уровня
+// (дрейф часов render/capture) не превращается в секунды и целоблочные
+// дропы посреди звука.
+#define PFEED_CABLE_HIGH_BYTES   32768u                            // ≈85 мс @384 КБ/с
+
 #define PFEED_DEVICE_NAME   L"\\Device\\ParrhesiaFeed"
 #define PFEED_SYMLINK_NAME  L"\\DosDevices\\ParrhesiaFeed"
 #define PFEED_USER_PATH     "\\\\.\\ParrhesiaFeed"
@@ -54,6 +60,7 @@ typedef struct _PFEED_STATS
     LONG      FormatMismatch;  // 1 — формат потока не совпал с каноническим
     ULONGLONG LoopBytes;       // принято кабельным циклом (render → фид)
     LONG      Writers;         // открыто user mode-хэндлов фида (0 → кабель активен)
+    ULONGLONG CableDropped;    // отброшено кабелем: уровень > PFEED_CABLE_HIGH (кап задержки)
 } PFEED_STATS, *PPFEED_STATS;
 
 class CParrhesiaFeed
@@ -101,6 +108,7 @@ private:
     ULONGLONG           m_Dropped;
     ULONGLONG           m_Underrun;
     ULONGLONG           m_Loop;        // байты кабельного цикла (render → фид)
+    ULONGLONG           m_CableDrop;   // отброшено кабелем по водяному знаку
     const void         *m_Owner;
     LONG                m_FormatMismatch;
     LONG                m_Writers;     // открытых user mode-хэндлов

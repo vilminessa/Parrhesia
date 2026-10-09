@@ -21,6 +21,9 @@ public struct ParrhesiaFeedStats
 
     /// <summary>Открытых user mode-хэндлов фида (0 → кабель активен).</summary>
     public int Writers;
+
+    /// <summary>Отброшено кабелем по водяному знаку (кап задержки; В1).</summary>
+    public ulong CableDropped;
 }
 
 /// <summary>

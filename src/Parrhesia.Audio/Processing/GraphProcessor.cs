@@ -31,6 +31,23 @@ public sealed class GraphProcessor : IDisposable
 
     private GraphSnapshot _snapshot;
 
+    /// <summary>
+    /// Эпоха смешивания (сетка2мс — меньше минимального WASAPI-периода
+    /// ~2.67мс, поэтому каждый пулл реально свежий): вход каждого узла
+    /// дренажится РОВНО РАЗ на эпоху, ветка сника считается РОВНО РАЗ.
+    /// Без этого каждый пулл каждого сника читал кольца заново: при2+
+    /// выходах второй пулл видел пустоту («под» в полную скорость, сигнал
+    /// выходов перемежался тишиной — «ломаный» звук).
+    /// </summary>
+    private const int MixEpochMs = 2;
+
+    private readonly object _epochGate = new();
+    private long _epochStamp = -1;
+    private int _epochSamples;
+
+    /// <summary>Узлы, посчитанные в текущую эпоху (дренаж источников и суммы — по разу).</summary>
+    private readonly HashSet<Guid> _epochComputed = [];
+
     public GraphProcessor(AudioGraph graph, int channels = 2)
     {
         ArgumentNullException.ThrowIfNull(graph);
@@ -53,6 +70,9 @@ public sealed class GraphProcessor : IDisposable
         {
             _inputs[nodeId] = input;
         }
+
+        // Вход изменился — буферы эпохи устарели.
+        Volatile.Write(ref _epochStamp, -1);
     }
 
     public void ClearInputs() => _inputs.Clear();
@@ -131,6 +151,10 @@ public sealed class GraphProcessor : IDisposable
         var snapshot = GraphSnapshot.Build(_graph, ChainLatency);
         PrepareEdgeDelays(snapshot);
         Volatile.Write(ref _snapshot, snapshot);
+
+        // Новый снимок — эпохальные буферы устарели (иначе правки гейнов
+        // и привязок не применялись бы до конца эпохи).
+        Volatile.Write(ref _epochStamp, -1);
     }
 
     /// <summary>
@@ -174,56 +198,99 @@ public sealed class GraphProcessor : IDisposable
             frames = samples / _channels;
         }
 
-        var snapshot = Volatile.Read(ref _snapshot);
-        EnsureBuffers(snapshot, samples);
+        var epoch = Environment.TickCount64 / MixEpochMs;
+        lock (_epochGate)
+        {
+            var snapshot = Volatile.Read(ref _snapshot);
+
+            if (epoch != _epochStamp || samples != _epochSamples)
+            {
+                ResetEpoch(epoch, samples);
+            }
+
+            EnsureBuffers(snapshot, samples);
+            ComputeEpoch(snapshot, samples);
+
+            if (samples == 0)
+            {
+                return;
+            }
+
+            if (_buffers.TryGetValue(sinkId, out var sinkBuffer))
+            {
+                var sinkChannels = SnapshotChannelCount(snapshot, sinkId);
+                if (sinkChannels == 1 && _channels > 1)
+                {
+                    // Моно-назначение: первый канал дублируется на все,
+                    // иначе звук уходил бы только в левый динамик.
+                    var monoFrames = samples / _channels;
+                    for (var frame = 0; frame < monoFrames; frame++)
+                    {
+                        var value = sinkBuffer[frame * _channels];
+                        for (var channel = 0; channel < _channels; channel++)
+                        {
+                            output[(frame * _channels) + channel] = value;
+                        }
+                    }
+                }
+                else
+                {
+                    sinkBuffer.AsSpan(0, samples).CopyTo(output[..samples]);
+                }
+            }
+            else
+            {
+                output[..samples].Clear();
+            }
+
+            if (output.Length > samples)
+            {
+                output[samples..].Clear();
+            }
+        }
+    }
+
+    /// <summary>Начало новой эпохи: буферы и отметки расчёта сбрасываются.</summary>
+    private void ResetEpoch(long epoch, int samples)
+    {
+        Volatile.Write(ref _epochStamp, epoch);
+        _epochSamples = samples;
+        _epochComputed.Clear();
+    }
+
+    /// <summary>
+    /// Расчёт графа на эпоху: источники дренаживаются РОВНО РАЗ
+    /// (латч — и потребление равно частоте записи при любом числе сников,
+    /// и метры источников живут даже без маршрутов), суммирование — раз в
+    /// эпоху для всех узлов (как в прежней модели — но на уже прочитанных
+    /// блоках). Повторные пулы сников в пределах эпохи идут в кэш.
+    /// </summary>
+    private void ComputeEpoch(GraphSnapshot snapshot, int samples)
+    {
+        foreach (var node in snapshot.Nodes)
+        {
+            if (node.Kind != NodeKind.Source)
+            {
+                continue;
+            }
+
+            if (_epochComputed.Add(node.Id))
+            {
+                ProcessSource(node, snapshot, samples);
+            }
+        }
 
         foreach (var node in snapshot.Nodes)
         {
             if (node.Kind == NodeKind.Source)
             {
-                ProcessSource(node, snapshot, samples);
+                continue;
             }
-            else
+
+            if (_epochComputed.Add(node.Id))
             {
                 ProcessSumming(node, snapshot, samples);
             }
-        }
-
-        if (samples == 0)
-        {
-            return;
-        }
-
-        if (_buffers.TryGetValue(sinkId, out var sinkBuffer))
-        {
-            var sinkChannels = SnapshotChannelCount(snapshot, sinkId);
-            if (sinkChannels == 1 && _channels > 1)
-            {
-                // Моно-назначение: первый канал дублируется на все,
-                // иначе звук уходил бы только в левый динамик.
-                var monoFrames = samples / _channels;
-                for (var frame = 0; frame < monoFrames; frame++)
-                {
-                    var value = sinkBuffer[frame * _channels];
-                    for (var channel = 0; channel < _channels; channel++)
-                    {
-                        output[(frame * _channels) + channel] = value;
-                    }
-                }
-            }
-            else
-            {
-                sinkBuffer.AsSpan(0, samples).CopyTo(output[..samples]);
-            }
-        }
-        else
-        {
-            output[..samples].Clear();
-        }
-
-        if (output.Length > samples)
-        {
-            output[samples..].Clear();
         }
     }
 

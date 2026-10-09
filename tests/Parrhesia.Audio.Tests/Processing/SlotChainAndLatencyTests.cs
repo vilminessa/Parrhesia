@@ -115,6 +115,8 @@ public class SlotChainAndLatencyTests
 
     private static float[] Process(GraphProcessor processor, Guid sinkId, int frames = BlockFrames)
     {
+        // Один вызов = один аудио-цикл: вручную переводим эпоху.
+        processor.Invalidate();
         var output = new float[frames * 2];
         processor.ProcessBlock(sinkId, output, frames);
         return output;

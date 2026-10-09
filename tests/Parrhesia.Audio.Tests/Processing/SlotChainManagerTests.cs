@@ -181,6 +181,9 @@ public class SlotChainManagerTests
 
     private static float[] Process(GraphProcessor processor, Guid sinkId, int frames = 8)
     {
+        // Один вызов = один аудио-цикл: вручную переводим эпоху (в рантайме
+        // эпохальный кэш сам решает, пересчитывать ли — см. GraphProcessor).
+        processor.Invalidate();
         var output = new float[frames * 2];
         processor.ProcessBlock(sinkId, output, frames);
         return output;
