@@ -28,6 +28,18 @@ public partial class App : Application
             return;
         }
 
+        // Режим-исполнитель плагина (S-волна): один аудио-узел через мост.
+        if (e.Args.Length >= 3 &&
+            string.Equals(e.Args[0], "--plugin-host", StringComparison.OrdinalIgnoreCase))
+        {
+            var sleep = e.Args.Length >=4 &&
+                int.TryParse(e.Args[3], out var parsedSleep)
+                ? parsedSleep
+                : 0;
+            Environment.Exit(PluginHostMode.Run(e.Args[1], int.Parse(e.Args[2]), sleep));
+            return;
+        }
+
         var console = Array.IndexOf(e.Args, "--console") >= 0;
         InitializeLogging(console);
         InstallCrashHooks();
