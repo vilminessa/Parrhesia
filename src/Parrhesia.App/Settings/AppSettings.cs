@@ -1,5 +1,6 @@
 using System.IO;
 using System.Text.Json;
+using Parrhesia.Audio.Devices;
 
 namespace Parrhesia.App.Settings;
 
@@ -20,6 +21,13 @@ public sealed class AppSettings
     /// Разбор — EngineFormat.ParseSetting; невалидное значение деградирует в "auto".
     /// </summary>
     public string EngineSampleRate { get; set; } = "auto";
+
+    /// <summary>
+    /// Неприменённые операции менеджера кабелей (В1): add/remove/rename
+    /// ждут кнопки «Применить» — в UI помечены оранжевым. Очистка — после
+    /// успешного применения или сверки с фактом (CablePlanner.Reconcile).
+    /// </summary>
+    public List<CableOp> CablePendingOps { get; set; } = [];
 
     private static string FilePath =>
         Path.Combine(

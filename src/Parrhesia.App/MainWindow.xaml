@@ -118,6 +118,9 @@
       <TabItem Header="Устройства">
         <views:DevicesView />
       </TabItem>
+      <TabItem Header="Кабели">
+        <views:CablesView />
+      </TabItem>
       <TabItem Header="Настройки">
         <views:SettingsView />
       </TabItem>

@@ -1,0 +1,212 @@
+<UserControl x:Class="Parrhesia.App.Views.CablesView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Loaded="OnLoaded"
+             Unloaded="OnUnloaded">
+  <UserControl.Resources>
+    <BooleanToVisibilityConverter x:Key="BoolToVis" />
+    <Style x:Key="CableRowBorder" TargetType="Border">
+      <Setter Property="Background" Value="{DynamicResource Brush.Panel}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource Brush.Stroke}" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="5" />
+      <Setter Property="Padding" Value="12,8" />
+      <Setter Property="Margin" Value="0,0,0,6" />
+      <Style.Triggers>
+        <!-- Неприменённые изменения — оранжевая подложка -->
+        <DataTrigger Binding="{Binding IsPending}" Value="True">
+          <Setter Property="Background" Value="#28FFB020" />
+          <Setter Property="BorderBrush" Value="{DynamicResource Brush.Accent}" />
+        </DataTrigger>
+      </Style.Triggers>
+    </Style>
+  </UserControl.Resources>
+
+  <Grid Margin="20">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="*" />
+      <RowDefinition Height="Auto" />
+    </Grid.RowDefinitions>
+
+    <!-- Баннер неприменённых изменений -->
+    <Border x:Name="Banner"
+            Grid.Row="0"
+            Visibility="Collapsed"
+            Background="#28FFB020"
+            BorderBrush="{DynamicResource Brush.Accent}"
+            BorderThickness="1"
+            CornerRadius="8"
+            Padding="14,10"
+            Margin="0,0,0,12">
+      <Grid>
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="*" />
+          <ColumnDefinition Width="Auto" />
+        </Grid.ColumnDefinitions>
+
+        <TextBlock x:Name="BannerText"
+                   Foreground="{DynamicResource Brush.Accent}"
+                   FontSize="13"
+                   FontWeight="SemiBold"
+                   VerticalAlignment="Center"
+                   TextWrapping="Wrap"
+                   Text="—" />
+
+        <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+          <Button Content="Применить"
+                  Click="OnApplyClick"
+                  FontWeight="SemiBold"
+                  Margin="10,0,0,0" />
+          <Button Content="Отменить изменения"
+                  Click="OnDiscardClick"
+                  Margin="8,0,0,0" />
+        </StackPanel>
+      </Grid>
+    </Border>
+
+    <!-- Шапка -->
+    <Grid Grid.Row="1" Margin="0,0,0,12">
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="*" />
+        <ColumnDefinition Width="Auto" />
+      </Grid.ColumnDefinitions>
+
+      <TextBlock x:Name="HeaderText"
+                 Text="Кабели"
+                 FontSize="15"
+                 FontWeight="SemiBold"
+                 Foreground="{DynamicResource Brush.Text}"
+                 VerticalAlignment="Center" />
+
+      <StackPanel Grid.Column="1" Orientation="Horizontal">
+        <Button Content="Обновить" Click="OnRefreshClick" />
+        <Button Content="Добавить кабель"
+                Click="OnAddClick"
+                FontWeight="SemiBold"
+                Margin="8,0,0,0" />
+      </StackPanel>
+    </Grid>
+
+    <!-- Список кабелей -->
+    <Border Grid.Row="2"
+            Background="{DynamicResource Brush.Elevated}"
+            BorderBrush="{DynamicResource Brush.Stroke}"
+            BorderThickness="1"
+            CornerRadius="8"
+            Padding="14">
+      <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <ItemsControl x:Name="CableList">
+          <ItemsControl.ItemTemplate>
+            <DataTemplate>
+              <Border Style="{StaticResource CableRowBorder}">
+                <Grid>
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="44" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                  </Grid.ColumnDefinitions>
+
+                  <!-- Номер лана -->
+                  <Border Background="{DynamicResource Brush.Panel}"
+                          BorderBrush="{DynamicResource Brush.StrokeStrong}"
+                          BorderThickness="1"
+                          CornerRadius="4"
+                          Padding="6,2"
+                          VerticalAlignment="Center">
+                    <TextBlock Text="{Binding Lane, StringFormat=L{0}}"
+                               FontSize="11"
+                               FontWeight="SemiBold"
+                               Foreground="{DynamicResource Brush.TextDim}" />
+                  </Border>
+
+                  <!-- Вход -->
+                  <StackPanel Grid.Column="1"
+                              Orientation="Horizontal"
+                              Margin="10,0,0,0"
+                              VerticalAlignment="Center">
+                    <TextBlock Text="{Binding InName}"
+                               FontSize="13"
+                               Foreground="{DynamicResource Brush.Text}"
+                               TextTrimming="CharacterEllipsis"
+                               VerticalAlignment="Center" />
+                    <Button Content="✎"
+                            ToolTip="Переименовать вход"
+                            FontSize="10"
+                            Padding="6,1"
+                            Margin="6,0,0,0"
+                            Tag="{Binding}"
+                            Click="OnRenameInClick"
+                            Visibility="{Binding CanRename, Converter={StaticResource BoolToVis}}" />
+                  </StackPanel>
+
+                  <Path Grid.Column="2"
+                        Data="M0,5 L10,5 M6,1 L10,5 L6,9"
+                        Stroke="{DynamicResource Brush.TextDim}"
+                        StrokeThickness="1.5"
+                        Margin="8,0"
+                        VerticalAlignment="Center" />
+
+                  <!-- Выход -->
+                  <StackPanel Grid.Column="3"
+                              Orientation="Horizontal"
+                              VerticalAlignment="Center">
+                    <TextBlock Text="{Binding OutName}"
+                               FontSize="13"
+                               Foreground="{DynamicResource Brush.Text}"
+                               TextTrimming="CharacterEllipsis"
+                               VerticalAlignment="Center" />
+                    <Button Content="✎"
+                            ToolTip="Переименовать выход"
+                            FontSize="10"
+                            Padding="6,1"
+                            Margin="6,0,0,0"
+                            Tag="{Binding}"
+                            Click="OnRenameOutClick"
+                            Visibility="{Binding CanRename, Converter={StaticResource BoolToVis}}" />
+                  </StackPanel>
+
+                  <!-- Бейдж статуса -->
+                  <Border Grid.Column="4"
+                          Background="{DynamicResource Brush.Accent}"
+                          CornerRadius="4"
+                          Padding="7,2"
+                          Margin="10,0,0,0"
+                          VerticalAlignment="Center"
+                          Visibility="{Binding IsPending, Converter={StaticResource BoolToVis}}">
+                    <TextBlock Text="{Binding Badge}"
+                               FontSize="10.5"
+                               FontWeight="SemiBold"
+                               Foreground="#FF1A1408" />
+                  </Border>
+
+                  <!-- Удалить / отменить добавление -->
+                  <Button Grid.Column="5"
+                          Content="Удалить"
+                          FontSize="11"
+                          Padding="8,2"
+                          Margin="10,0,0,0"
+                          VerticalAlignment="Center"
+                          Tag="{Binding}"
+                          Click="OnDeleteClick" />
+                </Grid>
+              </Border>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+      </ScrollViewer>
+    </Border>
+
+    <!-- Подсказка -->
+    <TextBlock Grid.Row="3"
+               Margin="0,10,0,0"
+               FontSize="11.5"
+               Foreground="{DynamicResource Brush.TextFaint}"
+               TextWrapping="Wrap"
+               Text="Кабель: звук, вошедший в Parrhesia InN, выходит из OutN — без участия приложения. Изменения применяются одним запросом администратора; перезагрузка требуется только если Windows её попросит. Имена по умолчанию нумеруются позицией — при удалении кабеля последующие сдвигаются." />
+  </Grid>
+</UserControl>
