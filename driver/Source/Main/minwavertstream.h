@@ -90,8 +90,16 @@ protected:
     BOOLEAN                     m_FeedClaimed = FALSE;
     BOOLEAN                     m_FeedFormatOk = FALSE;
 
-    // Feed СВОЕГО адаптера (lanes, М2): NULL — не capture-поток или фида нет.
+    // Feed СВОЕГО адаптера (lanes, М2): и для capture, и для render
+    // (кабельный цикл). NULL — нет адаптера/фида.
     CParrhesiaFeed* GetOwnFeed() const;
+
+    // Кабельный цикл (В1): render-данные In-пина → фид → Out-пин.
+    VOID PushRenderToFeed
+    (
+        _In_ ULONG ByteDisplacement
+    );
+
     ULONG                       m_ulDmaBufferSize;
     BYTE*                       m_pDmaBuffer;
     ULONG                       m_ulNotificationsPerBuffer;

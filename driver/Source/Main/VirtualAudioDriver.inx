@@ -22,6 +22,10 @@ virtualaudiodriver.sys=222
 %Lane1.DeviceDesc%=VIRTUALAUDIODRIVER_SA, ROOT\ParrhesiaLane1
 %Lane2.DeviceDesc%=VIRTUALAUDIODRIVER_SA, ROOT\ParrhesiaLane2
 %Lane3.DeviceDesc%=VIRTUALAUDIODRIVER_SA, ROOT\ParrhesiaLane3
+%Lane4.DeviceDesc%=VIRTUALAUDIODRIVER_SA, ROOT\ParrhesiaLane4
+%Lane5.DeviceDesc%=VIRTUALAUDIODRIVER_SA, ROOT\ParrhesiaLane5
+%Lane6.DeviceDesc%=VIRTUALAUDIODRIVER_SA, ROOT\ParrhesiaLane6
+%Lane7.DeviceDesc%=VIRTUALAUDIODRIVER_SA, ROOT\ParrhesiaLane7
 
 [DestinationDirs]
 VIRTUALAUDIODRIVER_SA.CopyList=13 ; 13=Package's DriverStore directory
@@ -200,9 +204,16 @@ VirtualAudioDriver.SvcDesc="Parrhesia Audio Driver"
 ;; лanes (М2): тот же драйвер, отдельные HW-ID → свой devnode + своя пара
 ;; endpoints + свой feed (\\.\ParrhesiaFeed_<suffix>). Имена короткие:
 ;; список endpoints выглядит как «Parrhesia In2 (Parrhesia L1)».
+;; В1 (кабельный менеджер): HW-ID расширены до Lane7 — предел фида
+;; PFEED_MAX_INSTANCES=8 (base + Lane1..7); свободные ланы приложение
+;; ставит/снимает живьём (SetupAPI, без перезагрузки).
 Lane1.DeviceDesc="Parrhesia L1"
 Lane2.DeviceDesc="Parrhesia L2"
 Lane3.DeviceDesc="Parrhesia L3"
+Lane4.DeviceDesc="Parrhesia L4"
+Lane5.DeviceDesc="Parrhesia L5"
+Lane6.DeviceDesc="Parrhesia L6"
+Lane7.DeviceDesc="Parrhesia L7"
 
 ;; friendly names
 VIRTUALAUDIODRIVER.WaveSpeaker.szPname="Parrhesia In"

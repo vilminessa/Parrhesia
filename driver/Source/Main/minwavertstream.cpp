@@ -16,7 +16,10 @@
 
 CParrhesiaFeed* CMiniportWaveRTStream::GetOwnFeed() const
 {
-    if (!m_bCapture || m_pMiniport == NULL)
+    // Фид принадлежит АДАПТЕРУ: и capture (чтение), и render (кабельный
+    // цикл In→Out) работают с одним кольцом. Раньше здесь стоял запрет
+    // для render — кабель молчал (LoopBytes=0, журнал В1).
+    if (m_pMiniport == NULL)
     {
         return NULL;
     }
@@ -1334,6 +1337,35 @@ NTSTATUS CMiniportWaveRTStream::SetState
                     }
                 }
             }
+            else
+            {
+                // Рендер-сторона кабеля (В1): допустимы биты16/24/32 при
+                // канонических48к/2к — конверт в PCM32 на лету (WriteCable).
+                m_FeedFormatOk =
+                    m_pWfExt != NULL &&
+                    m_pWfExt->Format.wFormatTag == WAVE_FORMAT_EXTENSIBLE &&
+                    m_pWfExt->Format.nSamplesPerSec == PFEED_RATE &&
+                    m_pWfExt->Format.nChannels == PFEED_CHANNELS &&
+                    (m_pWfExt->Format.wBitsPerSample == 16 ||
+                     m_pWfExt->Format.wBitsPerSample == 24 ||
+                     m_pWfExt->Format.wBitsPerSample == 32) &&
+                    InlineIsEqualGUID(m_pWfExt->SubFormat, KSDATAFORMAT_SUBTYPE_PCM);
+                if (m_FeedFormatOk)
+                {
+                    // Метка в сервис-ключ: кабель активен (диагностика без отладчика).
+                    Feed_DiagLog(L"CblOk");
+                }
+                else
+                {
+                    Feed_DiagLog(L"CblFmtBad");
+                    DPF(
+                        D_ERROR,
+                        ("[Feed] кабель: формат рендера не конвертируется (%u Гц/%u бит/кан %u) — Out молчит",
+                         m_pWfExt ? m_pWfExt->Format.nSamplesPerSec : 0,
+                         m_pWfExt ? m_pWfExt->Format.wBitsPerSample : 0,
+                         m_pWfExt ? m_pWfExt->Format.nChannels : 0));
+                }
+            }
 
             // Start DMA
             LARGE_INTEGER ullPerfCounterTemp;
@@ -1452,6 +1484,10 @@ VOID CMiniportWaveRTStream::UpdatePosition
             m_bLastBufferRendered = TRUE;
         }
 
+        // Кабель In→Out (В1): render-данные → фид своего адаптера.
+        // Отдельно от ReadBytes: тот включается только debug-записью в файл.
+        PushRenderToFeed(ByteDisplacement);
+
         if (!g_DoNotCreateDataFiles)
         {
             // Read from buffer and write to a file.
@@ -1520,6 +1556,47 @@ ByteDisplacement - # of bytes to process.
             RtlZeroMemory(m_pDmaBuffer + bufferOffset, runWrite);
         }
            	
+        bufferOffset = (bufferOffset + runWrite) % m_ulDmaBufferSize;
+        ByteDisplacement -= runWrite;
+    }
+}
+
+//=============================================================================
+#pragma code_seg()
+VOID CMiniportWaveRTStream::PushRenderToFeed
+(
+    _In_ ULONG ByteDisplacement
+)
+/*++
+
+Routine Description:
+
+    Кабельный цикл (В1): вычитанные render-данные In-пина уходят в кольцо
+    фида своего адаптера (Out-пин читает его в WriteBytes). При открытом
+    user mode-хэндле фида (приложение-обработчик держит путь) кабель уступает.
+
+Arguments:
+
+    ByteDisplacement - # of bytes to process.
+
+--*/
+{
+    if (ByteDisplacement == 0 || m_bCapture || !m_FeedFormatOk || m_pWfExt == NULL)
+    {
+        return;
+    }
+
+    CParrhesiaFeed* feed = GetOwnFeed();
+    if (feed == NULL || feed->HasWriters())
+    {
+        return;
+    }
+
+    ULONG bufferOffset = m_ullLinearPosition % m_ulDmaBufferSize;
+    while (ByteDisplacement > 0)
+    {
+        ULONG runWrite = min(ByteDisplacement, m_ulDmaBufferSize - bufferOffset);
+        feed->WriteCable(m_pDmaBuffer + bufferOffset, runWrite, m_pWfExt->Format.wBitsPerSample);
         bufferOffset = (bufferOffset + runWrite) % m_ulDmaBufferSize;
         ByteDisplacement -= runWrite;
     }

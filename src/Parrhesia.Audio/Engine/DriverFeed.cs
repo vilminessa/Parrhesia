@@ -15,6 +15,12 @@ public struct ParrhesiaFeedStats
     public ulong UnderrunBytes;
     public int ReaderActive;
     public int FormatMismatch;
+
+    /// <summary>Байты кабельного цикла (render In → фид; В1).</summary>
+    public ulong LoopBytes;
+
+    /// <summary>Открытых user mode-хэндлов фида (0 → кабель активен).</summary>
+    public int Writers;
 }
 
 /// <summary>

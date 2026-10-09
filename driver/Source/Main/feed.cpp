@@ -62,8 +62,10 @@ NTSTATUS CParrhesiaFeed::Init()
     m_Buffer = NULL;
     m_WritePos = m_ReadPos = 0;
     m_Written = m_Delivered = m_Dropped = m_Underrun = 0;
+    m_Loop = 0;
     m_Owner = NULL;
     m_FormatMismatch = 0;
+    m_Writers = 0;
 
     BYTE *buffer = (BYTE *)ExAllocatePool2(POOL_FLAG_NON_PAGED, PFEED_RING_BYTES, VIRTUALAUDIODRIVER_POOLTAG);
     if (buffer == NULL)
@@ -136,6 +138,122 @@ void CParrhesiaFeed::Write(const BYTE *src, ULONG len)
 
     m_WritePos += len;
     m_Written += len;
+
+    KeReleaseSpinLock(&m_Lock, oldIrql);
+}
+
+void CParrhesiaFeed::AddWriter()
+{
+    KIRQL oldIrql;
+    KeAcquireSpinLock(&m_Lock, &oldIrql);
+    m_Writers++;
+    KeReleaseSpinLock(&m_Lock, oldIrql);
+}
+
+void CParrhesiaFeed::RemoveWriter()
+{
+    KIRQL oldIrql;
+    KeAcquireSpinLock(&m_Lock, &oldIrql);
+    if (m_Writers > 0)
+    {
+        m_Writers--;
+    }
+    KeReleaseSpinLock(&m_Lock, oldIrql);
+}
+
+BOOLEAN CParrhesiaFeed::HasWriters()
+{
+    KIRQL oldIrql;
+    KeAcquireSpinLock(&m_Lock, &oldIrql);
+    BOOLEAN result = (m_Writers > 0) ? TRUE : FALSE;
+    KeReleaseSpinLock(&m_Lock, oldIrql);
+    return result;
+}
+
+// Кабель In→Out: рендер-сэмплы в формате потока → PCM32 в кольцо.
+// src/len — источник (битность bitsPerSample, каналы уже проверены
+// вызывающим: PFEED_RATE/PFEED_CHANNELS). Конверт побайтовый в кольцо
+// (без промежуточного буфера), знаковое расширение:16→<<16,24→<<8,32→as-is.
+void CParrhesiaFeed::WriteCable(const BYTE *src, ULONG len, ULONG bitsPerSample)
+{
+    if (src == NULL || len == 0 ||
+        (bitsPerSample != 16 && bitsPerSample != 24 && bitsPerSample != 32))
+    {
+        return;
+    }
+
+    ULONG srcFrameBytes = PFEED_CHANNELS * (bitsPerSample / 8);
+    if ((len % srcFrameBytes) != 0)
+    {
+        return;
+    }
+
+    ULONG samples = len / srcFrameBytes;
+    ULONG outBytes = samples * PFEED_FRAME_BYTES;
+    if (outBytes == 0)
+    {
+        return;
+    }
+
+    KIRQL oldIrql;
+    KeAcquireSpinLock(&m_Lock, &oldIrql);
+
+    if (m_Buffer == NULL)
+    {
+        KeReleaseSpinLock(&m_Lock, oldIrql);
+        return;
+    }
+
+    ULONGLONG avail = m_WritePos - m_ReadPos;
+    if (outBytes > (ULONGLONG)(PFEED_RING_BYTES - avail))
+    {
+        // Кольцо заполнено (драйвер-источник быстрее захвата) — дроп.
+        m_Dropped += outBytes;
+        KeReleaseSpinLock(&m_Lock, oldIrql);
+        return;
+    }
+
+    ULONG writeOffset = (ULONG)(m_WritePos % PFEED_RING_BYTES);
+    const BYTE *s = src;
+
+    for (ULONG i = 0; i < samples; i++, s += srcFrameBytes)
+    {
+        LONG sample;
+        if (bitsPerSample == 16)
+        {
+            sample = ((const SHORT *)s)[0];
+            sample <<= 16;
+        }
+        else if (bitsPerSample == 24)
+        {
+            sample = (LONG)(s[0] | ((ULONG)s[1] << 8) | ((ULONG)s[2] << 16));
+            if (sample & 0x00800000)
+            {
+                sample |= (LONG)0xFF000000;
+            }
+            sample <<= 8;
+        }
+        else //32
+        {
+            sample = ((const LONG *)s)[0];
+        }
+
+        // Побайтовая запись в кольцо с оборотом (кадр8 байт).
+        ULONG pos = writeOffset;
+        for (ULONG b = 0; b < PFEED_FRAME_BYTES; b++)
+        {
+            m_Buffer[pos] = ((const BYTE *)&sample)[b];
+            pos++;
+            if (pos == PFEED_RING_BYTES)
+            {
+                pos = 0;
+            }
+        }
+        writeOffset = pos;
+    }
+
+    m_WritePos += outBytes;
+    m_Loop += outBytes;
 
     KeReleaseSpinLock(&m_Lock, oldIrql);
 }
@@ -252,6 +370,8 @@ void CParrhesiaFeed::GetStats(PPFEED_STATS stats)
     stats->UnderrunBytes = m_Underrun;
     stats->ReaderActive = (m_Owner != NULL) ? 1 : 0;
     stats->FormatMismatch = m_FormatMismatch;
+    stats->LoopBytes = m_Loop;
+    stats->Writers = m_Writers;
     KeReleaseSpinLock(&m_Lock, oldIrql);
 }
 
@@ -548,8 +668,21 @@ static NTSTATUS FeedCreateClose(_In_ PDEVICE_OBJECT DeviceObject, _In_ PIRP Irp)
 {
     PAGED_CODE();
 
-    if (FeedIndexOfDevice(DeviceObject) >= 0)
+    const INT feedIndex = FeedIndexOfDevice(DeviceObject);
+    if (feedIndex >= 0)
     {
+        // Кабельный цикл (В1): факт user mode-хэндла на фиде означает, что
+        // путь контролирует приложение (виртуальный sink) — кабель уступает.
+        const UCHAR major = IoGetCurrentIrpStackLocation(Irp)->MajorFunction;
+        if (major == IRP_MJ_CREATE)
+        {
+            g_Feeds[feedIndex].Feed.AddWriter();
+        }
+        else if (major == IRP_MJ_CLOSE)
+        {
+            g_Feeds[feedIndex].Feed.RemoveWriter();
+        }
+
         Irp->IoStatus.Status = STATUS_SUCCESS;
         Irp->IoStatus.Information = 0;
         IoCompleteRequest(Irp, IO_NO_INCREMENT);

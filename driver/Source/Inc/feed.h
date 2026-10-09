@@ -46,12 +46,14 @@ Abstract:
 // Статистика фида. Поля LONG — volatile-счётчики выравнивания под C#-маппинг.
 typedef struct _PFEED_STATS
 {
-    ULONGLONG WrittenBytes;    // принято от user mode
+    ULONGLONG WrittenBytes;    // принято от user mode (IOCTL_PFEED_WRITE)
     ULONGLONG DeliveredBytes;  // отдано потоку захвата
     ULONGLONG DroppedBytes;    // отброшено: кольцо заполнено
     ULONGLONG UnderrunBytes;   // отдано тишины: данных не хватило
     LONG      ReaderActive;    // 1 — поток захвата держит фид
     LONG      FormatMismatch;  // 1 — формат потока не совпал с каноническим
+    ULONGLONG LoopBytes;       // принято кабельным циклом (render → фид)
+    LONG      Writers;         // открыто user mode-хэндлов фида (0 → кабель активен)
 } PFEED_STATS, *PPFEED_STATS;
 
 class CParrhesiaFeed
@@ -66,6 +68,17 @@ public:
 
     // Приём блока от user mode (PASSIVE_LEVEL). Длина должна быть кратна кадру.
     void Write(_In_reads_bytes_(len) const BYTE *src, _In_ ULONG len);
+
+    // Кабельный цикл (В1): блок render-пина In → кольцо фида → Out. src/len —
+    // в формате рендер-потока (bitsPerSample:16/24/32, каналы и частота уже
+    // проверены вызывающим против PFEED_*). Конверт в PCM32 на лету, ≤DISPATCH.
+    void WriteCable(_In_reads_bytes_(len) const BYTE *src, _In_ ULONG len, _In_ ULONG bitsPerSample);
+
+    // Пользовательские писатели: CREATE/CLOSE хэндла \\.\ParrhesiaFeed_*.
+    // Пока Writers > 0 приложение-обработчик держит путь — кабель уступает.
+    void AddWriter();
+    void RemoveWriter();
+    BOOLEAN HasWriters();
 
     // Выдача блока потоку захвата (≤ DISPATCH_LEVEL). При нехватке — тишина.
     void Read(_Out_writes_bytes_(len) BYTE *dst, _In_ ULONG len);
@@ -87,8 +100,10 @@ private:
     ULONGLONG           m_Delivered;
     ULONGLONG           m_Dropped;
     ULONGLONG           m_Underrun;
+    ULONGLONG           m_Loop;        // байты кабельного цикла (render → фид)
     const void         *m_Owner;
     LONG                m_FormatMismatch;
+    LONG                m_Writers;     // открытых user mode-хэндлов
 };
 
 // ===== Инстансы (per-adapter feed; см. М2-lanes) =====
