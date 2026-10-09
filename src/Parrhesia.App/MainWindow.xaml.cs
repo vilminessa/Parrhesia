@@ -1,5 +1,6 @@
 ﻿using System.Reflection;
 using System.Windows;
+using System.Windows.Controls;
 
 namespace Parrhesia.App;
 
@@ -8,8 +9,26 @@ public partial class MainWindow
     public MainWindow()
     {
         InitializeComponent();
+
         VersionText.Text = DisplayVersion();
+        UpdateMoonBackdrop();
+        Themes.ThemeManager.ThemeChanged += UpdateMoonBackdrop;
         SelectStartupTab();
+    }
+
+    /// <summary>Слой-луна виден только в теме Moon (включается/гасится мгновенно).</summary>
+    private void UpdateMoonBackdrop()
+    {
+        if (MoonBackdrop is null)
+        {
+            return;
+        }
+
+        MoonBackdrop.Visibility = Themes.ThemeManager.CurrentId.Equals(
+            "moon",
+            StringComparison.OrdinalIgnoreCase)
+            ? Visibility.Visible
+            : Visibility.Collapsed;
     }
 
     /// <summary>

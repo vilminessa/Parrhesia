@@ -21,6 +21,11 @@ public partial class App : Application
         InitializeLogging(console);
 
         AppServices.Initialize();
+
+        // Тема — сразу после ресурсов приложения (слой ThemeManager ложится
+        // поверх Colors.xaml, DynamicResource перекрасивается мгновенно).
+        Themes.ThemeManager.Apply(AppServices.Settings.ThemeId);
+
         AppServices.StartEngine();
         Trace.WriteLine($"[Parrhesia] запущен (профиль: {AppServices.Profiles.Active?.Name ?? "?"})");
         base.OnStartup(e);

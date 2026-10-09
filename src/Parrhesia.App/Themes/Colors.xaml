@@ -23,6 +23,11 @@
   <SolidColorBrush x:Key="Brush.Danger" Color="#FFFF5A52" />
   <SolidColorBrush x:Key="Brush.Success" Color="#FF3DDC84" />
 
+  <!-- Радиусы скругления (темы переопределяют слоем ThemeManager) -->
+  <CornerRadius x:Key="Radius.S">4</CornerRadius>
+  <CornerRadius x:Key="Radius.M">6</CornerRadius>
+  <CornerRadius x:Key="Radius.L">10</CornerRadius>
+
   <!-- Цвета LED-метров живут в MeterPalette (Controls/MeterPalette.cs) — код рисует их напрямую. -->
 
 </ResourceDictionary>

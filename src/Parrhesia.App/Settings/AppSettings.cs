@@ -29,6 +29,9 @@ public sealed class AppSettings
     /// </summary>
     public List<CableOp> CablePendingOps { get; set; } = [];
 
+    /// <summary>Активная тема интерфейса (id папки в themes\; см. ThemeManager).</summary>
+    public string ThemeId { get; set; } = "parrhesia";
+
     private static string FilePath =>
         Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),

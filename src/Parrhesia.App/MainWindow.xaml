@@ -28,6 +28,46 @@
       <RowDefinition Height="*" />
     </Grid.RowDefinitions>
 
+    <!-- Фон темы Moon: статичная детализированная луна (круг-маска по
+         фото CC0) с мягким свечением; включается ThemeManager по id темы.
+         Первый child = рисуется под всем содержимым; IsHitTestVisible=false. -->
+    <Border x:Name="MoonBackdrop"
+            Grid.Row="0"
+            Grid.RowSpan="3"
+            Visibility="Collapsed"
+            IsHitTestVisible="False"
+            ClipToBounds="True">
+      <Grid Width="460"
+            Height="460"
+            HorizontalAlignment="Right"
+            VerticalAlignment="Top"
+            Margin="0,64,110,0">
+        <!-- Мягкое лунное свечение -->
+        <Ellipse Width="460" Height="460">
+          <Ellipse.Fill>
+            <RadialGradientBrush Center="0.5,0.5" RadiusX="0.5" RadiusY="0.5">
+              <GradientStop Color="#33465C" Offset="0" />
+              <GradientStop Color="#1E242E" Offset="0.55" />
+              <GradientStop Color="#14161A00" Offset="1" />
+            </RadialGradientBrush>
+          </Ellipse.Fill>
+        </Ellipse>
+
+        <!-- Луна: фото в круглой маске -->
+        <Ellipse Width="350" Height="350" HorizontalAlignment="Center" VerticalAlignment="Center">
+          <Ellipse.Effect>
+            <DropShadowEffect Color="#C9D6E8"
+                              BlurRadius="70"
+                              ShadowDepth="0"
+                              Opacity="0.35" />
+          </Ellipse.Effect>
+          <Ellipse.Fill>
+            <ImageBrush ImageSource="Assets/moon.jpg" Stretch="UniformToFill" />
+          </Ellipse.Fill>
+        </Ellipse>
+      </Grid>
+    </Border>
+
     <!-- Заголовок окна -->
     <Grid Grid.Row="0" Background="{DynamicResource Brush.Panel}">
       <Grid.ColumnDefinitions>

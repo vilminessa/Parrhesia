@@ -13,7 +13,7 @@
             Background="{DynamicResource Brush.Panel}"
             BorderBrush="{DynamicResource Brush.Stroke}"
             BorderThickness="1"
-            CornerRadius="8"
+            CornerRadius="{DynamicResource Radius.L}"
             Padding="16,10"
             Margin="0,0,0,14">
       <Grid>
@@ -26,7 +26,8 @@
           <TextBlock Text="FPS"
                      Foreground="{DynamicResource Brush.TextFaint}"
                      FontSize="12"
-                     VerticalAlignment="Center" />
+                     VerticalAlignment="Center"
+                     ToolTip="Кадров интерфейса в секунду (норма ≈60)" />
           <TextBlock x:Name="FpsText"
                      Text="—"
                      Foreground="{DynamicResource Brush.Cyan}"
@@ -38,7 +39,8 @@
           <TextBlock Text="Кадр"
                      Foreground="{DynamicResource Brush.TextFaint}"
                      FontSize="12"
-                     VerticalAlignment="Center" />
+                     VerticalAlignment="Center"
+                     ToolTip="Длительность кадра отрисовки, мс (норма ≈16.7)" />
           <TextBlock x:Name="FrameText"
                      Text="—"
                      Foreground="{DynamicResource Brush.Cyan}"
@@ -50,7 +52,8 @@
           <TextBlock Text="CPU"
                      Foreground="{DynamicResource Brush.TextFaint}"
                      FontSize="12"
-                     VerticalAlignment="Center" />
+                     VerticalAlignment="Center"
+                     ToolTip="Загрузка процессора приложением на кадр, %" />
           <TextBlock x:Name="CpuText"
                      Text="—"
                      Foreground="{DynamicResource Brush.Cyan}"
@@ -62,7 +65,8 @@
           <TextBlock Text="Метров"
                      Foreground="{DynamicResource Brush.TextFaint}"
                      FontSize="12"
-                     VerticalAlignment="Center" />
+                     VerticalAlignment="Center"
+                     ToolTip="Число LED-метров на странице (синтетическая нагрузка)" />
           <TextBlock x:Name="MetersText"
                      Text="—"
                      Foreground="{DynamicResource Brush.Text}"
@@ -75,7 +79,8 @@
         <Button Grid.Column="1"
                 x:Name="StressButton"
                 Click="OnStressClick"
-                Content="Стресс: выкл" />
+                Content="Стресс: выкл"
+                ToolTip="Синтетическая нагрузка на отрисовку: выключите для честного замера FPS" />
       </Grid>
     </Border>
 
@@ -84,7 +89,7 @@
             Background="{DynamicResource Brush.Panel}"
             BorderBrush="{DynamicResource Brush.Stroke}"
             BorderThickness="1"
-            CornerRadius="8"
+            CornerRadius="{DynamicResource Radius.L}"
             Padding="16,10"
             Margin="0,0,0,14">
       <StackPanel>
@@ -107,7 +112,8 @@
                      FontSize="13"
                      FontWeight="SemiBold"
                      Margin="14,0,0,0"
-                     VerticalAlignment="Center" />
+                     VerticalAlignment="Center"
+                     ToolTip="Расчётная сумма задержек всех этапов тракта (мс)" />
           <TextBlock x:Name="LatencyIssuesText"
                      Grid.Column="2"
                      Text=""
@@ -157,7 +163,7 @@
             Background="{DynamicResource Brush.Elevated}"
             BorderBrush="{DynamicResource Brush.Stroke}"
             BorderThickness="1"
-            CornerRadius="8">
+            CornerRadius="{DynamicResource Radius.L}">
       <UniformGrid x:Name="Meters" Columns="10" Margin="12" />
     </Border>
   </Grid>

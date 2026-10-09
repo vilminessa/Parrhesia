@@ -9,7 +9,7 @@
       <Setter Property="Background" Value="{DynamicResource Brush.Panel}" />
       <Setter Property="BorderBrush" Value="{DynamicResource Brush.Stroke}" />
       <Setter Property="BorderThickness" Value="1" />
-      <Setter Property="CornerRadius" Value="5" />
+      <Setter Property="CornerRadius" Value="{DynamicResource Radius.M}" />
       <Setter Property="Padding" Value="12,8" />
       <Setter Property="Margin" Value="0,0,0,6" />
       <Style.Triggers>
@@ -37,7 +37,7 @@
             Background="#28FFB020"
             BorderBrush="{DynamicResource Brush.Accent}"
             BorderThickness="1"
-            CornerRadius="8"
+            CornerRadius="{DynamicResource Radius.L}"
             Padding="14,10"
             Margin="0,0,0,12">
       <Grid>
@@ -56,12 +56,14 @@
 
         <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
           <Button Content="Применить"
+                  Style="{StaticResource Button.Primary}"
                   Click="OnApplyClick"
-                  FontWeight="SemiBold"
-                  Margin="10,0,0,0" />
+                  Margin="10,0,0,0"
+                  ToolTip="Применить очередь изменений — один запрос администратора" />
           <Button Content="Отменить изменения"
                   Click="OnDiscardClick"
-                  Margin="8,0,0,0" />
+                  Margin="8,0,0,0"
+                  ToolTip="Сбросить очередь: ничего не применяется" />
         </StackPanel>
       </Grid>
     </Border>
@@ -81,11 +83,14 @@
                  VerticalAlignment="Center" />
 
       <StackPanel Grid.Column="1" Orientation="Horizontal">
-        <Button Content="Обновить" Click="OnRefreshClick" />
+        <Button Content="Обновить"
+                Click="OnRefreshClick"
+                ToolTip="Перечитать кабели и привязки из системы" />
         <Button Content="Добавить кабель"
                 Click="OnAddClick"
                 FontWeight="SemiBold"
-                Margin="8,0,0,0" />
+                Margin="8,0,0,0"
+                ToolTip="Новый кабель In/Out — появится оранжевым, применяется кнопкой «Применить»" />
       </StackPanel>
     </Grid>
 
@@ -94,7 +99,7 @@
             Background="{DynamicResource Brush.Elevated}"
             BorderBrush="{DynamicResource Brush.Stroke}"
             BorderThickness="1"
-            CornerRadius="8"
+            CornerRadius="{DynamicResource Radius.L}"
             Padding="14">
       <ScrollViewer VerticalScrollBarVisibility="Auto">
         <ItemsControl x:Name="CableList">
@@ -115,9 +120,10 @@
                   <Border Background="{DynamicResource Brush.Panel}"
                           BorderBrush="{DynamicResource Brush.StrokeStrong}"
                           BorderThickness="1"
-                          CornerRadius="4"
+                          CornerRadius="{DynamicResource Radius.S}"
                           Padding="6,2"
-                          VerticalAlignment="Center">
+                          VerticalAlignment="Center"
+                          ToolTip="Номер кабеля (lane): вход In слева → выход Out справа">
                     <TextBlock Text="{Binding Lane, StringFormat=L{0}}"
                                FontSize="11"
                                FontWeight="SemiBold"
@@ -173,7 +179,7 @@
                   <!-- Бейдж статуса -->
                   <Border Grid.Column="4"
                           Background="{DynamicResource Brush.Accent}"
-                          CornerRadius="4"
+                          CornerRadius="{DynamicResource Radius.S}"
                           Padding="7,2"
                           Margin="10,0,0,0"
                           VerticalAlignment="Center"
@@ -192,6 +198,7 @@
                           Margin="10,0,0,0"
                           VerticalAlignment="Center"
                           Tag="{Binding}"
+                          ToolTip="Удалить кабель (после «Применить» — запрос администратора)"
                           Click="OnDeleteClick" />
                 </Grid>
               </Border>

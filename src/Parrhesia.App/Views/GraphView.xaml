@@ -28,7 +28,7 @@
             Background="{DynamicResource Brush.Panel}"
             BorderBrush="{DynamicResource Brush.Stroke}"
             BorderThickness="1"
-            CornerRadius="8"
+            CornerRadius="{DynamicResource Radius.L}"
             Padding="10,7">
       <StackPanel Orientation="Horizontal">
         <TextBlock Text="Вид"
@@ -57,7 +57,7 @@
             Background="{DynamicResource Brush.Panel}"
             BorderBrush="{DynamicResource Brush.Stroke}"
             BorderThickness="1"
-            CornerRadius="8"
+            CornerRadius="{DynamicResource Radius.L}"
             Padding="14,14,14,10">
       <StackPanel>
         <TextBlock Text="Инструментарий"
@@ -135,7 +135,7 @@
               Background="{DynamicResource Brush.Panel}"
               BorderBrush="{DynamicResource Brush.Stroke}"
               BorderThickness="1"
-              CornerRadius="6"
+              CornerRadius="{DynamicResource Radius.M}"
               Padding="11,7">
         <TextBlock Text="Колесо — масштаб · Пробел/СКМ — панорама · Тяни от порта L/R — канал · ПКМ — меню · Del — удалить"
                    FontSize="11"
@@ -152,7 +152,7 @@
             Background="{DynamicResource Brush.Panel}"
             BorderBrush="{DynamicResource Brush.Stroke}"
             BorderThickness="1"
-            CornerRadius="8"
+            CornerRadius="{DynamicResource Radius.L}"
             Padding="16,14"
             Visibility="Collapsed">
       <ScrollViewer VerticalScrollBarVisibility="Auto">
@@ -197,7 +197,8 @@
                        Margin="0,12,0,4" />
             <ComboBox x:Name="NodeDeviceBox"
                       DisplayMemberPath="Name"
-                      SelectionChanged="OnNodeDeviceChanged" />
+                      SelectionChanged="OnNodeDeviceChanged"
+                      ToolTip="Устройство этого узла: источник захвата или вывод" />
 
             <TextBlock Text="Гейн"
                        FontSize="11"
@@ -212,7 +213,8 @@
                       Minimum="-60"
                       Maximum="6"
                       ValueChanged="OnNodeGainChanged"
-                      VerticalAlignment="Center" />
+                      VerticalAlignment="Center"
+                      ToolTip="Гейн узла, дБ (-60…+6)" />
               <TextBlock x:Name="NodeGainText"
                          Grid.Column="1"
                          Width="58"
@@ -317,7 +319,8 @@
                       Minimum="-60"
                       Maximum="6"
                       ValueChanged="OnRouteGainChanged"
-                      VerticalAlignment="Center" />
+                      VerticalAlignment="Center"
+                      ToolTip="Гейн маршрута (кабеля), дБ (-60…+6)" />
               <TextBlock x:Name="RouteGainText"
                          Grid.Column="1"
                          Width="58"

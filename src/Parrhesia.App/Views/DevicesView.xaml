@@ -19,7 +19,7 @@
             Background="{DynamicResource Brush.Panel}"
             BorderBrush="{DynamicResource Brush.Stroke}"
             BorderThickness="1"
-            CornerRadius="8"
+            CornerRadius="{DynamicResource Radius.L}"
             Padding="16,10">
       <Grid>
         <Grid.ColumnDefinitions>
@@ -36,7 +36,8 @@
 
         <Button Grid.Column="1"
                 Content="Перезапустить"
-                Click="OnRestartClick" />
+                Click="OnRestartClick"
+                ToolTip="Остановить и заново открыть звуковой тракт" />
       </Grid>
     </Border>
 
@@ -52,7 +53,7 @@
               Background="{DynamicResource Brush.Elevated}"
               BorderBrush="{DynamicResource Brush.Stroke}"
               BorderThickness="1"
-              CornerRadius="8"
+              CornerRadius="{DynamicResource Radius.L}"
               Padding="14">
         <DockPanel>
           <TextBlock DockPanel.Dock="Top"
@@ -68,7 +69,7 @@
                   <Border Background="{DynamicResource Brush.Panel}"
                           BorderBrush="{DynamicResource Brush.Stroke}"
                           BorderThickness="1"
-                          CornerRadius="5"
+                          CornerRadius="{DynamicResource Radius.M}"
                           Padding="10,7"
                           Margin="0,0,0,6">
                     <Grid>
@@ -78,7 +79,7 @@
                                  TextTrimming="CharacterEllipsis" />
                       <Border HorizontalAlignment="Right"
                               Background="{DynamicResource Brush.Accent}"
-                              CornerRadius="4"
+                              CornerRadius="{DynamicResource Radius.S}"
                               Padding="6,1"
                               Visibility="{Binding IsDefault, Converter={StaticResource BoolToVis}}">
                         <TextBlock Text="по умолчанию"
@@ -99,7 +100,7 @@
               Background="{DynamicResource Brush.Elevated}"
               BorderBrush="{DynamicResource Brush.Stroke}"
               BorderThickness="1"
-              CornerRadius="8"
+              CornerRadius="{DynamicResource Radius.L}"
               Padding="14">
         <DockPanel>
           <TextBlock DockPanel.Dock="Top"
@@ -115,7 +116,7 @@
                   <Border Background="{DynamicResource Brush.Panel}"
                           BorderBrush="{DynamicResource Brush.Stroke}"
                           BorderThickness="1"
-                          CornerRadius="5"
+                          CornerRadius="{DynamicResource Radius.M}"
                           Padding="10,7"
                           Margin="0,0,0,6">
                     <Grid>
@@ -125,7 +126,7 @@
                                  TextTrimming="CharacterEllipsis" />
                       <Border HorizontalAlignment="Right"
                               Background="{DynamicResource Brush.Accent}"
-                              CornerRadius="4"
+                              CornerRadius="{DynamicResource Radius.S}"
                               Padding="6,1"
                               Visibility="{Binding IsDefault, Converter={StaticResource BoolToVis}}">
                         <TextBlock Text="по умолчанию"
@@ -149,7 +150,7 @@
             Background="{DynamicResource Brush.Elevated}"
             BorderBrush="{DynamicResource Brush.Stroke}"
             BorderThickness="1"
-            CornerRadius="8"
+            CornerRadius="{DynamicResource Radius.L}"
             Padding="14,10">
       <TextBlock x:Name="LogText"
                  Text="Лог пуст"

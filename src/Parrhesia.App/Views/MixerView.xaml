@@ -15,7 +15,7 @@
             Background="{DynamicResource Brush.Panel}"
             BorderBrush="{DynamicResource Brush.Stroke}"
             BorderThickness="1"
-            CornerRadius="8"
+            CornerRadius="{DynamicResource Radius.L}"
             Padding="16,10"
             Margin="0,0,0,14">
       <Grid>
@@ -64,7 +64,7 @@
             Background="{DynamicResource Brush.Elevated}"
             BorderBrush="{DynamicResource Brush.Stroke}"
             BorderThickness="1"
-            CornerRadius="8">
+            CornerRadius="{DynamicResource Radius.L}">
       <ScrollViewer HorizontalScrollBarVisibility="Auto"
                     VerticalScrollBarVisibility="Disabled">
         <StackPanel x:Name="StripsHost" Orientation="Horizontal" Margin="14" />

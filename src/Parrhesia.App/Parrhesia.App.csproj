@@ -17,4 +17,9 @@
     <InternalsVisibleTo Include="Parrhesia.App.Tests" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Фон темы Moon: полная луна (FullMoon2010, Gregory H. Revera, CC0). -->
+    <Resource Include="Assets\moon.jpg" />
+  </ItemGroup>
+
 </Project>
