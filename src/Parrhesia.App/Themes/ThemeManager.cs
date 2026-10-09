@@ -20,10 +20,15 @@ public static partial class ThemeManager
         string Id,
         string Label,
         IReadOnlyDictionary<string, string> Colors,
-        IReadOnlyDictionary<string, double> Radii);
+        IReadOnlyDictionary<string, double> Radii,
+        bool Hidden = false);
 
     // Встроенные темы: основная — текущая палитра Parrhesia; Moon — серые
     // тона с луной на фоне (слой-задник в MainWindow включается по Id).
+    /// <summary>
+    /// Встроенные темы. «moon» помечена hidden (владелец: «отменим пока») —
+    /// не показывается в списке; снять hidden в theme.json, чтобы вернуть.
+    /// </summary>
     private static readonly Builtin[] Builtins =
     [
         new(
@@ -53,6 +58,35 @@ public static partial class ThemeManager
                 ["RadiusL"] = 10,
             }),
         new(
+            "liquid-glass",
+            "Liquid Glass",
+            new Dictionary<string, string>
+            {
+                // Палитра Synfronia (liquid_glass) + стеклянная полупрозрачность:
+                // панели/кнопки полупрозрачны — сквозь них видна фон-сцена,
+                // рамки — светлые «кромки стекла».
+                ["Deep"] = "#FF05080F",
+                ["Panel"] = "#801F345A",
+                ["Elevated"] = "#8016223D",
+                ["Hover"] = "#A62F4A7A",
+                ["Pressed"] = "#CC3A5A96",
+                ["Stroke"] = "#33FFFFFF",
+                ["StrokeStrong"] = "#4DFFFFFF",
+                ["Text"] = "#FFE9F1FF",
+                ["TextDim"] = "#8CE9F1FF",
+                ["TextFaint"] = "#59E9F1FF",
+                ["Accent"] = "#FF69C1FF",
+                ["Cyan"] = "#FF8AD1FF",
+                ["Danger"] = "#FFFF6B7A",
+                ["Success"] = "#FF4FD08A",
+            },
+            new Dictionary<string, double>
+            {
+                ["RadiusS"] = 12,
+                ["RadiusM"] = 18,
+                ["RadiusL"] = 26,
+            }),
+        new(
             "moon",
             "Moon",
             new Dictionary<string, string>
@@ -80,7 +114,8 @@ public static partial class ThemeManager
                 ["RadiusS"] = 10,
                 ["RadiusM"] = 14,
                 ["RadiusL"] = 20,
-            }),
+            },
+            Hidden: true),
     ];
 
     /// <summary>Тема-слой (после Colors.xaml в MergedDictionaries).</summary>
@@ -93,6 +128,18 @@ public static partial class ThemeManager
 
     /// <summary>Поднимается после смены темы (UI перечитывает состояние).</summary>
     public static event Action? ThemeChanged;
+
+    /// <summary>Темы с фоновой сценой: id → имя слоя-задника в MainWindow.</summary>
+    public static readonly IReadOnlyDictionary<string, string> BackdropScenes =
+        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["moon"] = "MoonScene",
+            ["liquid-glass"] = "GlassScene",
+        };
+
+    /// <summary>Слой-сцена для текущей темы (null — без фона).</summary>
+    public static string? CurrentBackdrop =>
+        BackdropScenes.TryGetValue(CurrentId, out var scene) ? scene : null;
 
     /// <summary>Папка тем: %APPDATA%\Parrhesia\themes\{id}\theme.json.
     /// Override — для тестов (изоляция от реального AppData).</summary>
@@ -163,7 +210,7 @@ public static partial class ThemeManager
             }
             catch (Exception ex)
             {
-                raw[id] = new RawTheme(id, id, null, [], [], [], $"не читается: {ex.Message}", null, null);
+                raw[id] = new RawTheme(id, id, null, [], [], [], $"не читается: {ex.Message}", null, false);
                 if (!order.Contains(id, StringComparer.OrdinalIgnoreCase))
                 {
                     order.Add(id);
@@ -277,7 +324,7 @@ public static partial class ThemeManager
         List<string> Warnings,
         string? Warning,
         string? Author,
-        string? Unused);
+        bool Hidden);
 
     private static RawTheme RawFromBuiltin(Builtin builtin) => new(
         builtin.Id,
@@ -288,7 +335,7 @@ public static partial class ThemeManager
         [],
         null,
         null,
-        null);
+        builtin.Hidden);
 
     private static RawTheme ParseRaw(string id, JsonElement data)
     {
@@ -320,6 +367,22 @@ public static partial class ThemeManager
             author = ThemeValidation.CleanText(ap.GetString(), 60);
         }
 
+        var hidden = false;
+        if (data.TryGetProperty("hidden", out var hp))
+        {
+            hidden = hp.ValueKind switch
+            {
+                JsonValueKind.True => true,
+                JsonValueKind.False => false,
+                JsonValueKind.String => hp.GetString() is { } s &&
+                    (s.Equals("1", StringComparison.OrdinalIgnoreCase) ||
+                     s.Equals("true", StringComparison.OrdinalIgnoreCase) ||
+                     s.Equals("yes", StringComparison.OrdinalIgnoreCase) ||
+                     s.Equals("on", StringComparison.OrdinalIgnoreCase)),
+                _ => false,
+            };
+        }
+
         return new RawTheme(
             id,
             string.IsNullOrWhiteSpace(label) ? id : label,
@@ -329,7 +392,7 @@ public static partial class ThemeManager
             warnings,
             warnings.Count > 0 ? string.Join("; ", warnings) : null,
             author,
-            null);
+            hidden);
     }
 
     /// <summary>Цепочка extends base-first (без цycles) → итоговая спецификация.</summary>
@@ -379,15 +442,18 @@ public static partial class ThemeManager
             author ??= item.Author;
         }
 
+        var hasSelf = raw.TryGetValue(id, out var self);
+
         return new ThemeSpec
         {
             Id = id,
             Label = label,
             Colors = colors,
             Radii = radii,
-            Extends = raw.TryGetValue(id, out var self) ? self.Extends : null,
+            Extends = hasSelf ? self!.Extends : null,
             Author = author,
             Warnings = warnings,
+            Hidden = self?.Hidden == true,
         };
     }
 
@@ -407,6 +473,11 @@ public static partial class ThemeManager
             {
                 ["label"] = builtin.Label,
             };
+            if (builtin.Hidden)
+            {
+                data["hidden"] = true;
+            }
+
             foreach (var (key, value) in builtin.Colors)
             {
                 data[key] = value;

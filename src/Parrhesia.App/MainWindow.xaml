@@ -28,43 +28,115 @@
       <RowDefinition Height="*" />
     </Grid.RowDefinitions>
 
-    <!-- Фон темы Moon: статичная детализированная луна (круг-маска по
-         фото CC0) с мягким свечением; включается ThemeManager по id темы.
-         Первый child = рисуется под всем содержимым; IsHitTestVisible=false. -->
-    <Border x:Name="MoonBackdrop"
+    <!-- Фон-сцены тем: луна (Moon, скрыта) и стекло (Liquid Glass).
+         Статичные, IsHitTestVisible=false; слой включает ThemeManager
+         по CurrentBackdrop (первый child = под всем содержимым). -->
+    <Border x:Name="ThemeBackdrop"
             Grid.Row="0"
             Grid.RowSpan="3"
             Visibility="Collapsed"
             IsHitTestVisible="False"
             ClipToBounds="True">
-      <Grid Width="460"
-            Height="460"
-            HorizontalAlignment="Right"
-            VerticalAlignment="Top"
-            Margin="0,64,110,0">
-        <!-- Мягкое лунное свечение (тёмная ночь темы Moon) -->
-        <Ellipse Width="460" Height="460">
-          <Ellipse.Fill>
-            <RadialGradientBrush Center="0.5,0.5" RadiusX="0.5" RadiusY="0.5">
-              <GradientStop Color="#2A3140" Offset="0" />
-              <GradientStop Color="#04030A88" Offset="0.55" />
-              <GradientStop Color="#04030A00" Offset="1" />
-            </RadialGradientBrush>
-          </Ellipse.Fill>
-        </Ellipse>
+      <Grid>
+        <!-- Moon: статичная детализированная луна (фото CC0) с мягким свечением -->
+        <Grid x:Name="MoonScene"
+              Width="460"
+              Height="460"
+              HorizontalAlignment="Right"
+              VerticalAlignment="Top"
+              Margin="0,64,110,0"
+              Visibility="Collapsed">
+          <!-- Мягкое лунное свечение (тёмная ночь темы Moon) -->
+          <Ellipse Width="460" Height="460">
+            <Ellipse.Fill>
+              <RadialGradientBrush Center="0.5,0.5" RadiusX="0.5" RadiusY="0.5">
+                <GradientStop Color="#2A3140" Offset="0" />
+                <GradientStop Color="#04030A88" Offset="0.55" />
+                <GradientStop Color="#04030A00" Offset="1" />
+              </RadialGradientBrush>
+            </Ellipse.Fill>
+          </Ellipse>
 
-        <!-- Луна: фото в круглой маске (космос луны сливается с ночным фоном) -->
-        <Ellipse Width="350" Height="350" HorizontalAlignment="Center" VerticalAlignment="Center">
-          <Ellipse.Effect>
-            <DropShadowEffect Color="#9AA4B4"
-                              BlurRadius="70"
-                              ShadowDepth="0"
-                              Opacity="0.45" />
-          </Ellipse.Effect>
-          <Ellipse.Fill>
-            <ImageBrush ImageSource="Assets/moon.jpg" Stretch="UniformToFill" />
-          </Ellipse.Fill>
-        </Ellipse>
+          <!-- Луна: фото в круглой маске (космос луны сливается с ночным фоном) -->
+          <Ellipse Width="350" Height="350" HorizontalAlignment="Center" VerticalAlignment="Center">
+            <Ellipse.Effect>
+              <DropShadowEffect Color="#9AA4B4"
+                                BlurRadius="70"
+                                ShadowDepth="0"
+                                Opacity="0.45" />
+            </Ellipse.Effect>
+            <Ellipse.Fill>
+              <ImageBrush ImageSource="Assets/moon.jpg" Stretch="UniformToFill" />
+            </Ellipse.Fill>
+          </Ellipse>
+        </Grid>
+
+        <!-- Liquid Glass: тёмно-синяя «вода за стеклом» (всё окно) -->
+        <Grid x:Name="GlassScene" Visibility="Collapsed">
+          <Border>
+            <Border.Background>
+              <LinearGradientBrush StartPoint="0,0" EndPoint="0.5,1">
+                <GradientStop Color="#FF0A1430" Offset="0" />
+                <GradientStop Color="#FF071026" Offset="0.55" />
+                <GradientStop Color="#FF05080F" Offset="1" />
+              </LinearGradientBrush>
+            </Border.Background>
+          </Border>
+
+          <!-- Глубина: пятна «воды» -->
+          <Ellipse Width="900"
+                   Height="900"
+                   HorizontalAlignment="Left"
+                   VerticalAlignment="Top"
+                   Margin="-260,-300,0,0">
+            <Ellipse.Fill>
+              <RadialGradientBrush Center="0.5,0.5" RadiusX="0.5" RadiusY="0.5">
+                <GradientStop Color="#3A5FB055" Offset="0" />
+                <GradientStop Color="#00000000" Offset="1" />
+              </RadialGradientBrush>
+            </Ellipse.Fill>
+          </Ellipse>
+          <Ellipse Width="1100"
+                   Height="800"
+                   HorizontalAlignment="Right"
+                   VerticalAlignment="Bottom"
+                   Margin="0,0,-300,-250">
+            <Ellipse.Fill>
+              <RadialGradientBrush Center="0.5,0.5" RadiusX="0.5" RadiusY="0.5">
+                <GradientStop Color="#2B4C8A66" Offset="0" />
+                <GradientStop Color="#00000000" Offset="1" />
+              </RadialGradientBrush>
+            </Ellipse.Fill>
+          </Ellipse>
+
+          <!-- Световой блик сверху (стеклянный верхний скос) -->
+          <Ellipse Width="1400"
+                   Height="520"
+                   HorizontalAlignment="Center"
+                   VerticalAlignment="Top"
+                   Margin="0,-330,0,0">
+            <Ellipse.Fill>
+              <RadialGradientBrush Center="0.5,0.5" RadiusX="0.5" RadiusY="0.5">
+                <GradientStop Color="#69C1FF26" Offset="0" />
+                <GradientStop Color="#00000000" Offset="1" />
+              </RadialGradientBrush>
+            </Ellipse.Fill>
+          </Ellipse>
+
+          <!-- Акцентный отсвет снизу-слева -->
+          <Ellipse Width="800"
+                   Height="600"
+                   HorizontalAlignment="Left"
+                   VerticalAlignment="Bottom"
+                   Margin="-220,0,0,-200">
+            <Ellipse.Fill>
+              <RadialGradientBrush Center="0.5,0.5" RadiusX="0.5" RadiusY="0.5">
+                <GradientStop Color="#69C1FF1A" Offset="0" />
+                <GradientStop Color="#00000000" Offset="1" />
+              </RadialGradientBrush>
+            </Ellipse.Fill>
+          </Ellipse>
+        </Grid>
       </Grid>
     </Border>
 

@@ -39,22 +39,39 @@ public class ThemeManagerTests : IDisposable
         var themes = ThemeManager.LoadAll();
 
         var parrhesia = themes.Single(t => t.Id == "parrhesia");
+        var glass = themes.Single(t => t.Id == "liquid-glass");
         var moon = themes.Single(t => t.Id == "moon");
 
         // Сид лёг на диск (правки пользователя сохранятся при следующем старте).
         Assert.True(File.Exists(Path.Combine(_root, "parrhesia", "theme.json")));
+        Assert.True(File.Exists(Path.Combine(_root, "liquid-glass", "theme.json")));
         Assert.True(File.Exists(Path.Combine(_root, "moon", "theme.json")));
 
         // Полные палитры + радиусы + без предупреждений.
-        foreach (var theme in new[] { parrhesia, moon })
+        foreach (var theme in new[] { parrhesia, glass, moon })
         {
             Assert.All(ThemeSpec.ColorKeys, key => Assert.Contains(key, theme.Colors.Keys));
             Assert.All(ThemeSpec.RadiusKeys, key => Assert.Contains(key, theme.Radii.Keys));
             Assert.False(theme.HasWarnings);
         }
 
-        // Moon — серая палитра (фон не оранжевый акцент основной темы).
-        Assert.NotEqual(parrhesia.Colors["Accent"], moon.Colors["Accent"]);
+        // Пометки видимости: moon скрыта («отменим пока»), остальные — нет.
+        Assert.True(moon.Hidden);
+        Assert.False(parrhesia.Hidden);
+        Assert.False(glass.Hidden);
+
+        // Liquid Glass — полупрозрачные панели (стекло) и радиусы12/18/26.
+        Assert.Equal(12, glass.Radii["RadiusS"]);
+        Assert.True(ParseAlpha(glass.Colors["Panel"]) < 0xFF, "панели Liquid Glass должны быть полупрозрачными");
+
+        // Разные палитры у разных тем.
+        Assert.NotEqual(parrhesia.Colors["Deep"], moon.Colors["Deep"]);
+    }
+
+    private static byte ParseAlpha(string argb)
+    {
+        var text = argb.TrimStart('#');
+        return text.Length == 8 ? Convert.ToByte(text[..2], 16) : (byte)0xFF;
     }
 
     [Fact]

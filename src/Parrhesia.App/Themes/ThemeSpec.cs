@@ -40,6 +40,9 @@ public sealed partial class ThemeSpec
     /// <summary>Предупреждения валидации (для ⚠ и лога).</summary>
     public IReadOnlyList<string> Warnings { get; init; } = [];
 
+    /// <summary>Скрыта из списка (поле hidden; «отменим пока» — вернуть снятием флага).</summary>
+    public bool Hidden { get; init; }
+
     public bool HasWarnings => Warnings.Count > 0;
 }
 

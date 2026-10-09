@@ -56,6 +56,11 @@ public partial class SettingsView : UserControl
 
         foreach (var theme in ThemeManager.LoadAll())
         {
+            if (theme.Hidden)
+            {
+                continue; // скрытые темы («отменим пока») в список не идут
+            }
+
             var active = string.Equals(theme.Id, current, StringComparison.OrdinalIgnoreCase);
             var row = new Border
             {

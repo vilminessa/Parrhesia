@@ -11,24 +11,37 @@ public partial class MainWindow
         InitializeComponent();
 
         VersionText.Text = DisplayVersion();
-        UpdateMoonBackdrop();
-        Themes.ThemeManager.ThemeChanged += UpdateMoonBackdrop;
+        UpdateBackdrop();
+        Themes.ThemeManager.ThemeChanged += UpdateBackdrop;
         SelectStartupTab();
     }
 
-    /// <summary>Слой-луна виден только в теме Moon (включается/гасится мгновенно).</summary>
-    private void UpdateMoonBackdrop()
+    /// <summary>
+    /// Фон-сцена темы (ThemeManager.BackdropScenes): «moon» → MoonScene,
+    /// «liquid-glass» → GlassScene; без сцены слой гасится целиком.
+    /// </summary>
+    private void UpdateBackdrop()
     {
-        if (MoonBackdrop is null)
+        if (ThemeBackdrop is null)
         {
             return;
         }
 
-        MoonBackdrop.Visibility = Themes.ThemeManager.CurrentId.Equals(
-            "moon",
-            StringComparison.OrdinalIgnoreCase)
-            ? Visibility.Visible
-            : Visibility.Collapsed;
+        var scene = Themes.ThemeManager.CurrentBackdrop;
+        var showMoon = scene == "MoonScene";
+        var showGlass = scene == "GlassScene";
+
+        if (MoonScene is not null)
+        {
+            MoonScene.Visibility = showMoon ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+        if (GlassScene is not null)
+        {
+            GlassScene.Visibility = showGlass ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+        ThemeBackdrop.Visibility = showMoon || showGlass ? Visibility.Visible : Visibility.Collapsed;
     }
 
     /// <summary>
