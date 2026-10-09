@@ -1,8 +1,8 @@
 @echo off
 rem ============================================================
-rem  ?????? ???????? CLAP-???????? Parrhesia (C, header-only CLAP).
-rem  ????????? MSVC (VS Build Tools 2022 + workload VCTools).
-rem  ?????: out\test-plugin.dll
+rem  Сборка тестового CLAP-плагина Parrhesia (C, header-only CLAP).
+rem  Требуется MSVC (VS Build Tools 2022 + workload VCTools).
+rem  Выход: out\test-plugin.dll
 rem ============================================================
 setlocal
 chcp 65001 >nul
@@ -19,21 +19,21 @@ if not exist "%HERE%out" mkdir "%HERE%out"
 cl /nologo /LD /O2 /W3 /TC /I "%HERE%..\..\src\Parrhesia.Plugins\vendor\clap\include" "%HERE%test-plugin.c" /Fo"%HERE%out\\" /Fe"%HERE%out\test-plugin.dll" /link user32.lib
 if errorlevel 1 goto :compile_failed
 
-echo ??????: %HERE%out\test-plugin.dll
+echo Готово: %HERE%out\test-plugin.dll
 exit /b 0
 
 :no_vcvars
-echo vcvars64.bat ?? ??????: %VCVARS%
+echo vcvars64.bat не найден: %VCVARS%
 exit /b 1
 
 :vcvars_failed
-echo ?????? vcvars64.
+echo Ошибка vcvars64.
 exit /b 1
 
 :compile_failed
-echo ?????? ????-??????? ?? ???????.
+echo Ошибка сборки тест-плагина не удалась.
 exit /b 1
-rem --- fallback: vswhere, ???? BuildTools 2022 ?? ?????? (GitHub runner / VS Community)
+rem --- fallback: vswhere, если BuildTools 2022 не установлены (GitHub runner / VS Community)
 :find_vcvars
 set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
 if not exist "%VSWHERE%" exit /b 0

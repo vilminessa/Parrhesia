@@ -200,3 +200,9 @@ git checkout dev-agPc     :: Агент Pc — фаза B1 (ресемплинг
   Forgejo → репозиторий → Мирроринг → статус/лог последнего синка.
 - **Кодировка**: секции этого файла, дописанные PowerShell Add-Content,
   были в cp1251 (мохой на GitHub) — файл перестроен в UTF-8 целиком.
+- **Правило (ПОВОД: инцидент с `2.profile.json`)**: в PowerShell5.1
+  ВСЕГДА `Get-Content -Encoding UTF8` и `Set-Content -Encoding UTF8`
+  (без флага PS читает/пишет ANSI-кодировку и портит кириллицу);
+  файлы-тексты править инструментами редактирования, не `Add-Content`.
+  Выявлено и вычищено: `2.profile.json` (4 имени узлов), `docs/` (целиком),
+  `install-devices.ps1` (BOM),4 build-батов (`??????` в echo/rem).

@@ -1,7 +1,7 @@
 @echo off
 rem ============================================================
-rem  ?????? ????????? VST3-??????? Parrhesia (?? ???? vendor/vst3sdk,
-rem  MIT). ?????: out\test-plugin-vst3.dll
+rem  Сборка тестового VST3-плагина Parrhesia (из vendor/vst3sdk,
+rem  MIT). Выход: out\test-plugin-vst3.dll
 rem ============================================================
 setlocal
 chcp 65001 >nul
@@ -53,21 +53,21 @@ cl /nologo /LD /O2 /EHsc /std:c++17 /MT /DRELEASE=1 /DUNICODE /D_UNICODE ^
     /link /DEF:"%HERE%testplugin.def" ole32.lib user32.lib ole32.lib user32.lib
 if errorlevel 1 goto :compile_failed
 
-echo ??????: %HERE%out\test-plugin-vst3.dll
+echo Готово: %HERE%out\test-plugin-vst3.dll
 exit /b 0
 
 :no_vcvars
-echo vcvars64.bat ?? ??????: %VCVARS%
+echo vcvars64.bat не найден: %VCVARS%
 exit /b 1
 
 :vcvars_failed
-echo ?????? vcvars64.
+echo Ошибка vcvars64.
 exit /b 1
 
 :compile_failed
-echo ?????? VST3-????-??????? ?? ???????.
+echo Ошибка сборки VST3-тест-плагина не удалась.
 exit /b 1
-rem --- fallback: vswhere, ???? BuildTools 2022 ?? ?????? (GitHub runner / VS Community)
+rem --- fallback: vswhere, если BuildTools 2022 не установлены (GitHub runner / VS Community)
 :find_vcvars
 set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
 if not exist "%VSWHERE%" exit /b 0

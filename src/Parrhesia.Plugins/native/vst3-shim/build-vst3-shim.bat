@@ -1,7 +1,7 @@
 @echo off
 rem ============================================================
-rem  ?????? Parrhesia VST3 Shim (C-API ????? ?? vendor/vst3sdk).
-rem  ?????: out\parr_vst3_shim.dll
+rem  Сборка Parrhesia VST3 Shim (C-API поверх vendor/vst3sdk).
+rem  Выход: out\parr_vst3_shim.dll
 rem ============================================================
 setlocal
 chcp 65001 >nul
@@ -55,21 +55,21 @@ cl /nologo /LD /O2 /EHsc /std:c++17 /MT /DRELEASE=1 /DUNICODE /D_UNICODE ^
     /link ole32.lib user32.lib
 if errorlevel 1 goto :compile_failed
 
-echo ??????: %HERE%out\parr_vst3_shim.dll
+echo Готово: %HERE%out\parr_vst3_shim.dll
 exit /b 0
 
 :no_vcvars
-echo vcvars64.bat ?? ??????: %VCVARS%
+echo vcvars64.bat не найден: %VCVARS%
 exit /b 1
 
 :vcvars_failed
-echo ?????? vcvars64.
+echo Ошибка vcvars64.
 exit /b 1
 
 :compile_failed
-echo ?????? VST3-???? ?? ???????.
+echo Ошибка сборки VST3-шима не удалась.
 exit /b 1
-rem --- fallback: vswhere, ???? BuildTools 2022 ?? ?????? (GitHub runner / VS Community)
+rem --- fallback: vswhere, если BuildTools 2022 не установлены (GitHub runner / VS Community)
 :find_vcvars
 set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
 if not exist "%VSWHERE%" exit /b 0
