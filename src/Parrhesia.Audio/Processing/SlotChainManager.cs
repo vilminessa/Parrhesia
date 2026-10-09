@@ -57,9 +57,49 @@ public sealed class SlotChainManager : IDisposable
     private static IAudioPlugin LoadPluginByFormat(PluginSlot slot) => slot.Format switch
     {
         PluginFormat.Clap => ClapLoader.Load(slot.Path, slot.PluginId),
-        PluginFormat.Vst3 => Vst3Loader.Load(slot.Path, slot.PluginId),
+        PluginFormat.Vst3 => LoadVst3(slot),
         _ => throw new PluginLoadException($"Неизвестный формат плагина: {slot.Format}"),
     };
+
+    /// <summary>
+    /// VST3: сначала проба модуля в дочернем процессе (песочница T-волны —
+    /// Clear и подобные крашат рантайм при Module::create); мусорный
+    /// pluginId (в профиле сохранялся путь) заменяется CID из перечисления.
+    /// </summary>
+    private static IAudioPlugin LoadVst3(PluginSlot slot)
+    {
+        var probeError = Vst3Sandbox.Probe(slot.Path);
+        if (probeError is not null)
+        {
+            throw new PluginLoadException($"VST3-песочница: {probeError}");
+        }
+
+        var classId = LooksLikeClassId(slot.PluginId)
+            ? slot.PluginId
+            : Vst3Loader.Enumerate(slot.Path).FirstOrDefault()?.PluginId
+              ?? throw new PluginLoadException($"VST3: в модуле нет аудио-классов ({slot.Path})");
+
+        return Vst3Loader.Load(slot.Path, classId);
+    }
+
+    /// <summary>VST3 class id —32 hex-символа (без дефисов).</summary>
+    internal static bool LooksLikeClassId(string value)
+    {
+        if (value.Length !=32)
+        {
+            return false;
+        }
+
+        foreach (var character in value)
+        {
+            if (!Uri.IsHexDigit(character))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
 
     /// <summary>
     /// Запоминает формат движка и готовит (в т.ч. новые) экземпляры;

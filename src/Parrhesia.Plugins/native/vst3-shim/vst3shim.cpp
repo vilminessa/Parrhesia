@@ -40,18 +40,18 @@ namespace
 thread_local std::string gLastError;
 
 // COM: каждый поток, входящий в плагин (создание/prepare/process/state),
-// обязан инициализировать COM (Steinberg hosting-гайдлайns). UI-поток WPF —
-// STA с COM; ThreadPool (фоновая загрузка) и WASAPI-поток (process) — БЕЗ
-// него, и плагины с COM-внутренностями падают/портят память. RAII: чей
-// инициализировали — тем и снимаем; чужой режим (RPC_E_CHANGED_MODE) не
-// трогаем.
+// обязан инициализировать COM. Режим — STA (APARTMENTTHREADED): фактически
+// так хост и жил (UI-поток WPF — STA); Supertone Clear в дампах крашился
+// именно в MTA-потоках (T-волна). UI не меняется (STA уже → S_FALSE);
+// ThreadPool/WASAPI получают STA. RAII: чей инициализировали — тем и
+// снимаем; чужой режим (RPC_E_CHANGED_MODE) не трогаем.
 struct ComGuard
 {
     bool owned = false;
 
     ComGuard ()
     {
-        const HRESULT hr = ::CoInitializeEx (nullptr, COINIT_MULTITHREADED);
+        const HRESULT hr = ::CoInitializeEx (nullptr, COINIT_APARTMENTTHREADED);
         owned = (hr == S_OK || hr == S_FALSE);
     }
 

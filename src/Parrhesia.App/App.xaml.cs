@@ -18,6 +18,16 @@ public partial class App : Application
     {
         StartupArgs = e.Args;
 
+        // Песочница VST3 (T-волна): дочерний probe-процесс грузит модуль
+        // ДО принятия в основной процесс. Аварийное завершение здесь — сигнал
+        // «плагин крашит хост»; UI/движок не создаются.
+        if (e.Args.Length >= 2 &&
+            string.Equals(e.Args[0], "--vst3-probe", StringComparison.OrdinalIgnoreCase))
+        {
+            Environment.Exit(RunVst3Probe(e.Args[1]));
+            return;
+        }
+
         var console = Array.IndexOf(e.Args, "--console") >= 0;
         InitializeLogging(console);
         InstallCrashHooks();
@@ -89,6 +99,27 @@ public partial class App : Application
             Trace.WriteLine(args.ExceptionObject?.ToString() ?? "(нет объекта исключения)");
             Trace.Flush();
         };
+    }
+
+    /// <summary>
+    /// Проба модуля VST3: перечисление классов грузит модуль целиком
+    /// (DllMain/внутренний лоадер) — «ядовитые» плагины падают здесь.
+    /// 0 — совместим;1 — ошибка;аварийное завершение ловит родитель
+    /// (<see cref="Processing.Vst3Sandbox"/>).
+    /// </summary>
+    private static int RunVst3Probe(string path)
+    {
+        try
+        {
+            var classes = Plugins.Vst3.Vst3Loader.Enumerate(path);
+            Console.WriteLine($"ok: {classes.Count} классов");
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine(ex.Message);
+            return 1;
+        }
     }
 
     /// <summary>
