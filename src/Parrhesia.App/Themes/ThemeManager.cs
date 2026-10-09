@@ -57,20 +57,22 @@ public static partial class ThemeManager
             "Moon",
             new Dictionary<string, string>
             {
-                ["Deep"] = "#FF14161A",
-                ["Panel"] = "#FF1B1E24",
-                ["Elevated"] = "#FF242830",
-                ["Hover"] = "#FF2F343E",
-                ["Pressed"] = "#FF383E4A",
-                ["Stroke"] = "#FF2B303A",
-                ["StrokeStrong"] = "#FF3F4653",
-                ["Text"] = "#FFE6E9EE",
-                ["TextDim"] = "#FF99A1AD",
-                ["TextFaint"] = "#FF676F7B",
-                ["Accent"] = "#FF9FB6CC",
-                ["Cyan"] = "#FF7FB5D9",
-                ["Danger"] = "#FFD98C84",
-                ["Success"] = "#FF8FBFA0",
+                // Серо-белая гамма: светлое поле, белые карточки, тёмный
+                // текст — контраст; луна (тёмный диск) читается на светлом.
+                ["Deep"] = "#FFEDEEF1",
+                ["Panel"] = "#FFF5F6F8",
+                ["Elevated"] = "#FFFFFFFF",
+                ["Hover"] = "#FFE7E9EE",
+                ["Pressed"] = "#FFDCDFE6",
+                ["Stroke"] = "#FFD4D8DF",
+                ["StrokeStrong"] = "#FFAFB6C1",
+                ["Text"] = "#FF22252B",
+                ["TextDim"] = "#FF5D636D",
+                ["TextFaint"] = "#FF969CA6",
+                ["Accent"] = "#FF6E8CA8",
+                ["Cyan"] = "#FF3E7CA8",
+                ["Danger"] = "#FFC04A43",
+                ["Success"] = "#FF3E9C6A",
             },
             new Dictionary<string, double>
             {

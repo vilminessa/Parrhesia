@@ -42,13 +42,13 @@
             HorizontalAlignment="Right"
             VerticalAlignment="Top"
             Margin="0,64,110,0">
-        <!-- Мягкое лунное свечение -->
+        <!-- Мягкое лунное свечение (серо-белая гамма темы Moon) -->
         <Ellipse Width="460" Height="460">
           <Ellipse.Fill>
             <RadialGradientBrush Center="0.5,0.5" RadiusX="0.5" RadiusY="0.5">
-              <GradientStop Color="#33465C" Offset="0" />
-              <GradientStop Color="#1E242E" Offset="0.55" />
-              <GradientStop Color="#14161A00" Offset="1" />
+              <GradientStop Color="#C9CFD9" Offset="0" />
+              <GradientStop Color="#EDEEF188" Offset="0.55" />
+              <GradientStop Color="#EDEEF100" Offset="1" />
             </RadialGradientBrush>
           </Ellipse.Fill>
         </Ellipse>
@@ -56,10 +56,10 @@
         <!-- Луна: фото в круглой маске -->
         <Ellipse Width="350" Height="350" HorizontalAlignment="Center" VerticalAlignment="Center">
           <Ellipse.Effect>
-            <DropShadowEffect Color="#C9D6E8"
+            <DropShadowEffect Color="#7E8896"
                               BlurRadius="70"
                               ShadowDepth="0"
-                              Opacity="0.35" />
+                              Opacity="0.55" />
           </Ellipse.Effect>
           <Ellipse.Fill>
             <ImageBrush ImageSource="Assets/moon.jpg" Stretch="UniformToFill" />
