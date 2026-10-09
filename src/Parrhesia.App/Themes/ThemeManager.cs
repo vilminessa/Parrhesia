@@ -21,7 +21,63 @@ public static partial class ThemeManager
         string Label,
         IReadOnlyDictionary<string, string> Colors,
         IReadOnlyDictionary<string, double> Radii,
+        (IReadOnlyDictionary<string, string> Colors, IReadOnlyDictionary<string, double> Radii)? Legacy = null,
         bool Hidden = false);
+
+    /// <summary>Версия сида: файлы без неё (старый сид) пересеиваются при совпадении значений.</summary>
+    private const int CurrentSeedVersion = 2;
+
+    // Сид-значения до D-волны контраста: по ним распознаём «нетронутый старый
+    // сид» на диске и обновляем его; чужие правки не трогаем.
+    private static readonly IReadOnlyDictionary<string, string> ParrhesiaLegacyColors = new Dictionary<string, string>
+    {
+        ["Deep"] = "#FF0B0D10",
+        ["Panel"] = "#FF14171C",
+        ["Elevated"] = "#FF1B1F26",
+        ["Hover"] = "#FF232830",
+        ["Pressed"] = "#FF2C323C",
+        ["Stroke"] = "#FF262B33",
+        ["StrokeStrong"] = "#FF39404B",
+        ["Text"] = "#FFE6E9EF",
+        ["TextDim"] = "#FF8B93A1",
+        ["TextFaint"] = "#FF5C6472",
+        ["Accent"] = "#FFFFB020",
+        ["Cyan"] = "#FF35D0C8",
+        ["Danger"] = "#FFFF5A52",
+        ["Success"] = "#FF3DDC84",
+    };
+
+    private static readonly IReadOnlyDictionary<string, double> ParrhesiaLegacyRadii = new Dictionary<string, double>
+    {
+        ["RadiusS"] = 4,
+        ["RadiusM"] = 6,
+        ["RadiusL"] = 10,
+    };
+
+    private static readonly IReadOnlyDictionary<string, string> LiquidLegacyColors = new Dictionary<string, string>
+    {
+        ["Deep"] = "#FF05080F",
+        ["Panel"] = "#801F345A",
+        ["Elevated"] = "#8016223D",
+        ["Hover"] = "#A62F4A7A",
+        ["Pressed"] = "#CC3A5A96",
+        ["Stroke"] = "#33FFFFFF",
+        ["StrokeStrong"] = "#4DFFFFFF",
+        ["Text"] = "#FFE9F1FF",
+        ["TextDim"] = "#8CE9F1FF",
+        ["TextFaint"] = "#59E9F1FF",
+        ["Accent"] = "#FF69C1FF",
+        ["Cyan"] = "#FF8AD1FF",
+        ["Danger"] = "#FFFF6B7A",
+        ["Success"] = "#FF4FD08A",
+    };
+
+    private static readonly IReadOnlyDictionary<string, double> LiquidLegacyRadii = new Dictionary<string, double>
+    {
+        ["RadiusS"] = 12,
+        ["RadiusM"] = 18,
+        ["RadiusL"] = 26,
+    };
 
     // Встроенные темы: основная — текущая палитра Parrhesia; Moon — серые
     // тона с луной на фоне (слой-задник в MainWindow включается по Id).
@@ -45,7 +101,8 @@ public static partial class ThemeManager
                 ["StrokeStrong"] = "#FF39404B",
                 ["Text"] = "#FFE6E9EF",
                 ["TextDim"] = "#FF8B93A1",
-                ["TextFaint"] = "#FF5C6472",
+                // Подписи/подсказки: контраст к Elevated поднят ~3.2→4.4:1 (D-волна).
+                ["TextFaint"] = "#FF737C8C",
                 ["Accent"] = "#FFFFB020",
                 ["Cyan"] = "#FF35D0C8",
                 ["Danger"] = "#FFFF5A52",
@@ -56,7 +113,8 @@ public static partial class ThemeManager
                 ["RadiusS"] = 4,
                 ["RadiusM"] = 6,
                 ["RadiusL"] = 10,
-            }),
+            },
+            Legacy: (ParrhesiaLegacyColors, ParrhesiaLegacyRadii)),
         new(
             "liquid-glass",
             "Liquid Glass",
@@ -64,17 +122,18 @@ public static partial class ThemeManager
             {
                 // Палитра Synfronia (liquid_glass) + стеклянная полупрозрачность:
                 // панели/кнопки полупрозрачны — сквозь них видна фон-сцена,
-                // рамки — светлые «кромки стекла».
+                // рамки — светлые «кромки стекла». D-волна: альфы текста и рамок
+                // подняты (читаемость поверх живой сцены), радиусы чуть меньше.
                 ["Deep"] = "#FF05080F",
-                ["Panel"] = "#801F345A",
+                ["Panel"] = "#A61F345A",
                 ["Elevated"] = "#8016223D",
                 ["Hover"] = "#A62F4A7A",
                 ["Pressed"] = "#CC3A5A96",
-                ["Stroke"] = "#33FFFFFF",
-                ["StrokeStrong"] = "#4DFFFFFF",
+                ["Stroke"] = "#4DFFFFFF",
+                ["StrokeStrong"] = "#66FFFFFF",
                 ["Text"] = "#FFE9F1FF",
-                ["TextDim"] = "#8CE9F1FF",
-                ["TextFaint"] = "#59E9F1FF",
+                ["TextDim"] = "#B3E9F1FF",
+                ["TextFaint"] = "#80E9F1FF",
                 ["Accent"] = "#FF69C1FF",
                 ["Cyan"] = "#FF8AD1FF",
                 ["Danger"] = "#FFFF6B7A",
@@ -82,10 +141,11 @@ public static partial class ThemeManager
             },
             new Dictionary<string, double>
             {
-                ["RadiusS"] = 12,
-                ["RadiusM"] = 18,
-                ["RadiusL"] = 26,
-            }),
+                ["RadiusS"] = 10,
+                ["RadiusM"] = 15,
+                ["RadiusL"] = 22,
+            },
+            Legacy: (LiquidLegacyColors, LiquidLegacyRadii)),
         new(
             "moon",
             "Moon",
@@ -120,6 +180,8 @@ public static partial class ThemeManager
 
     /// <summary>Тема-слой (после Colors.xaml в MergedDictionaries).</summary>
     private static ResourceDictionary? _layer;
+
+    private static readonly JsonSerializerOptions SeedOptions = new() { WriteIndented = true };
 
     private static List<ThemeSpec>? _cache;
 
@@ -202,6 +264,23 @@ public static partial class ThemeManager
             {
                 using var doc = JsonDocument.Parse(File.ReadAllText(file, Encoding.UTF8));
                 var spec = ParseRaw(id, doc.RootElement);
+
+                // Файл-сид старой версии (не совпал с миграцией — были правки):
+                // предупреждаем, что обновлённые значения контраста не применены.
+                var builtinHasLegacy = Builtins.Any(b =>
+                    string.Equals(b.Id, id, StringComparison.OrdinalIgnoreCase) && b.Legacy is not null);
+                if (builtinHasLegacy && !HasCurrentSeedVersion(doc.RootElement))
+                {
+                    spec = spec with
+                    {
+                        Warnings =
+                        [
+                            .. spec.Warnings,
+                            "сида v2 не было — контраст/радиусы не обновлены (удалите theme.json, чтобы пересеять)",
+                        ],
+                    };
+                }
+
                 raw[id] = spec;
                 if (!order.Contains(id, StringComparer.OrdinalIgnoreCase))
                 {
@@ -464,14 +543,11 @@ public static partial class ThemeManager
             var dir = Path.Combine(ThemesRoot, builtin.Id);
             Directory.CreateDirectory(dir);
             var file = Path.Combine(dir, "theme.json");
-            if (File.Exists(file))
-            {
-                return;
-            }
 
             var data = new Dictionary<string, object?>
             {
                 ["label"] = builtin.Label,
+                ["seedVersion"] = CurrentSeedVersion,
             };
             if (builtin.Hidden)
             {
@@ -488,16 +564,84 @@ public static partial class ThemeManager
                 data[key] = value;
             }
 
-            File.WriteAllText(
-                file,
-                JsonSerializer.Serialize(data, new JsonSerializerOptions { WriteIndented = true }),
-                new UTF8Encoding(false));
+            var json = JsonSerializer.Serialize(data, SeedOptions);
+
+            if (!File.Exists(file))
+            {
+                File.WriteAllText(file, json, new UTF8Encoding(false));
+                return;
+            }
+
+            // Миграция сида (D-волна контраста): дословно-нетронутый старый сид
+            // пересеиваем новыми значениями; чужие правки не трогаем.
+            if (builtin.Legacy is { } legacy && LegacyFileUntouched(file, legacy))
+            {
+                File.WriteAllText(file, json, new UTF8Encoding(false));
+            }
         }
         catch (Exception)
         {
             // Сид не критичен: тема и так живёт во встроенном описании.
         }
     }
+
+    /// <summary>Файл = старый сид дословно (label + все цвета/радиусы, никаких других ключей).</summary>
+    private static bool LegacyFileUntouched(
+        string file,
+        (IReadOnlyDictionary<string, string> Colors, IReadOnlyDictionary<string, double> Radii) legacy)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(File.ReadAllText(file, Encoding.UTF8));
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+            {
+                return false;
+            }
+
+            var count = 0;
+            foreach (var _ in root.EnumerateObject())
+            {
+                count++;
+            }
+
+            // label + все цвета + все радиусы — ровно набор старого сида.
+            if (count != legacy.Colors.Count + legacy.Radii.Count + 1)
+            {
+                return false;
+            }
+
+            foreach (var (key, value) in legacy.Colors)
+            {
+                if (!root.TryGetProperty(key, out var prop) || prop.GetString() != value)
+                {
+                    return false;
+                }
+            }
+
+            foreach (var (key, value) in legacy.Radii)
+            {
+                if (!root.TryGetProperty(key, out var prop) || prop.GetDouble() != value)
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>Файл посеян текущей (или более новой) версией сида.</summary>
+    private static bool HasCurrentSeedVersion(JsonElement root) =>
+        root.ValueKind == JsonValueKind.Object
+        && root.TryGetProperty("seedVersion", out var version)
+        && version.ValueKind == JsonValueKind.Number
+        && version.TryGetInt32(out var number)
+        && number >= CurrentSeedVersion;
 
     private static IEnumerable<string> SafeEnumerateDirectories(string root)
     {

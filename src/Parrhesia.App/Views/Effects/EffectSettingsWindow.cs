@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using Parrhesia.App.Themes;
 using Parrhesia.App.Views.Mixer;
 using Parrhesia.Core.Graph;
 
@@ -90,8 +91,7 @@ internal sealed class EffectSettingsWindow : Window
             BorderBrush = BrushOf("Brush.Stroke", "#FF262B33"),
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(8),
-            Padding = new Thickness(14, 12, 14, 12),
-            Child = new StackPanel
+            Padding = new Thickness(16, 14, 16, 14),            Child = new StackPanel
             {
                 Children =
                 {
@@ -121,6 +121,11 @@ internal sealed class EffectSettingsWindow : Window
                 },
             },
         };
+
+        if (Application.Current?.TryFindResource("Radius.M") is CornerRadius panelRadius)
+        {
+            AdaptiveCorner.SetRadius(placeholder, panelRadius);
+        }
 
         Content = new StackPanel
         {

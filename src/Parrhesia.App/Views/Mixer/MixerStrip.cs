@@ -4,6 +4,7 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using Parrhesia.App.Controls;
+using Parrhesia.App.Themes;
 using Parrhesia.Audio.Devices;
 using Parrhesia.Core.Graph;
 
@@ -69,10 +70,17 @@ internal sealed class MixerStrip : Border
         Background = ResolveBrush("Brush.Elevated", "#FF1B1F26");
         BorderBrush = ResolveBrush("Brush.Stroke", "#FF262B33");
         BorderThickness = new Thickness(1);
-        CornerRadius = new CornerRadius(8);
+        CornerRadius = new CornerRadius(8); // фолбэк, если тема не подхватилась
         VerticalAlignment = VerticalAlignment.Top;
         Margin = new Thickness(0, 0, 10, 0);
         Height = ClampCardHeight(node.StripHeight ?? DefaultCardHeight);
+
+        // Темизированное скругление с клампом: в Liquid карточка становится
+        // стеклянной, но дуга не съедает контент на малых высотах (D-волна).
+        if (Application.Current?.TryFindResource("Radius.M") is CornerRadius cardRadius)
+        {
+            AdaptiveCorner.SetRadius(this, cardRadius);
+        }
 
         // Акцентная полоса по типу узла.
         var accent = new Border
@@ -278,7 +286,7 @@ internal sealed class MixerStrip : Border
             {
                 Style = chipStyle,
                 Content = label,
-                Height = 24,
+                Height = 26,
                 FontSize = 11,
                 HorizontalAlignment = HorizontalAlignment.Stretch,
                 Margin = new Thickness(0, 0, 0, 4),

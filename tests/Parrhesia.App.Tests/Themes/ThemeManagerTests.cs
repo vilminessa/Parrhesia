@@ -8,6 +8,7 @@ namespace Parrhesia.App.Tests.Themes;
 /// Механика тем (порт Synfronia): сид встроенных, скан пользовательских
 /// папок, валидация значений (⚠), наследование extends, живое Apply.
 /// </summary>
+[Collection(ThemesCollection.Name)]
 public class ThemeManagerTests : IDisposable
 {
     private readonly string _root =
@@ -60,8 +61,8 @@ public class ThemeManagerTests : IDisposable
         Assert.False(parrhesia.Hidden);
         Assert.False(glass.Hidden);
 
-        // Liquid Glass — полупрозрачные панели (стекло) и радиусы12/18/26.
-        Assert.Equal(12, glass.Radii["RadiusS"]);
+        // Liquid Glass — полупрозрачные панели (стекло) и радиусы10/15/22 (D-волна).
+        Assert.Equal(10, glass.Radii["RadiusS"]);
         Assert.True(ParseAlpha(glass.Colors["Panel"]) < 0xFF, "панели Liquid Glass должны быть полупрозрачными");
 
         // Разные палитры у разных тем.
