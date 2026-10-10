@@ -72,6 +72,9 @@ public sealed class WasapiAudioEngine : IAudioEngine
     private string[] _bindings = [];
     private Timer? _statsTimer;
     private long _lastLoggedUnderflow;
+
+    /// <summary>Прошлый по-источниковый снимок xrun (транзишн-логирование спячки).</summary>
+    private string? _lastXrunDetail;
     private ulong _lastFeedDropped;
     private ulong _lastFeedUnderrun;
     private bool _disposed;
@@ -409,6 +412,7 @@ public sealed class WasapiAudioEngine : IAudioEngine
             _running = true;
             _bindings = CaptureBindings();
             _lastLoggedUnderflow = 0;
+            _lastXrunDetail = null;
             _lastFeedDropped = 0;
             _lastFeedUnderrun = 0;
             _cableDropBaselineSet = false; // база потерь кабеля — заново на каждом старте
@@ -1254,7 +1258,9 @@ public sealed class WasapiAudioEngine : IAudioEngine
         var active = 0;
         foreach (var source in _sources)
         {
-            if (source.Failed)
+            // Спящий источник (нет потребителя — звук никуда не идёт) не
+            // деградация тракта: его накопленные xrun не должны пугать в статусе.
+            if (source.Failed || source.Ring.Sleeping)
             {
                 continue;
             }
@@ -1321,6 +1327,7 @@ public sealed class WasapiAudioEngine : IAudioEngine
             }
 
             _lastLoggedUnderflow = 0;
+            _lastXrunDetail = null;
         }
     }
 
@@ -1380,6 +1387,17 @@ public sealed class WasapiAudioEngine : IAudioEngine
                     $"Захват «{binding.Name}» — клиент",
                     binding.Recorder.LatencyMilliseconds,
                     binding.Recorder.LowLatencyActive ? "low-latency (IAudioClient3)" : "обычный shared"));
+
+                if (binding.Ring.Sleeping)
+                {
+                    // Спящее кольцо: звук никуда не идёт — «свежесть» стареет
+                    // бесконечно и портит отчёт ложным [bad].
+                    stages.Add(new LatencyStage(
+                        $"Кольцо «{binding.Name}»",
+                        0,
+                        "спит — источник не доходит до работающего выхода"));
+                    continue;
+                }
 
                 stages.Add(new LatencyStage(
                     $"Кольцо «{binding.Name}»",
@@ -1478,6 +1496,20 @@ public sealed class WasapiAudioEngine : IAudioEngine
             {
                 // Фид мог закрыться — статистика не критична.
             }
+        }
+
+        // По-источниковая картина (при изменении): кто именно копит xrun и
+        // кто «спит» — пропуски спящего кольца не xrun (звук никуда не идёт).
+        // До раннего выхода по underflow: смена спячки важна сама по себе.
+        var detail = string.Join("; ", _sources
+            .Where(static s => !s.Failed)
+            .Select(static s =>
+                $"{s.Name}: под {s.Ring.UnderrunSamples} переп {s.Ring.OverflowSamples}" +
+                (s.Ring.Sleeping ? " (спит — нет потребителя)" : string.Empty)));
+        if (detail != _lastXrunDetail)
+        {
+            _lastXrunDetail = detail;
+            LogMessage(EngineLogLevel.Info, $"xrun по источникам: {detail}");
         }
 
         if (underflow == _lastLoggedUnderflow)

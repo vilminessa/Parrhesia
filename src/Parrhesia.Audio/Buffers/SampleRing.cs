@@ -12,15 +12,25 @@ namespace Parrhesia.Audio.Buffers;
 /// </summary>
 public sealed class SampleRing : ISampleInput
 {
+    /// <summary>
+    /// Порог «спячки»: потребитель не читал дольше этого времени (источник
+    /// никуда не идёт — нет маршрута до работающего выхода). Пропуски
+    /// записи в спящем кольце НЕ считаются xrun — это не деградация тракта,
+    /// а неиспользуемый источник (иначе статус копит миллионы «переполнений»).
+    /// </summary>
+    public const int DefaultSleepAfterMs = 5000;
+
     private readonly float[] _buffer;
     private readonly int _mask;
+    private readonly int _sleepAfterMs;
 
     private long _write;
     private long _read;
     private long _overflowSamples;
     private long _underrunSamples;
+    private long _lastReadTick;
 
-    public SampleRing(int capacitySamples)
+    public SampleRing(int capacitySamples, int sleepAfterMs = DefaultSleepAfterMs)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(capacitySamples, 2);
         if ((capacitySamples & (capacitySamples - 1)) != 0)
@@ -28,8 +38,12 @@ public sealed class SampleRing : ISampleInput
             throw new ArgumentException("Ёмкость должна быть степенью двойки.", nameof(capacitySamples));
         }
 
+        ArgumentOutOfRangeException.ThrowIfLessThan(sleepAfterMs, 1);
+
         _buffer = new float[capacitySamples];
         _mask = capacitySamples - 1;
+        _sleepAfterMs = sleepAfterMs;
+        _lastReadTick = Environment.TickCount64;
     }
 
     public int Capacity => _buffer.Length;
@@ -41,6 +55,10 @@ public sealed class SampleRing : ISampleInput
 
     public long UnderrunSamples => Volatile.Read(ref _underrunSamples);
 
+    /// <summary>true — потребитель молчит дольше порога (источник никуда не идёт).</summary>
+    public bool Sleeping =>
+        Environment.TickCount64 - Volatile.Read(ref _lastReadTick) >= _sleepAfterMs;
+
     /// <summary>Обнулить счётчики xrun (не трогает данные).</summary>
     public void ResetStatistics()
     {
@@ -51,12 +69,17 @@ public sealed class SampleRing : ISampleInput
     /// <summary>Записывает, сколько влезло. Возвращает число принятых сэмплов.</summary>
     public int Write(ReadOnlySpan<float> source)
     {
+        var sleeping = Sleeping; // одна оценка на запись — не смешивать с тиком чтения
         var write = Volatile.Read(ref _write);
         var read = Volatile.Read(ref _read);
         var space = _buffer.Length - (int)(write - read);
         if (space <= 0)
         {
-            Interlocked.Add(ref _overflowSamples, source.Length);
+            if (!sleeping)
+            {
+                Interlocked.Add(ref _overflowSamples, source.Length);
+            }
+
             return 0;
         }
 
@@ -70,7 +93,7 @@ public sealed class SampleRing : ISampleInput
         }
 
         Volatile.Write(ref _write, write + count);
-        if (count < source.Length)
+        if (count < source.Length && !sleeping)
         {
             Interlocked.Add(ref _overflowSamples, source.Length - count);
         }
@@ -81,6 +104,8 @@ public sealed class SampleRing : ISampleInput
     /// <summary>Читает ровно <c>destination.Length</c> сэмплов, остаток — тишина.</summary>
     public int Read(Span<float> destination)
     {
+        Volatile.Write(ref _lastReadTick, Environment.TickCount64);
+
         var read = Volatile.Read(ref _read);
         var write = Volatile.Read(ref _write);
         var available = (int)(write - read);

@@ -86,4 +86,46 @@ public class SampleRingTests
         Assert.Equal(new float[] { 13, 14, 0, 0, 0, 0 }, sink);
         Assert.Equal(4, ring.UnderrunSamples);
     }
+
+    [Fact]
+    public void Write_WithoutReader_StopsCountingOverflow_WhenSleeping()
+    {
+        // Источник без потребителя (нет маршрута до работающего выхода) не
+        // должен копить миллионы «переполнений» — кольцо засыпает по таймауту.
+        var ring = new SampleRing(8, sleepAfterMs: 40);
+        var block = new float[8];
+
+        ring.Write(block); // прогрев: помещается целиком
+        Assert.Equal(0, ring.OverflowSamples);
+
+        Thread.Sleep(60);
+        Assert.True(ring.Sleeping);
+
+        ring.Write(block); // кольцо полно, читателя нет — молча пропускаем
+        ring.Write(block);
+        Assert.Equal(0, ring.OverflowSamples);
+
+        // Чтение будит кольцо: переполнения снова считаются.
+        ring.Read(block);
+        Assert.False(ring.Sleeping);
+
+        ring.Write(block); // снова полно (8 из8)
+        ring.Write(block);
+        Assert.Equal(8, ring.OverflowSamples);
+    }
+
+    [Fact]
+    public void Read_Underrun_CountsEvenForSleepingRing()
+    {
+        // Недостача при чтении — честный xrun даже для «спящего» кольца.
+        var ring = new SampleRing(8, sleepAfterMs: 40);
+        var block = new float[4];
+
+        Thread.Sleep(60);
+        Assert.True(ring.Sleeping);
+
+        ring.Read(block);
+        Assert.Equal(4, ring.UnderrunSamples);
+        Assert.False(ring.Sleeping);
+    }
 }
