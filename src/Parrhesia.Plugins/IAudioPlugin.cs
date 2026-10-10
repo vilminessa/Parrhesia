@@ -43,7 +43,7 @@ public sealed record PluginDescriptor(
     string Name);
 
 /// <summary>Ошибка загрузки/инициализации плагина (плагин битой, нет модуля и т.п.).</summary>
-public sealed class PluginLoadException : Exception
+public class PluginLoadException : Exception // не запечатан: T1-подклассы классификации отказов
 {
     public PluginLoadException(string message)
         : base(message)
@@ -52,6 +52,19 @@ public sealed class PluginLoadException : Exception
 
     public PluginLoadException(string message, Exception innerException)
         : base(message, innerException)
+    {
+    }
+}
+
+/// <summary>
+/// S T1: исполнитель НЕ ПОДГОТОВИЛСЯ за таймаут (модуль завис при загрузке —
+/// класс Clear). Ретраи по такой ошибке идут терпеливо (раз в минуты),
+/// в отличие от быстрых падений.
+/// </summary>
+public sealed class PluginSpawnTimeoutException : PluginLoadException
+{
+    public PluginSpawnTimeoutException(string message)
+        : base(message)
     {
     }
 }

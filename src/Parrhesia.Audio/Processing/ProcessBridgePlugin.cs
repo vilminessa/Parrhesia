@@ -386,6 +386,10 @@ public sealed class ProcessBridgePlugin : IAudioPlugin
                     CreateNoWindow = true,
                     RedirectStandardOutput = true,
                     RedirectStandardError = true,
+
+                    // T1: модуль ищет файлы рядом с собой/в рабочем каталоге —
+                    // каталог модуля делает поведение детерминированным.
+                    WorkingDirectory = Path.GetDirectoryName(_slot.Path) ?? string.Empty,
                 })
                 ?? throw new PluginLoadException("не удалось запустить процесс-исполнитель");
 
@@ -407,7 +411,7 @@ public sealed class ProcessBridgePlugin : IAudioPlugin
                 if (Environment.TickCount64 >= deadline)
                 {
                     TearDown();
-                    throw new PluginLoadException(
+                    throw new PluginSpawnTimeoutException(
                         $"исполнитель не готов за {SpawnTimeout.TotalSeconds:0.#} с «{_slot.Name}» ({_slot.Path})");
                 }
 

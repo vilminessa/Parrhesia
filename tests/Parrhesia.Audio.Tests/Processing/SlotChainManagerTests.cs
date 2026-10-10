@@ -298,6 +298,64 @@ public class SlotChainManagerTests
         Assert.Equal(1.0f, Process(processor, sink.Id)[0], 3);
     }
 
+    [Fact]
+    public async Task SpawnTimeout_SchedulesPatientRetry()
+    {
+        // T1: зависание модуля (spawn-timeout, класс Clear) — терпеливые
+        // ретраи (раз в5+ мин), а не вечные15с-циклы.
+        var (graph, _, node, _) = BuildGraph();
+        using var processor = new GraphProcessor(graph);
+        using var manager = new SlotChainManager(
+            graph, processor, bridgeFactory: (_, _) => throw new PluginSpawnTimeoutException("завис"));
+        graph.AddSlot(node.Id, new PluginSlot { Path = "вис.vst3", PluginId = "v", Name = "Вис" });
+        await manager.SyncTask;
+
+        var status = manager.GetPluginStatus(node.Id);
+        Assert.True(status is { Loaded: false });
+        Assert.Equal(1, status!.SpawnAttempts);
+        Assert.InRange(status.SecondsToRetry, 250, 300); //5 мин
+        Assert.Single(manager.LastErrors);
+    }
+
+    [Fact]
+    public async Task FastFailure_SchedulesAggressiveRetry()
+    {
+        // T1: быстрое падение (битый модуль) — ретраи агрессивные (секунды).
+        var (graph, _, node, _) = BuildGraph();
+        using var processor = new GraphProcessor(graph);
+        using var manager = new SlotChainManager(
+            graph, processor, bridgeFactory: (_, _) => throw new PluginLoadException("битый"));
+        graph.AddSlot(node.Id, new PluginSlot { Path = "битый.vst3", PluginId = "b", Name = "Битый" });
+        await manager.SyncTask;
+
+        var status = manager.GetPluginStatus(node.Id);
+        Assert.True(status is { Loaded: false });
+        Assert.InRange(status!.SecondsToRetry, 0, 2);
+    }
+
+    [Fact]
+    public async Task Restart_ResetsBackoff_ImmediateRetry()
+    {
+        // T1: кнопка «Перезапустить» сбрасывает бэкофф — попытка немедленная.
+        var (graph, _, node, _) = BuildGraph();
+        using var processor = new GraphProcessor(graph);
+        using var manager = new SlotChainManager(
+            graph, processor, bridgeFactory: (_, _) => throw new PluginSpawnTimeoutException("завис"));
+        graph.AddSlot(node.Id, new PluginSlot { Path = "вис.vst3", PluginId = "v", Name = "Вис" });
+        await manager.SyncTask;
+        Assert.Equal(1, manager.GetSpawnAttempts(node.Id));
+
+        manager.RestartPluginNode(node.Id);
+
+        var deadline = Environment.TickCount64 + 3000;
+        while (Environment.TickCount64 < deadline && manager.GetSpawnAttempts(node.Id) < 2)
+        {
+            await Task.Delay(50);
+        }
+
+        Assert.Equal(2, manager.GetSpawnAttempts(node.Id)); // попытка сразу, без5-мин ожидания
+    }
+
     private static (AudioGraph Graph, AudioNode Source, AudioNode Node, AudioNode Sink) BuildGraph()
     {
         var graph = new AudioGraph();

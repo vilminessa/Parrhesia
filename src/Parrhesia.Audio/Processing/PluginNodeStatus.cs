@@ -12,4 +12,7 @@ public sealed record PluginNodeStatus(
     long ProcessedBlocks,
     int SpawnAttempts,
     int LatencySamples,
-    IReadOnlyList<string> Errors);
+    IReadOnlyList<string> Errors,
+
+    /// <summary>Секунд до следующего ретрая спавна (≤0 — ретрай не запланирован).</summary>
+    int SecondsToRetry);

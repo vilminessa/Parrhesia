@@ -30,7 +30,8 @@ public sealed class SlotChainManager : IDisposable
     private readonly Dictionary<Guid, NodeState> _states = [];
     private readonly HashSet<Guid> _paused = [];
 
-    /// <summary>Бэкофф ретраев спавна исполнителей (только узлы-плагины).</summary>
+    /// <summary>Бэкофф ретраев спавна исполнителей (только узлы-плагины).
+    /// Slow — модуль завис при загрузке (ретраи раз в минуты); иначе быстрые падения.</summary>
     private readonly Dictionary<Guid, RetryState> _retries = [];
 
     /// <summary>Число попыток создания экземпляров по узлам-плагинам (диагностика/тесты).</summary>
@@ -401,6 +402,12 @@ public sealed class SlotChainManager : IDisposable
                 }
             }
 
+            var secondsToRetry =0;
+            if (_retries.TryGetValue(nodeId, out var retry))
+            {
+                secondsToRetry = (int)Math.Max(0, (retry.At - Environment.TickCount64 + 999) / 1000);
+            }
+
             return new PluginNodeStatus(
                 Loaded: bridge is not null,
                 Alive: bridge?.ChildAlive ?? false,
@@ -409,7 +416,8 @@ public sealed class SlotChainManager : IDisposable
                 ProcessedBlocks: bridge?.ProcessedBlocks ?? 0,
                 SpawnAttempts: _spawnAttempts.GetValueOrDefault(nodeId),
                 LatencySamples: bridge?.LatencySamples ?? 0,
-                Errors: [.. state.Errors]);
+                Errors: [.. state.Errors],
+                SecondsToRetry: secondsToRetry);
         }
     }
 
@@ -419,7 +427,15 @@ public sealed class SlotChainManager : IDisposable
         ProcessBridgePlugin[] bridges;
         lock (_gate)
         {
-            if (_disposed || !_states.TryGetValue(nodeId, out var state))
+            if (_disposed)
+            {
+                return;
+            }
+
+            // T1: ручной перезапуск сбрасывает бэкофф — попытка немедленная.
+            _retries.Remove(nodeId);
+
+            if (!_states.TryGetValue(nodeId, out var state))
             {
                 return;
             }
@@ -615,6 +631,33 @@ public sealed class SlotChainManager : IDisposable
         public long At;
 
         public int Delay;
+
+        /// <summary>true — «завис при загрузке» (терпеливые ретраи).</summary>
+        public bool Slow;
+    }
+
+    /// <summary>
+    /// Планирует ретрай спавна (T1: умный бэкофф). Быстрое падение —2→4→…→60с;
+    /// зависание модуля —5→10→…→15мин (бесконечные быстрые ретраи висящего
+    /// модуля (класс Clear) только жгут CPU и захламляют лог).
+    /// </summary>
+    private void ScheduleRetry(Guid nodeId, bool slow)
+    {
+        const int fastFirst = 2_000;
+        const int fastCap = 60_000;
+        const int slowFirst = 300_000; //5 мин
+        const int slowCap = 900_000;   //15 мин
+
+        var now = Environment.TickCount64;
+        if (_retries.TryGetValue(nodeId, out var previous) && previous.Slow == slow)
+        {
+            var grown = Math.Min(previous.Delay * 2, slow ? slowCap : fastCap);
+            _retries[nodeId] = new RetryState { At = now + grown, Delay = grown, Slow = slow };
+            return;
+        }
+
+        var delay = slow ? slowFirst : fastFirst;
+        _retries[nodeId] = new RetryState { At = now + delay, Delay = delay, Slow = slow };
     }
 
     /// <summary>
@@ -761,15 +804,9 @@ public sealed class SlotChainManager : IDisposable
 
                     if (item.IsPluginNode)
                     {
-                        // Ретрай спавна с бэкоффом:2с →4с →… →2мин.
-                        var delay = _retries.TryGetValue(item.Id, out var retry)
-                            ? Math.Min(retry.Delay * 2, 120_000)
-                            : 2_000;
-                        _retries[item.Id] = new RetryState
-                        {
-                            At = Environment.TickCount64 + delay,
-                            Delay = delay,
-                        };
+                        // T1: зависание (spawn-timeout) ретраится терпеливо,
+                        // быстрое падение — агрессивно.
+                        ScheduleRetry(item.Id, ex is PluginSpawnTimeoutException);
                     }
 
                     try

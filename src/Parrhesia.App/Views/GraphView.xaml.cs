@@ -1132,6 +1132,8 @@ public partial class GraphView : UserControl
                 $"Жив · pid {status.ProcessId} · задержка {status.LatencySamples} кадр. " +
                 $"· пропуски {status.Drops} · блоков {status.ProcessedBlocks}",
             { Loaded: true } => "Перезапуск процесса…",
+            { SecondsToRetry: > 0 } =>
+                $"Не загружен — попытка {status.SpawnAttempts}; ретрай через {status.SecondsToRetry} с",
             _ => $"Не загружен — попытка {status.SpawnAttempts} (ретрай с бэкоффом)",
         };
 
