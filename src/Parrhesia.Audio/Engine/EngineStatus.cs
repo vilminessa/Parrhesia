@@ -29,4 +29,11 @@ public sealed record EngineStatus(
 
     /// <summary>Все открытые выходы (мультисинки); пусто — движок остановлен.</summary>
     public IReadOnlyList<string> SinkNames { get; init; } = [];
+
+    /// <summary>
+    /// Фактический квант вывода (минимальный период устройств;0 — остановлен).
+    /// Это узкое горлышко тракта: захват и мост-плагин меряются этим же
+    /// квантом (устройственный минимум shared-режима, API его не опускает).
+    /// </summary>
+    public int OutputPeriodMs { get; init; }
 }

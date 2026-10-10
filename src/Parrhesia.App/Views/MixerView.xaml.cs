@@ -663,6 +663,7 @@ public partial class MixerView : UserControl
                 : " · монитор выкл.";
 
         StatusText.Text = $"Движок: работает · {status.SampleRate} Гц · {status.Channels} к · " +
+                          $"квант {status.OutputPeriodMs} мс · " +
                           $"выходы «{outputs}» · xrun под/переп. {status.UnderrunSamples}/{status.OverflowSamples}" +
                           monitor;
     }

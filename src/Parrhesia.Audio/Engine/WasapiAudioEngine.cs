@@ -1264,11 +1264,20 @@ public sealed class WasapiAudioEngine : IAudioEngine
             overflows += source.Ring.OverflowSamples;
         }
 
+        // Фактический квант: минимальный engine-период открытых устройств
+        // (low-latency уже выбрал минимум драйвера — см. ChooseLowestLatencyPeriod).
+        var periodMs = 0;
+        foreach (var player in _players)
+        {
+            periodMs = Math.Max(periodMs, player.LatencyMilliseconds);
+        }
+
         return new EngineStatus(true, _sampleRate, _channels, _sinkName, active, underruns, overflows)
         {
             MonitorName = _monitorName,
             MonitorActive = _monitorPlayer is not null,
             SinkNames = _sinkNames,
+            OutputPeriodMs = periodMs,
         };
     }
 

@@ -71,6 +71,7 @@ public partial class DevicesView : UserControl
         var status = AppServices.Engine.Status;
         StatusText.Text = status.IsRunning
             ? $"Движок: работает · {status.SampleRate} Гц · {status.Channels} к · " +
+              $"квант {status.OutputPeriodMs} мс · " +
               $"выход «{status.SinkName}» · источников {status.ActiveSources} · " +
               $"xrun под/переп. {status.UnderrunSamples}/{status.OverflowSamples}"
             : "Движок: остановлен";
