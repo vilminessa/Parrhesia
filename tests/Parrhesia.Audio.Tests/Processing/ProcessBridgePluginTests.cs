@@ -323,6 +323,50 @@ public class ProcessBridgePluginTests
         }
     }
 
+    [Fact]
+    public void PluginNode_Clap_RunsInChildProcess()
+    {
+        // S5: CLAP-ветка исполнителя — настоящий тестовый модуль в ребёнке.
+        var dll = Path.Combine(AppContext.BaseDirectory, "test-plugin.dll");
+        if (ProcessBridgePlugin.FindAppExe() is null || !File.Exists(dll))
+        {
+            return; // вне репозитория — проба моста пропущена
+        }
+
+        var harness = CreateHarness(new PluginSlot
+        {
+            Format = PluginFormat.Clap,
+            Path = dll,
+            PluginId = "com.parrhesia.test.latency",
+            Name = "Тест CLAP",
+        });
+
+        try
+        {
+            Assert.Empty(harness.Manager.LastErrors);
+            var bridge = Assert.IsType<ProcessBridgePlugin>(
+                harness.Manager.GetSlotInstance(harness.PluginId, 0));
+            Assert.True(bridge.ChildPid > 0, "исполнитель CLAP не запущен");
+
+            // Ребёнок гоняет блоки через настоящий CLAP-бэкенд.
+            harness.Processor.SetInput(harness.SourceId, new ConstantInput(0.5f));
+            var deadline = Environment.TickCount64 + 10_000;
+            while (Environment.TickCount64 < deadline && bridge.ProcessedBlocks < 1)
+            {
+                Process(harness.Processor, harness.SinkId);
+                Thread.Sleep(10);
+            }
+
+            Assert.True(
+                bridge.ProcessedBlocks >= 1,
+                $"ребёнок не обработал ни одного блока (CLAP): drops={bridge.Drops}");
+        }
+        finally
+        {
+            harness.Dispose();
+        }
+    }
+
     /// <summary>Серия source → plugin-узел → sink со слотом; менеджер уже Prepare.</summary>
     private static Harness CreateHarness(PluginSlot slot)
     {

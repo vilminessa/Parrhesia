@@ -18,7 +18,7 @@ public class PluginSlotTests
     public void AddSlot_RequiresPathAndId()
     {
         var graph = new AudioGraph();
-        var bus = graph.AddNode("Шина", NodeKind.Bus);
+        var bus = graph.AddNode("Обработка", NodeKind.Plugin);
 
         Assert.Throws<ArgumentException>(() => graph.AddSlot(bus.Id, new PluginSlot()));
         Assert.Throws<ArgumentException>(() =>
@@ -32,7 +32,7 @@ public class PluginSlotTests
     public void AddSlot_RaisesNodeChanged()
     {
         var graph = new AudioGraph();
-        var bus = graph.AddNode("Шина", NodeKind.Bus);
+        var bus = graph.AddNode("Обработка", NodeKind.Plugin);
         GraphChange? change = null;
         graph.Changed += (_, e) => change = e;
 
@@ -47,7 +47,7 @@ public class PluginSlotTests
     public void RemoveSlot_ByIndex()
     {
         var graph = new AudioGraph();
-        var bus = graph.AddNode("Шина", NodeKind.Bus);
+        var bus = graph.AddNode("Обработка", NodeKind.Plugin);
         graph.AddSlot(bus.Id, new PluginSlot { Path = "a.clap", PluginId = "a" });
         graph.AddSlot(bus.Id, new PluginSlot { Path = "b.clap", PluginId = "b" });
 
@@ -62,7 +62,7 @@ public class PluginSlotTests
     public void MoveSlot_Reorders()
     {
         var graph = new AudioGraph();
-        var bus = graph.AddNode("Шина", NodeKind.Bus);
+        var bus = graph.AddNode("Обработка", NodeKind.Plugin);
         graph.AddSlot(bus.Id, new PluginSlot { Path = "a.clap", PluginId = "a" });
         graph.AddSlot(bus.Id, new PluginSlot { Path = "b.clap", PluginId = "b" });
         graph.AddSlot(bus.Id, new PluginSlot { Path = "c.clap", PluginId = "c" });
@@ -77,7 +77,7 @@ public class PluginSlotTests
     public void SetSlotEnabled_ReplacesSlotWithoutTouchingOthers()
     {
         var graph = new AudioGraph();
-        var bus = graph.AddNode("Шина", NodeKind.Bus);
+        var bus = graph.AddNode("Обработка", NodeKind.Plugin);
         graph.AddSlot(bus.Id, new PluginSlot { Path = "a.clap", PluginId = "a", State = [7] });
         graph.AddSlot(bus.Id, new PluginSlot { Path = "b.clap", PluginId = "b" });
 
@@ -93,7 +93,7 @@ public class PluginSlotTests
     public void SetSlotState_StoresChunk()
     {
         var graph = new AudioGraph();
-        var bus = graph.AddNode("Шина", NodeKind.Bus);
+        var bus = graph.AddNode("Обработка", NodeKind.Plugin);
         graph.AddSlot(bus.Id, new PluginSlot { Path = "a.clap", PluginId = "a" });
 
         graph.SetSlotState(bus.Id, 0, [10, 20]);
@@ -107,7 +107,7 @@ public class PluginSlotTests
     public void ReplaceWith_CopiesSlots()
     {
         var source = new AudioGraph();
-        var bus = source.AddNode("Шина", NodeKind.Bus);
+        var bus = source.AddNode("Обработка", NodeKind.Plugin);
         source.AddSlot(bus.Id, new PluginSlot { Path = "a.clap", PluginId = "a", State = [5] });
 
         var target = new AudioGraph();

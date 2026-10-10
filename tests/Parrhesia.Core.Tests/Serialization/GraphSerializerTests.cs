@@ -188,8 +188,8 @@ public class GraphSerializerTests
     public void RoundTrip_PreservesPluginSlots()
     {
         var graph = new AudioGraph();
-        var bus = graph.AddNode("Шина", NodeKind.Bus);
-        graph.AddSlot(bus.Id, new PluginSlot
+        var node = graph.AddNode("Обработка", NodeKind.Plugin);
+        graph.AddSlot(node.Id, new PluginSlot
         {
             Format = PluginFormat.Clap,
             Path = @"C:\plugins\test.clap",
@@ -197,7 +197,7 @@ public class GraphSerializerTests
             Name = "Тест",
             State = [1, 2, 3, 255],
         });
-        graph.AddSlot(bus.Id, new PluginSlot
+        graph.AddSlot(node.Id, new PluginSlot
         {
             Format = PluginFormat.Vst3,
             Path = @"C:\plugins\reverb.vst3",
@@ -208,10 +208,10 @@ public class GraphSerializerTests
 
         var restored = GraphSerializer.Deserialize(GraphSerializer.Serialize(graph));
 
-        var restoredBus = Assert.Single(restored.Nodes, n => n.Name == "Шина");
-        Assert.Equal(2, restoredBus.Slots.Count);
+        var restoredNode = Assert.Single(restored.Nodes, n => n.Name == "Обработка");
+        Assert.Equal(2, restoredNode.Slots.Count);
 
-        var first = restoredBus.Slots[0];
+        var first = restoredNode.Slots[0];
         Assert.Equal(PluginFormat.Clap, first.Format);
         Assert.Equal(@"C:\plugins\test.clap", first.Path);
         Assert.Equal("com.parrhesia.test", first.PluginId);
@@ -219,7 +219,7 @@ public class GraphSerializerTests
         Assert.True(first.Enabled);
         Assert.Equal(new byte[] { 1, 2, 3, 255 }, first.State);
 
-        var second = restoredBus.Slots[1];
+        var second = restoredNode.Slots[1];
         Assert.Equal(PluginFormat.Vst3, second.Format);
         Assert.False(second.Enabled);
         Assert.Null(second.State);
@@ -260,7 +260,7 @@ public class GraphSerializerTests
         """;
 
         Assert.False(GraphSerializer.TryDeserialize(json, out _, out var error));
-        Assert.Contains("только у шин", error);
+        Assert.Contains("только у узлов-плагинов", error);
     }
 
     [Fact]

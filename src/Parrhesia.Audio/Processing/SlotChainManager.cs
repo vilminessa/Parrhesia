@@ -1,29 +1,29 @@
 using System.Diagnostics;
 using Parrhesia.Core.Graph;
 using Parrhesia.Plugins;
-using Parrhesia.Plugins.Clap;
-using Parrhesia.Plugins.Vst3;
 
 namespace Parrhesia.Audio.Processing;
 
 /// <summary>
 /// Синхронизация слотов-вставок модели с рантайм-экземплярами плагинов.
-/// Реагирует на graph.Changed коалесцирующей фоновой задачей; полные
-/// синхронизации сериализуются <c>_syncWork</c>, но dlopen/COM-инициализация
-/// (секунды) идёт ВНЕ <c>_gate</c> — UI-пути (автосейв, инспектор) ждут лок
-/// только микросекунды (R-волна: зависания на «+ слот»).
-/// Фазы одной синхронизации: A) снимок модели под локом; B) сверка/загрузка
-/// вне локов; C) атомарное применение + публикация под локом (со свежей
-/// paused-проверкой — пауза узла не должна быть перекрыта устаревшей
-/// публикацией). Перед getState/prepare узел ПАУЗИРУЕТСЯ (VST3-контракт:
-/// state/setup вызовы вне process). Владение экземплярами: менеджер;
-/// выгрузка — после RT-подтверждения покоя.
+/// S5: слоты живут ТОЛЬКО на узлах-плагинах, и всегда — в отдельном
+/// процессе-исполнителе через мост (<see cref="ProcessBridgePlugin"/>);
+/// единый механизм без исключений для конкретных плагинов. Реагирует на
+/// graph.Changed коалесцирующей фоновой задачей; полные синхронизации
+/// сериализуются <c>_syncWork</c>, но загрузка (секунды) идёт ВНЕ
+/// <c>_gate</c> — UI-пути (автосейв, инспектор) ждут лок только
+/// микросекунды (R-волна: зависания на «+ слот»). Фазы одной синхронизации:
+/// A) снимок модели под локом; B) сверка/загрузка вне локов; C) атомарное
+/// применение + публикация под локом (со свежей paused-проверкой — пауза
+/// узла не должна быть перекрыта устаревшей публикацией). Перед
+/// getState/prepare узел ПАУЗИРУЕТСЯ (VST3-контракт: state/setup вызовы
+/// вне process). Владение экземплярами: менеджер; выгрузка — после
+/// RT-подтверждения покоя.
 /// </summary>
 public sealed class SlotChainManager : IDisposable
 {
     private readonly AudioGraph _graph;
     private readonly GraphProcessor _processor;
-    private readonly Func<PluginSlot, IAudioPlugin> _factory;
     private readonly Func<Guid, PluginSlot, IAudioPlugin> _bridgeFactory;
     private readonly object _gate = new();
     private readonly object _syncWork = new();
@@ -54,15 +54,13 @@ public sealed class SlotChainManager : IDisposable
     public SlotChainManager(
         AudioGraph graph,
         GraphProcessor processor,
-        Func<PluginSlot, IAudioPlugin>? factory = null,
         Func<Guid, PluginSlot, IAudioPlugin>? bridgeFactory = null)
     {
         _graph = graph ?? throw new ArgumentNullException(nameof(graph));
         _processor = processor ?? throw new ArgumentNullException(nameof(processor));
-        _factory = factory ?? LoadPluginByFormat;
 
-        // Узлы-плагины (S-волна) всегда идут через процесс-исполнитель —
-        // единый механизм для всех VST3/CLAP без исключений.
+        // S5: слоты только у узлов-плагинов — всегда через процесс-исполнитель
+        // (единый механизм для всех VST3/CLAP без исключений).
         _bridgeFactory = bridgeFactory ?? ProcessBridgePlugin.Create;
         _graph.Changed += OnGraphChanged;
 
@@ -87,54 +85,6 @@ public sealed class SlotChainManager : IDisposable
 
             QueueSync();
         }
-    }
-
-    /// <summary>Дефолтная фабрика: формат слота определяет хост (CLAP/VST3).</summary>
-    private static IAudioPlugin LoadPluginByFormat(PluginSlot slot) => slot.Format switch
-    {
-        PluginFormat.Clap => ClapLoader.Load(slot.Path, slot.PluginId),
-        PluginFormat.Vst3 => LoadVst3(slot),
-        _ => throw new PluginLoadException($"Неизвестный формат плагина: {slot.Format}"),
-    };
-
-    /// <summary>
-    /// VST3: сначала проба модуля в дочернем процессе (песочница T-волны —
-    /// Clear и подобные крашат рантайм при Module::create); мусорный
-    /// pluginId (в профиле сохранялся путь) заменяется CID из перечисления.
-    /// </summary>
-    private static IAudioPlugin LoadVst3(PluginSlot slot)
-    {
-        var probeError = Vst3Sandbox.Probe(slot.Path);
-        if (probeError is not null)
-        {
-            throw new PluginLoadException($"VST3-песочница: {probeError}");
-        }
-
-        var classId = LooksLikeClassId(slot.PluginId)
-            ? slot.PluginId
-            : Vst3Loader.Enumerate(slot.Path).FirstOrDefault()?.PluginId
-              ?? throw new PluginLoadException($"VST3: в модуле нет аудио-классов ({slot.Path})");
-
-        return Vst3Loader.Load(slot.Path, classId);
-    }
-
-    /// <summary>VST3 class id —32 hex-символа (без дефисов).</summary>
-    internal static bool LooksLikeClassId(string value)
-    {
-        if (value.Length !=32)
-        {
-            return false;
-        }
-
-        foreach (var character in value)
-        {
-            if (!Uri.IsHexDigit(character))
-            {
-                return false;
-            }
-        }
-
-        return true;
     }
 
     /// <summary>
@@ -199,7 +149,7 @@ public sealed class SlotChainManager : IDisposable
 
             foreach (var node in _graph.Nodes)
             {
-                if (node.Kind is not (NodeKind.Bus or NodeKind.Plugin))
+                if (node.Kind != NodeKind.Plugin)
                 {
                     continue;
                 }
@@ -207,7 +157,7 @@ public sealed class SlotChainManager : IDisposable
                 var slots = node.Slots;
                 if (slots.Count == 0)
                 {
-                    // Пустой шине слоты не нужны — состояние выгружаем сразу.
+                    // Узлу без слотов состояние не нужно — выгружаем сразу.
                     if (_states.Remove(node.Id, out var emptyState))
                     {
                         CollectDropped(emptyState, emptyDropped);
@@ -365,7 +315,21 @@ public sealed class SlotChainManager : IDisposable
             _paused.Clear();
         }
 
-        Retry(pending);
+        // Выгрузка синхронна: Dispose менеджера — конец жизненного цикла
+        // (движок останавливается раньше), а ждать RT-покой бессмысленно.
+        // Важно для сирот: процессы-исполнители обязаны умереть к выходу
+        // (шатдаун приложения, завершение теста).
+        foreach (var instance in pending)
+        {
+            try
+            {
+                instance?.Dispose();
+            }
+            catch
+            {
+                // Ошибка деструктора плагина не должна валить завершение.
+            }
+        }
     }
 
     /// <summary>Снимает state живых плагинов в модель (вызывается перед сохранением
@@ -756,11 +720,8 @@ public sealed class SlotChainManager : IDisposable
 
                 try
                 {
-                    // Узел-плагин (S-волна) — всегда процесс-исполнитель;
-                    // шина (легаси) — прежняя in-process фабрика.
-                    instance = item.IsPluginNode
-                        ? _bridgeFactory(item.Id, item.Slots[i])
-                        : _factory(item.Slots[i]);
+                    // S5: слоты всегда исполняются в отдельном процессе.
+                    instance = _bridgeFactory(item.Id, item.Slots[i]);
 
                     var state = item.Slots[i].State ?? inherited;
                     if (state is not null)

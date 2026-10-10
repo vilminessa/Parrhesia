@@ -1086,8 +1086,8 @@ public partial class GraphView : UserControl
             NodeMuteBox.IsChecked = node.Mute;
             NodeSoloBox.IsChecked = node.Solo;
 
-            // Слоты эффектов — у шин (легаси) и узлов-плагинов (S-волна).
-            var hasSlots = node.Kind is NodeKind.Bus or NodeKind.Plugin;
+            // Слоты эффектов (S5) — только у узлов-плагинов.
+            var hasSlots = node.Kind == NodeKind.Plugin;
             SlotsSection.Visibility = hasSlots ? Visibility.Visible : Visibility.Collapsed;
             if (hasSlots)
             {
@@ -1543,7 +1543,7 @@ public partial class GraphView : UserControl
 
         if (_selectedNode is not { } element ||
             _graph.FindNode(element.Node.Id) is not { } node ||
-            node.Kind is not (NodeKind.Bus or NodeKind.Plugin))
+            node.Kind != NodeKind.Plugin)
         {
             return;
         }

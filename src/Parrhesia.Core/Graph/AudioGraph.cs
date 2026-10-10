@@ -644,12 +644,12 @@ public sealed class AudioGraph
         Raise(GraphChangeKind.NodeChanged, node: node);
     }
 
-    // ===== Слоты-вставки эффектов (только шины) =====
+    // ===== Слоты-вставки эффектов (только узлы-плагины) =====
 
     /// <summary>
     /// Добавляет слот-вставку в конец цепочки обработки узла. Слоты доступны
-    /// шинам (легаси-путь) и узлам-плагинам (S-волна) — вставка гонит
-    /// суммарный сигнал узла.
+    /// только узлам-плагинам (S5: единый механизм — отдельный процесс);
+    /// шина со слотами из старых профилей мигрируется при загрузке.
     /// </summary>
     public void AddSlot(Guid nodeId, PluginSlot slot)
     {
@@ -734,10 +734,12 @@ public sealed class AudioGraph
     private AudioNode FindSlotNode(Guid id)
     {
         var node = FindNode(id) ?? throw new ArgumentException($"Узел {id:N} не найден.", nameof(id));
-        if (node.Kind is not (NodeKind.Bus or NodeKind.Plugin))
+        if (node.Kind != NodeKind.Plugin)
         {
+            // S5: слоты-вставки живут только на узлах-плагинах (единый
+            // механизм исполнения в отдельном процессе); шины их не берут.
             throw new ArgumentException(
-                $"Слоты эффектов доступны у шин и узлов-плагинов (узел «{node.Name}» — {node.Kind}).",
+                $"Слоты эффектов доступны только у узлов-плагинов (узел «{node.Name}» — {node.Kind}).",
                 nameof(id));
         }
 

@@ -41,6 +41,18 @@ public class PluginNodeTests
     }
 
     [Fact]
+    public void AddSlot_OnBus_Throws_S5()
+    {
+        // S5: слоты живут только на узлах-плагинах — шина их не принимает
+        // (старые профили с шиной+слотом мигрируются при загрузке).
+        var graph = new AudioGraph();
+        var bus = graph.AddNode("Шина", NodeKind.Bus);
+
+        Assert.Throws<ArgumentException>(() =>
+            graph.AddSlot(bus.Id, new PluginSlot { Path = "x.vst3", PluginId = "abc", Name = "X" }));
+    }
+
+    [Fact]
     public void Routes_InAndOut_AreValid()
     {
         var graph = new AudioGraph();

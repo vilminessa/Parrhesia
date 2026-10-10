@@ -17,18 +17,18 @@ public class SlotChainManagerTests
     {
         var graph = new AudioGraph();
         var source = graph.AddNode("Вход", NodeKind.Source);
-        var bus = graph.AddNode("Шина", NodeKind.Bus);
+        var node = graph.AddNode("Обработка", NodeKind.Plugin);
         var sink = graph.AddNode("Выход", NodeKind.Sink);
         graph.AddRoute(source.Id, sink.Id, out _);
-        graph.AddRoute(source.Id, bus.Id, out _);
-        graph.AddRoute(bus.Id, sink.Id, out _);
+        graph.AddRoute(source.Id, node.Id, out _);
+        graph.AddRoute(node.Id, sink.Id, out _);
 
         using var processor = new GraphProcessor(graph);
         processor.SetInput(source.Id, new ConstantInput(0.5f));
         var factory = new FakeFactory();
-        using var manager = new SlotChainManager(graph, processor, factory.Create);
+        using var manager = new SlotChainManager(graph, processor, bridgeFactory: (_, slot) => factory.Create(slot));
 
-        graph.AddSlot(bus.Id, new PluginSlot { Path = "a.clap", PluginId = "a", Name = "A" });
+        graph.AddSlot(node.Id, new PluginSlot { Path = "a.clap", PluginId = "a", Name = "A" });
         await manager.SyncTask;
 
         Assert.Equal(1, factory.Created);
@@ -40,22 +40,22 @@ public class SlotChainManagerTests
     [Fact]
     public async Task ToggleEnabled_ReusesInstanceWithoutReload()
     {
-        var (graph, source, bus, sink) = BuildGraph();
+        var (graph, source, node, sink) = BuildGraph();
         using var processor = new GraphProcessor(graph);
         processor.SetInput(source.Id, new ConstantInput(0.5f));
         var factory = new FakeFactory();
-        using var manager = new SlotChainManager(graph, processor, factory.Create);
-        graph.AddSlot(bus.Id, new PluginSlot { Path = "a.clap", PluginId = "a" });
+        using var manager = new SlotChainManager(graph, processor, bridgeFactory: (_, slot) => factory.Create(slot));
+        graph.AddSlot(node.Id, new PluginSlot { Path = "a.clap", PluginId = "a" });
         await manager.SyncTask;
 
-        graph.SetSlotEnabled(bus.Id, 0, false);
+        graph.SetSlotEnabled(node.Id, 0, false);
         await manager.SyncTask;
 
         Assert.Equal(1, factory.Created); // переключение Enabled не перезагружает DLL
         // Слот выключен: сухая0,5 + влажная0,5 =1,0.
         Assert.Equal(1.0f, Process(processor, sink.Id)[0], 3);
 
-        graph.SetSlotEnabled(bus.Id, 0, true);
+        graph.SetSlotEnabled(node.Id, 0, true);
         await manager.SyncTask;
         Assert.Equal(1, factory.Created);
         // Слот включён: сухая0,5 + влажная (0,5×2) =1,5.
@@ -68,22 +68,22 @@ public class SlotChainManagerTests
         // Регрессия P-волны: публикация цепочки БЕЗ disabled-слота раньше
         // вела к отложенной выгрузке живого экземпляра — re-enable работал
         // на освобождённой памяти (AV в рантайме).
-        var (graph, source, bus, sink) = BuildGraph();
+        var (graph, source, node, sink) = BuildGraph();
         using var processor = new GraphProcessor(graph);
         processor.SetInput(source.Id, new ConstantInput(0.5f));
         var factory = new FakeFactory();
-        using var manager = new SlotChainManager(graph, processor, factory.Create);
-        graph.AddSlot(bus.Id, new PluginSlot { Path = "a.clap", PluginId = "a" });
+        using var manager = new SlotChainManager(graph, processor, bridgeFactory: (_, slot) => factory.Create(slot));
+        graph.AddSlot(node.Id, new PluginSlot { Path = "a.clap", PluginId = "a" });
         await manager.SyncTask;
 
-        graph.SetSlotEnabled(bus.Id, 0, false);
+        graph.SetSlotEnabled(node.Id, 0, false);
         await manager.SyncTask;
         await Task.Delay(700); // прежний баг: dispose через «греc-таймер»
 
         var instance = factory.Instances[0];
         Assert.False(instance.Disposed);
 
-        graph.SetSlotEnabled(bus.Id, 0, true);
+        graph.SetSlotEnabled(node.Id, 0, true);
         await manager.SyncTask;
 
         Assert.Same(instance, factory.Instances[0]);
@@ -93,17 +93,17 @@ public class SlotChainManagerTests
     [Fact]
     public async Task ChangingPath_ReloadsAndDisposesOldDeferred()
     {
-        var (graph, _, bus, _) = BuildGraph();
+        var (graph, _, node, _) = BuildGraph();
         using var processor = new GraphProcessor(graph);
         var factory = new FakeFactory();
-        using var manager = new SlotChainManager(graph, processor, factory.Create);
-        graph.AddSlot(bus.Id, new PluginSlot { Path = "a.clap", PluginId = "a" });
+        using var manager = new SlotChainManager(graph, processor, bridgeFactory: (_, slot) => factory.Create(slot));
+        graph.AddSlot(node.Id, new PluginSlot { Path = "a.clap", PluginId = "a" });
         await manager.SyncTask;
 
         var first = factory.Instances[0];
 
-        graph.RemoveSlot(bus.Id, 0);
-        graph.AddSlot(bus.Id, new PluginSlot { Path = "b.clap", PluginId = "b" });
+        graph.RemoveSlot(node.Id, 0);
+        graph.AddSlot(node.Id, new PluginSlot { Path = "b.clap", PluginId = "b" });
         await manager.SyncTask;
 
         Assert.Equal(2, factory.Created);
@@ -117,15 +117,15 @@ public class SlotChainManagerTests
     [Fact]
     public async Task LoadFailure_CollectsErrorAndKeepsPassthrough()
     {
-        var (graph, source, bus, sink) = BuildGraph();
+        var (graph, source, node, sink) = BuildGraph();
         using var processor = new GraphProcessor(graph);
         processor.SetInput(source.Id, new ConstantInput(0.5f));
         using var manager = new SlotChainManager(
             graph,
             processor,
-            _ => throw new PluginLoadException("нет модуля"));
+            bridgeFactory: (_, _) => throw new PluginLoadException("нет модуля"));
 
-        graph.AddSlot(bus.Id, new PluginSlot { Path = "битый.clap", PluginId = "x", Name = "Битый" });
+        graph.AddSlot(node.Id, new PluginSlot { Path = "битый.clap", PluginId = "x", Name = "Битый" });
         await manager.SyncTask;
 
         Assert.Single(manager.LastErrors);
@@ -137,11 +137,11 @@ public class SlotChainManagerTests
     [Fact]
     public async Task Prepare_PropagatesFormatToInstances()
     {
-        var (graph, _, bus, _) = BuildGraph();
+        var (graph, _, node, _) = BuildGraph();
         using var processor = new GraphProcessor(graph);
         var factory = new FakeFactory();
-        using var manager = new SlotChainManager(graph, processor, factory.Create);
-        graph.AddSlot(bus.Id, new PluginSlot { Path = "a.clap", PluginId = "a" });
+        using var manager = new SlotChainManager(graph, processor, bridgeFactory: (_, slot) => factory.Create(slot));
+        graph.AddSlot(node.Id, new PluginSlot { Path = "a.clap", PluginId = "a" });
         await manager.SyncTask;
 
         manager.Prepare(44100, 4410, 2);
@@ -158,14 +158,14 @@ public class SlotChainManagerTests
         // Регрессия: SetSlotChain при каждом Changed публикует новый массив
         // с ТЕМИ ЖЕ инстансами — выгрузка старого массива целиком убивала
         // бы плагины через500 мс после любой правки гейна.
-        var (graph, _, bus, _) = BuildGraph();
+        var (graph, _, node, _) = BuildGraph();
         using var processor = new GraphProcessor(graph);
         var factory = new FakeFactory();
-        using var manager = new SlotChainManager(graph, processor, factory.Create);
-        graph.AddSlot(bus.Id, new PluginSlot { Path = "a.clap", PluginId = "a" });
+        using var manager = new SlotChainManager(graph, processor, bridgeFactory: (_, slot) => factory.Create(slot));
+        graph.AddSlot(node.Id, new PluginSlot { Path = "a.clap", PluginId = "a" });
         await manager.SyncTask;
 
-        graph.SetNodeGain(bus.Id, 0.5f); // безобидная правка → Changed → ре-публикация
+        graph.SetNodeGain(node.Id, 0.5f); // безобидная правка → Changed → ре-публикация
         await manager.SyncTask;
 
         await Task.Delay(700);
@@ -175,11 +175,11 @@ public class SlotChainManagerTests
     [Fact]
     public async Task CollectStates_WritesPluginStateIntoModel()
     {
-        var (graph, _, bus, _) = BuildGraph();
+        var (graph, _, node, _) = BuildGraph();
         using var processor = new GraphProcessor(graph);
         var factory = new FakeFactory { State = [7, 7, 7] };
-        using var manager = new SlotChainManager(graph, processor, factory.Create);
-        graph.AddSlot(bus.Id, new PluginSlot { Path = "a.clap", PluginId = "a" });
+        using var manager = new SlotChainManager(graph, processor, bridgeFactory: (_, slot) => factory.Create(slot));
+        graph.AddSlot(node.Id, new PluginSlot { Path = "a.clap", PluginId = "a" });
         await manager.SyncTask;
 
         var changes = 0;
@@ -187,7 +187,7 @@ public class SlotChainManagerTests
         graph.Changed += Count;
 
         manager.CollectStates();
-        Assert.Equal(new byte[] { 7, 7, 7 }, bus.Slots[0].State);
+        Assert.Equal(new byte[] { 7, 7, 7 }, node.Slots[0].State);
 
         // Повторный снимок с теми же байтами — без новых событий Changed.
         var before = changes;
@@ -200,11 +200,11 @@ public class SlotChainManagerTests
     {
         // Переключение профилей (ReplaceWith сохраняет id узлов) не должно
         // перезагружать плагины при совпадении path/id.
-        var (graph, _, bus, _) = BuildGraph();
+        var (graph, _, node, _) = BuildGraph();
         using var processor = new GraphProcessor(graph);
         var factory = new FakeFactory();
-        using var manager = new SlotChainManager(graph, processor, factory.Create);
-        graph.AddSlot(bus.Id, new PluginSlot { Path = "a.clap", PluginId = "a" });
+        using var manager = new SlotChainManager(graph, processor, bridgeFactory: (_, slot) => factory.Create(slot));
+        graph.AddSlot(node.Id, new PluginSlot { Path = "a.clap", PluginId = "a" });
         await manager.SyncTask;
 
         var copy = new AudioGraph();
@@ -220,13 +220,13 @@ public class SlotChainManagerTests
     {
         // UI-поток: клик «+ слот» не должен ждать dlopen (секунды у реальных
         // VST3) — загрузка уходит в фон (P-волна «зависание»).
-        var (graph, _, bus, _) = BuildGraph();
+        var (graph, _, node, _) = BuildGraph();
         using var processor = new GraphProcessor(graph);
         var factory = new FakeFactory { CreateDelayMs = 300 };
-        using var manager = new SlotChainManager(graph, processor, factory.Create);
+        using var manager = new SlotChainManager(graph, processor, bridgeFactory: (_, slot) => factory.Create(slot));
 
         var stopwatch = Stopwatch.StartNew();
-        graph.AddSlot(bus.Id, new PluginSlot { Path = "медленный.vst3", PluginId = "slow" });
+        graph.AddSlot(node.Id, new PluginSlot { Path = "медленный.vst3", PluginId = "slow" });
         var elapsed = stopwatch.ElapsedMilliseconds;
 
         Assert.True(elapsed < 250, $"AddSlot занял {elapsed} мс — загрузка на вызывающем потоке");
@@ -239,12 +239,12 @@ public class SlotChainManagerTests
     {
         // VST3-контракт: getState параллельно с process — data race, роняющая
         // рантайм. Пауза цепочки перед снимком исключает пересечение.
-        var (graph, source, bus, sink) = BuildGraph();
+        var (graph, source, node, sink) = BuildGraph();
         using var processor = new GraphProcessor(graph);
         processor.SetInput(source.Id, new ConstantInput(0.5f));
         var factory = new FakeFactory { Racing = true };
-        using var manager = new SlotChainManager(graph, processor, factory.Create);
-        graph.AddSlot(bus.Id, new PluginSlot { Path = "a.clap", PluginId = "a" });
+        using var manager = new SlotChainManager(graph, processor, bridgeFactory: (_, slot) => factory.Create(slot));
+        graph.AddSlot(node.Id, new PluginSlot { Path = "a.clap", PluginId = "a" });
         await manager.SyncTask;
 
         var pumping = true;
@@ -298,27 +298,16 @@ public class SlotChainManagerTests
         Assert.Equal(1.0f, Process(processor, sink.Id)[0], 3);
     }
 
-    [Theory]
-    [InlineData("C4A8E5D10123456789ABCDEF01234567", true)]
-    [InlineData("c4ae5d10123456789abcdef012345678", true)]
-    [InlineData("C4AE5D10-1234-5678-9ABC-DEF01234567", false)] // с дефисами (36)
-    [InlineData("C:\\Program Files\\Common Files\\VST3\\Clear.vst3", false)] // мусорный pluginId из профиля
-    [InlineData("", false)]
-    public void LooksLikeClassId_RecognizesVst3Uids(string value, bool expected)
-    {
-        Assert.Equal(expected, SlotChainManager.LooksLikeClassId(value));
-    }
-
-    private static (AudioGraph Graph, AudioNode Source, AudioNode Bus, AudioNode Sink) BuildGraph()
+    private static (AudioGraph Graph, AudioNode Source, AudioNode Node, AudioNode Sink) BuildGraph()
     {
         var graph = new AudioGraph();
         var source = graph.AddNode("Вход", NodeKind.Source);
-        var bus = graph.AddNode("Шина", NodeKind.Bus);
+        var node = graph.AddNode("Обработка", NodeKind.Plugin);
         var sink = graph.AddNode("Выход", NodeKind.Sink);
         graph.AddRoute(source.Id, sink.Id, out _);
-        graph.AddRoute(source.Id, bus.Id, out _);
-        graph.AddRoute(bus.Id, sink.Id, out _);
-        return (graph, source, bus, sink);
+        graph.AddRoute(source.Id, node.Id, out _);
+        graph.AddRoute(node.Id, sink.Id, out _);
+        return (graph, source, node, sink);
     }
 
     private static float[] Process(GraphProcessor processor, Guid sinkId, int frames = 8)
@@ -376,7 +365,7 @@ public class SlotChainManagerTests
 
     private sealed class FakePlugin(string path) : IAudioPlugin
     {
-        private int _busy;
+        private int _nodey;
 
         public string Name => path;
         public int LatencySamples => 0;
@@ -402,9 +391,9 @@ public class SlotChainManagerTests
         {
             if (RaceWatch)
             {
-                Interlocked.Increment(ref _busy);
+                Interlocked.Increment(ref _nodey);
                 Thread.Sleep(1); // имитация работы плагина внутри process
-                Interlocked.Decrement(ref _busy);
+                Interlocked.Decrement(ref _nodey);
             }
 
             for (var i = 0; i < interleaved.Length; i++)
@@ -415,7 +404,7 @@ public class SlotChainManagerTests
 
         public byte[]? GetState()
         {
-            if (RaceWatch && Volatile.Read(ref _busy) != 0)
+            if (RaceWatch && Volatile.Read(ref _nodey) != 0)
             {
                 OverlapDetected = true;
             }

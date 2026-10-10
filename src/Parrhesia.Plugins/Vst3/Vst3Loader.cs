@@ -10,6 +10,28 @@ namespace Parrhesia.Plugins.Vst3;
 /// </summary>
 public static class Vst3Loader
 {
+    /// <summary>
+    /// VST3 class id — ровно32 hex-символа (без дефисов). false — мусорный
+    /// pluginId (в старых профилях в это поле сохранялся путь файла).
+    /// </summary>
+    public static bool LooksLikeClassId(string value)
+    {
+        if (value.Length != 32)
+        {
+            return false;
+        }
+
+        foreach (var character in value)
+        {
+            if (!Uri.IsHexDigit(character))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     /// <summary>Перечисляет аудио-классы модуля. Ошибки → PluginLoadException.</summary>
     public static IReadOnlyList<PluginDescriptor> Enumerate(string path)
     {

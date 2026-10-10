@@ -172,9 +172,11 @@ public static class GraphSerializer
 
             if (nodeDocument.Slots is { Count: > 0 })
             {
+                // Bus — только для чтения старых профилей: миграция выше
+                // превращает такую шину в узел-плагин (новые записи — только Plugin).
                 if (nodeDocument.Kind is not (NodeKind.Bus or NodeKind.Plugin))
                 {
-                    error = $"Узел «{nodeDocument.Name}»: слоты эффектов возможны только у шин и узлов-плагинов.";
+                    error = $"Узел «{nodeDocument.Name}»: слоты эффектов возможны только у узлов-плагинов.";
                     return false;
                 }
 
@@ -418,7 +420,8 @@ public static class GraphSerializer
         /// <summary>Колонка эффектов открыта; null/false — обычный пульт.</summary>
         public bool? FxExpanded { get; set; }
 
-        /// <summary>Слоты-вставки эффектов (шины — легаси, узлы-плагины — S-волна); null — слотов нет.</summary>
+        /// <summary>Слоты-вставки эффектов (только узлы-плагины; шина со слотами в старых
+        /// профилях мигрируется в узел-плагин при загрузке); null — слотов нет.</summary>
         public List<SlotDocument>? Slots { get; set; }
     }
 

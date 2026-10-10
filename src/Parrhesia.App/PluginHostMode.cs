@@ -252,30 +252,12 @@ internal static class PluginHostMode
     /// </summary>
     private static IAudioPlugin LoadVst3(PluginNodeSpec spec)
     {
-        var classId = LooksLikeClassId(spec.PluginId)
+        var classId = Vst3Loader.LooksLikeClassId(spec.PluginId)
             ? spec.PluginId
             : Vst3Loader.Enumerate(spec.Path).FirstOrDefault()?.PluginId
               ?? throw new PluginLoadException($"VST3: в модуле нет аудио-классов ({spec.Path})");
 
         return Vst3Loader.Load(spec.Path, classId);
-    }
-
-    private static bool LooksLikeClassId(string value)
-    {
-        if (value.Length != 32)
-        {
-            return false;
-        }
-
-        foreach (var character in value)
-        {
-            if (!Uri.IsHexDigit(character))
-            {
-                return false;
-            }
-        }
-
-        return true;
     }
 
     /// <summary>Bench-бэкенд ×2: детерминированная обработка для тестов моста.</summary>
