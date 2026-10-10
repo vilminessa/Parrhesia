@@ -624,7 +624,9 @@ public partial class MixerView : UserControl
             MessageBoxImage.Question);
         if (answer == MessageBoxResult.Yes)
         {
+            UndoService.StoreDeletedNode(AppServices.Graph, strip.Node.Id);
             AppServices.Graph.RemoveNode(strip.Node.Id);
+            Toast.Show($"«{strip.Node.Name}» удалён — Ctrl+Z вернёт");
         }
     }
 

@@ -1,6 +1,7 @@
 ﻿using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using Parrhesia.App.Views;
 
 namespace Parrhesia.App;
@@ -15,6 +16,32 @@ public partial class MainWindow
         UpdateBackdrop();
         Themes.ThemeManager.ThemeChanged += UpdateBackdrop;
         SelectStartupTab();
+        PreviewKeyDown += OnUndoPreviewKeyDown;
+    }
+
+    /// <summary>Ctrl+Z (U2): возвращает последнее удаление (узел с кабелями либо кабель).</summary>
+    private void OnUndoPreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Z || Keyboard.Modifiers != ModifierKeys.Control)
+        {
+            return;
+        }
+
+        System.Diagnostics.Trace.WriteLine(
+            $"[Parrhesia][Undo] перехвачен Ctrl+Z, source={e.OriginalSource?.GetType().Name}");
+
+        // Не воруем Ctrl+Z у текстовых полей (у них собственный undo).
+        if (e.OriginalSource is TextBox)
+        {
+            return;
+        }
+
+        var description = UndoService.PeekDescription();
+        if (description is not null && UndoService.TryUndo(AppServices.Graph))
+        {
+            Toast.Show($"Возвращено: {description}");
+            e.Handled = true;
+        }
     }
 
     /// <summary>Кросс-навигация (U1): вкладка «Схема» — центр и фокус на узле.</summary>

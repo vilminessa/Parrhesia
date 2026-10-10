@@ -19,6 +19,12 @@ internal sealed class CableLayer : FrameworkElement
     private static readonly Brush TempBrush = ResolveBrush("Brush.Cyan", "#FF35D0C8");
     private static readonly Pen InvalidTempPen = CreateDashPen(ResolveBrush("Brush.Danger", "#FFFF5A52"));
 
+    /// <summary>Порог «кабель живёт» (U2): |сигнал| источника выше — жила подсвечивается.</summary>
+    private const float HotThreshold = 0.01f;
+
+    /// <summary>Пик узла-источника маршрута (U2: видно, где реально идёт звук).</summary>
+    public Func<Guid, float>? GetPeak { get; set; }
+
     public CableLayer()
     {
         IsHitTestVisible = false;
@@ -221,7 +227,15 @@ internal sealed class CableLayer : FrameworkElement
                     continue;
                 }
 
-                DrawRoute(dc, route, route.Enabled ? CableBrush : DisabledBrush, 1.75);
+                if (route.Enabled && (GetPeak?.Invoke(route.FromId) ?? 0f) > HotThreshold)
+                {
+                    // U2: по кабелю реально идёт звук — подсвечиваем (cyan, жирнее).
+                    DrawRoute(dc, route, TempBrush, 2.25);
+                }
+                else
+                {
+                    DrawRoute(dc, route, route.Enabled ? CableBrush : DisabledBrush, 1.75);
+                }
             }
 
             if (SelectedRoute is not null)

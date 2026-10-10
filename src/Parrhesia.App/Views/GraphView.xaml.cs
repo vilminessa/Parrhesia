@@ -103,6 +103,7 @@ public partial class GraphView : UserControl
                 _elements.TryGetValue(id, out var element) ? element.OutputPortCenter(channel) : null,
             GetInputPoint = (id, channel) =>
                 _elements.TryGetValue(id, out var element) ? element.InputPortCenter(channel) : null,
+            GetPeak = id => _peaks.GetValueOrDefault(id),
         };
         World.Children.Add(_cableLayer);
 
@@ -310,11 +311,13 @@ public partial class GraphView : UserControl
                 }
                 else
                 {
+                    UndoService.StoreDeletedRoute(_graph, route.FromId, route.ToId);
                     _graph.RemoveRoute(route.FromId, route.ToId);
                 }
             }
             else if (_selectedNode is { } node)
             {
+                UndoService.StoreDeletedNode(_graph, node.Node.Id);
                 _graph.RemoveNode(node.Node.Id);
             }
 
@@ -704,10 +707,34 @@ public partial class GraphView : UserControl
         else
         {
             ClearSelection();
+            if (UndoService.HasBuffer)
+            {
+                ShowCanvasContextMenu(); // «Отменить удаление» (U2)
+            }
+
             return;
         }
 
         e.Handled = true;
+    }
+
+    /// <summary>Меню пустого холста (U2): отмена последнего удаления.</summary>
+    private void ShowCanvasContextMenu()
+    {
+        var menu = CreateContextMenu();
+
+        var undo = new MenuItem { Header = "Отменить удаление (Ctrl+Z)" };
+        undo.Click += (_, _) =>
+        {
+            var description = UndoService.PeekDescription();
+            if (UndoService.TryUndo(_graph))
+            {
+                Toast.Show($"Возвращено: {description}");
+            }
+        };
+
+        menu.Items.Add(undo);
+        OpenContextMenu(menu);
     }
 
     private static (int FromChannel, int ToChannel)? PairOf(CableLayer.WireHit hit) =>
@@ -729,6 +756,7 @@ public partial class GraphView : UserControl
         {
             if (_selectedNode is { } element)
             {
+                UndoService.StoreDeletedNode(_graph, element.Node.Id);
                 _graph.RemoveNode(element.Node.Id);
             }
         };
@@ -748,7 +776,11 @@ public partial class GraphView : UserControl
             _graph.SetRouteEnabled(route.FromId, route.ToId, !route.Enabled);
 
         var delete = new MenuItem { Header = "Удалить кабель" };
-        delete.Click += (_, _) => _graph.RemoveRoute(route.FromId, route.ToId);
+        delete.Click += (_, _) =>
+        {
+            UndoService.StoreDeletedRoute(_graph, route.FromId, route.ToId);
+            _graph.RemoveRoute(route.FromId, route.ToId);
+        };
 
         menu.Items.Add(toggle);
         menu.Items.Add(new Separator());
@@ -1004,11 +1036,28 @@ public partial class GraphView : UserControl
 
     private void OnRenderTick(double now, double dt)
     {
+        var anySignal = false;
         foreach (var element in _elements.Values)
         {
-            element.Meter.Value = NormalizePeak(AppServices.Engine.GetPeak(element.Node.Id));
+            var peak = AppServices.Engine.GetPeak(element.Node.Id);
+            element.Meter.Value = NormalizePeak(peak);
+            _peaks[element.Node.Id] = peak;
+            anySignal |= peak > 0.001f;
+        }
+
+        // Пик-подсветка кабелей (U2): перерисовываем слой только пока есть
+        // сигнал (в покое — без ложнейшей работы каждый кадр).
+        if (anySignal || _cableGlowActive)
+        {
+            _cableGlowActive = anySignal;
+            _cableLayer.InvalidateVisual();
         }
     }
+
+    /// <summary>Пики узлов (U2): питают подсветку кабелей слоем CableLayer.</summary>
+    private readonly Dictionary<Guid, float> _peaks = [];
+
+    private bool _cableGlowActive;
 
     private static float NormalizePeak(float peak)
     {
@@ -1301,6 +1350,8 @@ public partial class GraphView : UserControl
             row.Children.Add(BuildSlotButton("↑", "Выше", index > 0, (_, _) => MoveSlot(node, index, -1)));
             row.Children.Add(BuildSlotButton("↓", "Ниже", index < node.Slots.Count - 1, (_, _) => MoveSlot(node, index, +1)));
             row.Children.Add(BuildSlotButton("✕", "Убрать", true, (_, _) => RemoveSlot(node, index)));
+            row.Children.Add(BuildSlotButton("⇩", "Сохранить пресет слота в файл", true, (_, _) => ExportSlotPreset(node, index)));
+            row.Children.Add(BuildSlotButton("⇧", "Загрузить пресет слота из файла", true, (_, _) => ImportSlotPreset(node, index)));
             row.Children.Add(BuildSlotButton("✎", "Редактор плагина", true, (_, _) => OpenSlotEditor(node, index)));
             row.Children.Add(BuildSlotButton("⚙", "Параметры слота", true, (_, _) => ToggleSlotParams(node, index)));
 
@@ -1329,6 +1380,103 @@ public partial class GraphView : UserControl
         };
         button.Click += onClick;
         return button;
+    }
+
+    // ===== Пресеты слотов (U2): экспорт/импорт state в файл .parrfx =====
+
+    /// <summary>Экспорт состояния слота в файл: снимаем с живого плагина, иначе берём сохранённое.</summary>
+    private void ExportSlotPreset(AudioNode node, int index)
+    {
+        if (index < 0 || index >= node.Slots.Count)
+        {
+            return;
+        }
+
+        var slot = node.Slots[index];
+        var bytes = AppServices.Engine.GetSlotInstance(node.Id, index)?.GetState() ?? slot.State;
+        if (bytes is null || bytes.Length == 0)
+        {
+            Toast.Show($"«{slot.Name}»: состояние пусто — экспортировать нечего");
+            return;
+        }
+
+        var dialog = new Microsoft.Win32.SaveFileDialog
+        {
+            Title = $"Пресет «{slot.Name}»",
+            Filter = "Пресет Parrhesia (*.parrfx)|*.parrfx",
+            FileName = SanitizeFileName(slot.Name) + ".parrfx",
+        };
+        if (dialog.ShowDialog(Window.GetWindow(this)) != true)
+        {
+            return;
+        }
+
+        try
+        {
+            System.IO.File.WriteAllBytes(dialog.FileName, bytes);
+            Toast.Show($"Пресет сохранён: {System.IO.Path.GetFileName(dialog.FileName)}");
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(
+                Window.GetWindow(this), ex.Message, "Не удалось сохранить пресет",
+                MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    /// <summary>Импорт состояния слота: в модель (переживёт перезапуск) и в живой плагин сразу.</summary>
+    private void ImportSlotPreset(AudioNode node, int index)
+    {
+        if (index < 0 || index >= node.Slots.Count)
+        {
+            return;
+        }
+
+        var slot = node.Slots[index];
+        var dialog = new Microsoft.Win32.OpenFileDialog
+        {
+            Title = $"Пресет «{slot.Name}»",
+            Filter = "Пресет Parrhesia (*.parrfx)|*.parrfx",
+        };
+        if (dialog.ShowDialog(Window.GetWindow(this)) != true)
+        {
+            return;
+        }
+
+        try
+        {
+            var bytes = System.IO.File.ReadAllBytes(dialog.FileName);
+            _graph.SetSlotState(node.Id, index, bytes.Length == 0 ? null : bytes);
+
+            // Живой экземпляр принимает state немедленно (менеджер при
+            // identity-совпадении state сам не пересылает — это наша работа).
+            try
+            {
+                AppServices.Engine.GetSlotInstance(node.Id, index)?.SetState(bytes);
+            }
+            catch
+            {
+                // Плагин может отказаться от чужого state — модель уже сохранена.
+            }
+
+            Toast.Show($"Пресет загружен: {System.IO.Path.GetFileName(dialog.FileName)}");
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(
+                Window.GetWindow(this), ex.Message, "Не удалось загрузить пресет",
+                MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private static string SanitizeFileName(string name)
+    {
+        foreach (var c in System.IO.Path.GetInvalidFileNameChars())
+        {
+            name = name.Replace(c, '_');
+        }
+
+        return string.IsNullOrWhiteSpace(name) ? "preset" : name;
     }
 
     // ===== Параметры слота (IPluginParameters; секция под списком эффектов) =====
@@ -1969,6 +2117,7 @@ public partial class GraphView : UserControl
     {
         if (_selectedNode is { } element)
         {
+            UndoService.StoreDeletedNode(_graph, element.Node.Id);
             _graph.RemoveNode(element.Node.Id);
         }
     }
@@ -2032,6 +2181,7 @@ public partial class GraphView : UserControl
     {
         if (_selectedRoute is { } route)
         {
+            UndoService.StoreDeletedRoute(_graph, route.FromId, route.ToId);
             _graph.RemoveRoute(route.FromId, route.ToId);
         }
     }
