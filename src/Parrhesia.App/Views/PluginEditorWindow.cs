@@ -17,11 +17,15 @@ public sealed class PluginEditorWindow : Window
 {
     private readonly IPluginEditor _editor;
     private readonly NativeHostPanel _host;
+    private readonly object? _sync;
     private bool _opened;
 
-    public PluginEditorWindow(IPluginEditor editor, string title)
+    /// <param name="sync">Опциональный объект-лок (gate процесса-исполнителя,
+    /// S4b): Open/Close плагина под ним — не параллельно с process.</param>
+    public PluginEditorWindow(IPluginEditor editor, string title, object? sync = null)
     {
         _editor = editor;
+        _sync = sync;
         Title = "Редактор: " + title;
         Width = 440;
         Height = 240;
@@ -43,7 +47,11 @@ public sealed class PluginEditorWindow : Window
 
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
-        if (!_editor.SupportsEditor || !_editor.Open(_host.Handle))
+        var opened = _editor.SupportsEditor &&
+            (_sync is null
+                ? _editor.Open(_host.Handle)
+                : WithSync(() => _editor.Open(_host.Handle)));
+        if (!opened)
         {
             MessageBox.Show(
                 this,
@@ -71,12 +79,31 @@ public sealed class PluginEditorWindow : Window
         {
             try
             {
-                _editor.Close();
+                if (_sync is null)
+                {
+                    _editor.Close();
+                }
+                else
+                {
+                    WithSync(() =>
+                    {
+                        _editor.Close();
+                        return true;
+                    });
+                }
             }
             catch
             {
                 // Закрытие редактора не должно валить приложение.
             }
+        }
+    }
+
+    private T WithSync<T>(Func<T> action)
+    {
+        lock (_sync!)
+        {
+            return action();
         }
     }
 

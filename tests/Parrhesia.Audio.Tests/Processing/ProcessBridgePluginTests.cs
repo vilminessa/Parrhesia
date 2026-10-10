@@ -1,8 +1,11 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
+using System.Text;
 using Parrhesia.Audio.Processing;
 using Parrhesia.Core.Graph;
 using Parrhesia.Plugins;
 using Parrhesia.Plugins.Vst3;
+using Xunit.Abstractions;
 
 namespace Parrhesia.Audio.Tests.Processing;
 
@@ -17,6 +20,10 @@ namespace Parrhesia.Audio.Tests.Processing;
 public class ProcessBridgePluginTests
 {
     private const int BlockFrames = 480; //10мс @48кГц
+
+    private readonly ITestOutputHelper _output;
+
+    public ProcessBridgePluginTests(ITestOutputHelper output) => _output = output;
 
     [Fact]
     public void PluginNode_RealVst3_RunsInChildProcess_StateRoundTrips_ChildDiesOnDispose()
@@ -52,6 +59,11 @@ public class ProcessBridgePluginTests
         {
             // Prepare → Sync: спавн исполнителя идёт вне локов менеджера.
             manager.Prepare(48000, BlockFrames, 2);
+            foreach (var error in manager.LastErrors)
+            {
+                _output.WriteLine("ERR: " + error);
+            }
+
             Assert.Empty(manager.LastErrors);
 
             var bridge = Assert.IsType<ProcessBridgePlugin>(manager.GetSlotInstance(plugin.Id, 0));
@@ -70,6 +82,23 @@ public class ProcessBridgePluginTests
             Assert.NotNull(state);
             bridge.SetState(state);
             Assert.Equal(state, bridge.GetState());
+
+            // S4b: редактор открывается командой В ПРОЦЕССЕ-исполнителе —
+            // ждём реальное окно «Редактор: …» у процесса исполнителя.
+            var executorPid = bridge.ChildPid;
+            var editor = bridge.OpenEditor();
+            Assert.True(editor.Ok, editor.Error);
+
+            var editorDeadline = Environment.TickCount64 + 8_000;
+            while (!WindowWithTitleExists(executorPid, "Редактор:") &&
+                   Environment.TickCount64 < editorDeadline)
+            {
+                Thread.Sleep(100);
+            }
+
+            Assert.True(
+                WindowWithTitleExists(executorPid, "Редактор:"),
+                "окно редактора не появилось в процессе-исполнителе за8 с");
 
             // Прогрев: первые блоки идут dry (0,5), затем ребёнок отдаёт wet ×2 = 1,0.
             processor.SetInput(source.Id, new ConstantInput(0.5f));
@@ -359,6 +388,44 @@ public class ProcessBridgePluginTests
             return false; // процесса нет — значит, завершился
         }
     }
+
+    /// <summary>Есть ли окно процесса с заголовком-префиксом (S4b: «Редактор: …»).</summary>
+    private static bool WindowWithTitleExists(int pid, string prefix)
+    {
+        var found = false;
+        EnumWindows((hwnd, _) =>
+        {
+            GetWindowThreadProcessId(hwnd, out var windowPid);
+            if (windowPid != (uint)pid)
+            {
+                return true;
+            }
+
+            var title = new StringBuilder(256);
+            GetWindowText(hwnd, title, title.Capacity);
+            if (title.ToString().StartsWith(prefix, StringComparison.Ordinal))
+            {
+                found = true;
+                return false;
+            }
+
+            return true;
+        }, IntPtr.Zero);
+
+        return found;
+    }
+
+    private delegate bool EnumWindowsProc(IntPtr hwnd, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool EnumWindows(EnumWindowsProc callback, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint processId);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int GetWindowText(IntPtr hwnd, System.Text.StringBuilder text, int maxCount);
 
     private static void TryKill(int pid)
     {

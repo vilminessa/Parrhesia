@@ -121,6 +121,41 @@ public sealed class ProcessBridgePlugin : IAudioPlugin
     /// <summary>Принудительный рестарт: следующая сверка менеджера заменит исполнителя.</summary>
     public void ForceRestart() => Interlocked.Exchange(ref _forcedRestart, 1);
 
+    /// <summary>
+    /// Просит исполнителя открыть редактор плагина — окно показывается В ЕГО
+    /// процессе (S4b); хост не блокируется. Ok=false — причина в Error
+    /// (нет редактора/исполнитель не запущен).
+    /// </summary>
+    public NodeControlResponse OpenEditor()
+    {
+        lock (_lifecycle)
+        {
+            if (_disposed)
+            {
+                return new NodeControlResponse { Ok = false, Error = "узел удалён" };
+            }
+
+            if (!_ready)
+            {
+                return new NodeControlResponse
+                {
+                    Ok = false,
+                    Error = "исполнитель не запущен (ретрай с бэкоффом)",
+                };
+            }
+
+            try
+            {
+                return _control!.Request(
+                    new NodeControlRequest { Op = "openEditor" }, TimeSpan.FromSeconds(5));
+            }
+            catch (Exception ex)
+            {
+                return new NodeControlResponse { Ok = false, Error = ex.Message };
+            }
+        }
+    }
+
     public void SetState(byte[]? state)
     {
         lock (_lifecycle)

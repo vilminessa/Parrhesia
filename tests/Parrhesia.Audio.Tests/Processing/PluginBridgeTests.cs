@@ -180,6 +180,11 @@ public class PluginBridgeTests
             var latency = client.Request(new NodeControlRequest { Op = "latency" }, TimeSpan.FromSeconds(5));
             Assert.True(latency.Ok, latency.Error);
             Assert.Equal(0, latency.Value);
+
+            // S4b: у bench-бэкенда редактора нет — команда отвечает отказом.
+            var editor = client.Request(new NodeControlRequest { Op = "openEditor" }, TimeSpan.FromSeconds(5));
+            Assert.False(editor.Ok, "bench-бэкенд неожиданно имеет редактор");
+            Assert.False(string.IsNullOrEmpty(editor.Error));
         }
         finally
         {

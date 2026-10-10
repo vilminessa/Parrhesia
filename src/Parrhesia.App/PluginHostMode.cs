@@ -1,6 +1,8 @@
 using System.Diagnostics;
 using System.IO;
 using System.Text.Json;
+using System.Windows;
+using Parrhesia.App.Views;
 using Parrhesia.Core.Graph;
 using Parrhesia.Plugins;
 using Parrhesia.Plugins.Bridge;
@@ -13,71 +15,98 @@ namespace Parrhesia.App;
 /// Режим-исполнитель плагина (S-волна): дочерний процесс крутит один
 /// аудио-узел через мост <see cref="PluginBridge"/>. Крэш/зависание такого
 /// процесса не касается приложения — узел просто умирает.
-/// Два режима: bench (аргумент-число — имитация ×2, для тестов моста) и
-/// spec (путь к JSON — реальный VST3/CLAP, единый механизм для всех плагинов).
+/// Два режима: bench (<see cref="RunBench"/> — имитация ×2, тесты моста,
+/// процесс живёт синхронно) и spec (<see cref="RunExecutor"/> — реальный
+/// VST3/CLAP; аудио-цикл в фоне, WPF-цикл остаётся для окон редактора —
+/// S4b: GUI плагина живёт В ЭТОМ процессе).
 /// Управляющий канал (<see cref="NodeControlServer"/>) поднимается в обоих:
-/// state/params-запросы хоста идут без остановки аудио-цикла.
+/// state/params/openEditor идут без остановки аудио-цикла.
 /// </summary>
 internal static class PluginHostMode
 {
     /// <summary>
-    /// Цикл: ждёт кик → вход → обработка → выход. Возвращает код выхода
-    /// (0 — штатно; не 0 — хост увидит смерть по exit+heartbeat).
+    /// Bench-режим: синхронный цикл «кик → вход → ×2 → выход» (не возвращается;
+    /// завершает процесс убийство родителем). Код0 — штатно (теоретически).
     /// </summary>
-    /// <param name="nodeIdHex">32-hex id узла (guid "N").</param>
-    /// <param name="maxBlockFrames">Максимум кадров в блоке (как у хоста).</param>
-    /// <param name="modeArg">Число — bench-задержка мс; путь — spec-файл узла.</param>
-    public static int Run(string nodeIdHex, int maxBlockFrames, string modeArg)
+    public static int RunBench(string nodeIdHex, int maxBlockFrames, int sleepMs)
     {
-        if (!Guid.TryParseExact(nodeIdHex, "N", out var nodeId))
+        if (!TryParseNode(nodeIdHex, maxBlockFrames, out var nodeId))
+        {
+            return (2);
+        }
+
+        using var child = new PluginBridge.ChildSide(nodeId, maxBlockFrames, TimeSpan.FromSeconds(5));
+        var gate = new object();
+        var plugin = new BenchPlugin(sleepMs);
+
+        StartControl(nodeId, plugin, gate);
+        child.MarkReady();
+        return ExecuteLoop(child, plugin, gate, maxBlockFrames);
+    }
+
+    /// <summary>
+    /// Спец-режим (spec-файл): загрузка реального VST3/CLAP, ready-флаг,
+    /// control-канал — в фоновой задаче; возвращает сразу. Приложение живёт
+    /// дальше (без главного окна), чтобы WPF-цикл показывал окна редакторов.
+    /// Фатальная ошибка до ready — код3 (хост увидит смерть).
+    /// </summary>
+    public static void RunExecutor(string nodeIdHex, int maxBlockFrames, string specPath)
+    {
+        if (!Guid.TryParseExact(nodeIdHex, "N", out var nodeId) || maxBlockFrames <= 0)
+        {
+            Console.Error.WriteLine("--plugin-host: некорректные аргументы");
+            Environment.Exit(2);
+            return;
+        }
+
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                using var child = new PluginBridge.ChildSide(
+                    nodeId, maxBlockFrames, TimeSpan.FromSeconds(5));
+                var gate = new object();
+
+                var (plugin, sampleRate) = LoadSpec(specPath);
+                plugin.Prepare(sampleRate, maxBlockFrames, PluginBridge.Channels);
+
+                StartControl(nodeId, plugin, gate);
+                child.MarkReady();
+                ExecuteLoop(child, plugin, gate, maxBlockFrames);
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"--plugin-host: {ex.Message}");
+                Environment.Exit(3);
+            }
+        });
+    }
+
+    private static bool TryParseNode(string nodeIdHex, int maxBlockFrames, out Guid nodeId)
+    {
+        nodeId = default;
+        if (!Guid.TryParseExact(nodeIdHex, "N", out nodeId))
         {
             Console.Error.WriteLine("--plugin-host: некорректный id узла");
-            return (2);
+            return false;
         }
 
         if (maxBlockFrames <= 0)
         {
             Console.Error.WriteLine("--plugin-host: некорректный размер блока");
-            return (2);
+            return false;
         }
 
-        using var child = new PluginBridge.ChildSide(nodeId, maxBlockFrames, TimeSpan.FromSeconds(5));
+        return true;
+    }
 
-        // Доступ к плагину сериализуется: control-поток (state) ↔ аудио-цикл (process) —
-        // VST3/CLAP-контракт запрещает getState параллельно с process.
-        var gate = new object();
-        IAudioPlugin? plugin = null;
-        var sampleRate = 48000; // bench-дефолт; spec задаёт свою скорость
-        try
-        {
-            if (int.TryParse(modeArg, out var sleepMs))
-            {
-                plugin = new BenchPlugin(sleepMs); // ×2 (тесты моста)
-            }
-            else
-            {
-                (plugin, sampleRate) = LoadSpec(modeArg);
-            }
-
-            plugin.Prepare(sampleRate, maxBlockFrames, PluginBridge.Channels);
-        }
-        catch (Exception ex)
-        {
-            Console.Error.WriteLine($"--plugin-host: загрузка не удалась: {ex.Message}");
-            return (3);
-        }
-
-        using var control = new NodeControlServer(NodeControl.PipeName(nodeId), request =>
-        {
-            lock (gate)
-            {
-                return HandleControl(plugin!, request);
-            }
-        });
-        control.Start();
-
-        child.MarkReady();
-
+    /// <summary>Цикл: ждёт кик → вход → обработка (под gate) → выход. Не возвращается.</summary>
+    private static int ExecuteLoop(
+        PluginBridge.ChildSide child,
+        IAudioPlugin plugin,
+        object gate,
+        int maxBlockFrames)
+    {
         var channels = PluginBridge.Channels;
         var input = new float[maxBlockFrames * channels];
         var output = new float[maxBlockFrames * channels];
@@ -114,6 +143,89 @@ internal static class PluginHostMode
             child.PublishOutput(output);
         }
     }
+
+    /// <summary>Поднимает управляющий канал (state/params/openEditor) и стартует сервер.</summary>
+    private static void StartControl(Guid nodeId, IAudioPlugin plugin, object gate)
+    {
+        var server = new NodeControlServer(
+            NodeControl.PipeName(nodeId),
+            request => HandleControl(plugin, gate, request));
+        server.Start();
+    }
+
+    private static NodeControlResponse HandleControl(
+        IAudioPlugin plugin,
+        object gate,
+        NodeControlRequest request)
+    {
+        // openEditor — отдельно: показ окна НЕ под gate хост-хендлера
+        // (иначе автосейв хоста ждал бы, пока юзер закроет редактор).
+        if (request.Op == "openEditor")
+        {
+            return OpenEditor(plugin, gate);
+        }
+
+        lock (gate)
+        {
+            return request.Op switch
+            {
+                "ping" => new NodeControlResponse { Ok = true },
+                "getState" => new NodeControlResponse { Ok = true, Data = Encode(plugin.GetState()) },
+                "setState" => ApplyState(plugin, request.Data),
+                "latency" => new NodeControlResponse { Ok = true, Value = plugin.LatencySamples },
+                _ => new NodeControlResponse { Ok = false, Error = $"неизвестная операция: {request.Op}" },
+            };
+        }
+    }
+
+    /// <summary>
+    /// Показывает редактор плагина окном В ЭТОМ процессе (S4b). Ответ сразу —
+    /// окно асинхронно, иначе хост-запросы (автосейв) ждали бы закрытия окна.
+    /// Open/Close плагина — под gate: не параллельно с process.
+    /// </summary>
+    private static NodeControlResponse OpenEditor(IAudioPlugin plugin, object gate)
+    {
+        if (plugin is not IPluginEditor { SupportsEditor: true })
+        {
+            return new NodeControlResponse { Ok = false, Error = "у плагина нет редактора" };
+        }
+
+        var editor = (IPluginEditor)plugin;
+        var dispatcher = Application.Current?.Dispatcher;
+        if (dispatcher is null)
+        {
+            return new NodeControlResponse { Ok = false, Error = "нет UI-потока процесса" };
+        }
+
+        dispatcher.BeginInvoke(() =>
+        {
+            try
+            {
+                new PluginEditorWindow(editor, plugin.Name, gate).Show();
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"--plugin-host: редактор не открылся: {ex.Message}");
+            }
+        });
+
+        return new NodeControlResponse { Ok = true };
+    }
+
+    private static NodeControlResponse ApplyState(IAudioPlugin plugin, string? data)
+    {
+        try
+        {
+            plugin.SetState(data is null ? null : Convert.FromBase64String(data));
+            return new NodeControlResponse { Ok = true };
+        }
+        catch (Exception ex)
+        {
+            return new NodeControlResponse { Ok = false, Error = ex.Message };
+        }
+    }
+
+    private static string? Encode(byte[]? state) => state is null ? null : Convert.ToBase64String(state);
 
     private static (IAudioPlugin Plugin, int SampleRate) LoadSpec(string specPath)
     {
@@ -165,30 +277,6 @@ internal static class PluginHostMode
 
         return true;
     }
-
-    private static NodeControlResponse HandleControl(IAudioPlugin plugin, NodeControlRequest request) => request.Op switch
-    {
-        "ping" => new NodeControlResponse { Ok = true },
-        "getState" => new NodeControlResponse { Ok = true, Data = Encode(plugin.GetState()) },
-        "setState" => ApplyState(plugin, request.Data),
-        "latency" => new NodeControlResponse { Ok = true, Value = plugin.LatencySamples },
-        _ => new NodeControlResponse { Ok = false, Error = $"неизвестная операция: {request.Op}" },
-    };
-
-    private static NodeControlResponse ApplyState(IAudioPlugin plugin, string? data)
-    {
-        try
-        {
-            plugin.SetState(data is null ? null : Convert.FromBase64String(data));
-            return new NodeControlResponse { Ok = true };
-        }
-        catch (Exception ex)
-        {
-            return new NodeControlResponse { Ok = false, Error = ex.Message };
-        }
-    }
-
-    private static string? Encode(byte[]? state) => state is null ? null : Convert.ToBase64String(state);
 
     /// <summary>Bench-бэкенд ×2: детерминированная обработка для тестов моста.</summary>
     private sealed class BenchPlugin(int sleepMs) : IAudioPlugin

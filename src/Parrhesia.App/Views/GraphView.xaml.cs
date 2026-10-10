@@ -9,6 +9,7 @@ using Parrhesia.App.Rendering;
 using Parrhesia.App.Views.Graph;
 using Parrhesia.Audio.Devices;
 using Parrhesia.Audio.Engine;
+using Parrhesia.Audio.Processing;
 using Parrhesia.Core.Graph;
 
 namespace Parrhesia.App.Views;
@@ -1119,10 +1120,12 @@ public partial class GraphView : UserControl
             PluginStatusText.Text = "Плагин не задан — «+ Эффект…» ниже";
             PluginStatusError.Visibility = Visibility.Collapsed;
             PluginRestartButton.IsEnabled = false;
+            PluginEditorButton.IsEnabled = false;
             return;
         }
 
         PluginRestartButton.IsEnabled = true;
+        PluginEditorButton.IsEnabled = status.Loaded;
         PluginStatusText.Text = status switch
         {
             { Loaded: true, Alive: true } =>
@@ -1144,6 +1147,29 @@ public partial class GraphView : UserControl
         {
             AppServices.Engine.RestartPluginNode(node.Id);
             UpdatePluginStatus(node.Id);
+        }
+    }
+
+    /// <summary>
+    /// Окно редактора открывается в ПРОЦЕССЕ-исполнителе (S4b) — хост только
+    /// шлёт команду по control-каналу и не блокируется.
+    /// </summary>
+    private void OnPluginEditorClick(object sender, RoutedEventArgs e)
+    {
+        if (_selectedNode is { } element &&
+            _graph.FindNode(element.Node.Id) is { Kind: NodeKind.Plugin } node &&
+            AppServices.Engine.GetSlotInstance(node.Id, 0) is ProcessBridgePlugin bridge)
+        {
+            var response = bridge.OpenEditor();
+            if (!response.Ok)
+            {
+                MessageBox.Show(
+                    Window.GetWindow(this),
+                    response.Error ?? "Не удалось открыть редактор.",
+                    "Редактор",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Information);
+            }
         }
     }
 

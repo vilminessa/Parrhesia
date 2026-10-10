@@ -32,9 +32,23 @@ public partial class App : Application
         if (e.Args.Length >= 3 &&
             string.Equals(e.Args[0], "--plugin-host", StringComparison.OrdinalIgnoreCase))
         {
-            //4-й аргумент: число — bench-задержка мс; путь — spec-файл узла (VST3/CLAP).
+            //4-й аргумент: число — bench-задержка мс (тесты, sync-выход);
+            // путь — spec-файл: реальный VST3/CLAP, WPF-цикл остаётся живым
+            // для окон редактора (S4b) — главное окно не показывается.
             var mode = e.Args.Length >= 4 ? e.Args[3] : "0";
-            Environment.Exit(PluginHostMode.Run(e.Args[1], int.Parse(e.Args[2]), mode));
+            if (int.TryParse(mode, out var sleepMs))
+            {
+                Environment.Exit(PluginHostMode.RunBench(e.Args[1], int.Parse(e.Args[2]), sleepMs));
+            }
+            else
+            {
+                // Исполнитель с редактором (S4b): без главного окна (окно
+                // создаётся только в обычной ветке ниже) и цикл WPF жив для
+                // окон редакторов — ShutdownMode не даёт выйти при их закрытии.
+                ShutdownMode = ShutdownMode.OnExplicitShutdown;
+                PluginHostMode.RunExecutor(e.Args[1], int.Parse(e.Args[2]), mode);
+            }
+
             return;
         }
 
@@ -52,6 +66,12 @@ public partial class App : Application
         AppServices.StartEngine();
         Trace.WriteLine($"[Parrhesia] запущен (профиль: {AppServices.Profiles.Active?.Name ?? "?"})");
         base.OnStartup(e);
+
+        // Главное окно создаётся вручную (без StartupUri): режим
+        // --plugin-host в ветке выше возвращается без окна — WPF-цикл
+        // остаётся только для окон редакторов (S4b).
+        MainWindow = new MainWindow();
+        MainWindow.Show();
     }
 
     protected override void OnExit(ExitEventArgs e)
