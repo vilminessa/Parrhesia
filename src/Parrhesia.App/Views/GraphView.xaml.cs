@@ -1142,6 +1142,81 @@ public partial class GraphView : UserControl
         PluginStatusError.Visibility = error is null ? Visibility.Collapsed : Visibility.Visible;
     }
 
+    /// <summary>
+    /// Кросс-навигация (U1): фокус на узле схемы — центрирование viewport
+    /// и выделение (вызывается из микшера: «Показать на схеме»).
+    /// </summary>
+    public void FocusNode(Guid nodeId)
+    {
+        if (!_elements.TryGetValue(nodeId, out var element))
+        {
+            return;
+        }
+
+        SelectNode(element);
+
+        // Мировые координаты центра карточки → сдвиг viewport
+        // (позиция nullable: узел мог не иметь заданной — фолбэк40/40).
+        var world = new Point((element.Node.X ?? 40) + 56, (element.Node.Y ?? 40) + 36);
+        _translate.X = Viewport.ActualWidth / 2 - world.X * _scale;
+        _translate.Y = Viewport.ActualHeight / 2 - world.Y * _scale;
+    }
+
+    /// <summary>Кнопка «Показать в микшере» (U1): вкладка микшера, пульт узла подсвечен.</summary>
+    private void OnShowInMixerClick(object sender, RoutedEventArgs e)
+    {
+        if (_selectedNode is { } element)
+        {
+            (Window.GetWindow(this) as MainWindow)?.ShowMixerNode(element.Node.Id);
+        }
+    }
+
+    /// <summary>
+    /// Авто-раскладка (U1): слои по топологии (граф ацикличен — циклы
+    /// запрещает AddRoute): источники слева, обработка в центре, назначения
+    /// справа; внутри слоя — вертикальный разнос по имени.
+    /// </summary>
+    private void OnAutoLayoutClick(object sender, RoutedEventArgs e)
+    {
+        var nodes = _graph.Nodes.ToList();
+        if (nodes.Count == 0)
+        {
+            return;
+        }
+
+        var depth = nodes.ToDictionary(static n => n.Id, static _ => 0);
+        bool changed;
+        do
+        {
+            changed = false;
+            foreach (var route in _graph.Routes)
+            {
+                if (depth[route.ToId] < depth[route.FromId] + 1)
+                {
+                    depth[route.ToId] = depth[route.FromId] + 1;
+                    changed = true;
+                }
+            }
+        }
+        while (changed);
+
+        const double columnStep = 300;
+        const double rowStep = 170;
+        var nextRow = new Dictionary<int, int>();
+        foreach (var node in nodes
+                     .OrderBy(n => depth[n.Id])
+                     .ThenBy(n => n.Name, StringComparer.CurrentCultureIgnoreCase))
+        {
+            var layer = depth[node.Id];
+            nextRow.TryGetValue(layer, out var row);
+            nextRow[layer] = row + 1;
+            _graph.SetNodePosition(node.Id, layer * columnStep + 40, row * rowStep + 40);
+        }
+
+        Toast.Show($"Узлы расставлены по топологии ({nodes.Count} шт.)");
+    }
+
+    /// <summary>Кнопка «Перезапустить» (S4): сброс бэкоффа + немедленная попытка + тост.</summary>
     private void OnPluginRestartClick(object sender, RoutedEventArgs e)
     {
         if (_selectedNode is { } element &&
@@ -1149,6 +1224,7 @@ public partial class GraphView : UserControl
         {
             AppServices.Engine.RestartPluginNode(node.Id);
             UpdatePluginStatus(node.Id);
+            Toast.Show($"«{node.Name}»: исполнитель перезапускается…");
         }
     }
 

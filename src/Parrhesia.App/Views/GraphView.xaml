@@ -91,6 +91,11 @@
           </Grid>
         </Button>
 
+        <Button Content="Расставить узлы"
+                Click="OnAutoLayoutClick"
+                ToolTip="Авто-раскладка по топологии: источники слева, обработка в центре, назначения справа (позиции сохраняются в профиль)"
+                Margin="0,10,0,0" />
+
         <TextBlock Text="ШИНЫ"
                    FontSize="10"
                    FontWeight="SemiBold"
@@ -303,9 +308,15 @@
               </StackPanel>
             </StackPanel>
 
-            <Button Content="Удалить узел"
+            <Button Content="Показать в микшере"
                     HorizontalAlignment="Left"
                     Margin="0,16,0,0"
+                    Click="OnShowInMixerClick"
+                    ToolTip="Перейти на вкладку «Микшер» — пульт этого узла подсвечен и прокручен в вид" />
+
+            <Button Content="Удалить узел"
+                    HorizontalAlignment="Left"
+                    Margin="0,8,0,0"
                     Click="OnDeleteNodeClick" />
           </StackPanel>
 

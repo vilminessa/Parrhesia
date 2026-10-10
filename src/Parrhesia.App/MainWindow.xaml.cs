@@ -1,6 +1,7 @@
 ﻿using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
+using Parrhesia.App.Views;
 
 namespace Parrhesia.App;
 
@@ -14,6 +15,26 @@ public partial class MainWindow
         UpdateBackdrop();
         Themes.ThemeManager.ThemeChanged += UpdateBackdrop;
         SelectStartupTab();
+    }
+
+    /// <summary>Кросс-навигация (U1): вкладка «Схема» — центр и фокус на узле.</summary>
+    public void ShowGraphNode(Guid nodeId)
+    {
+        if (Tabs.Items.Count > 1 && Tabs.Items[1] is TabItem { Content: GraphView graph })
+        {
+            Tabs.SelectedIndex = 1;
+            graph.FocusNode(nodeId);
+        }
+    }
+
+    /// <summary>Кросс-навигация (U1): вкладка «Микшер» — пульт подсвечен и прокручен в вид.</summary>
+    public void ShowMixerNode(Guid nodeId)
+    {
+        if (Tabs.Items.Count > 0 && Tabs.Items[0] is TabItem { Content: MixerView mixer })
+        {
+            Tabs.SelectedIndex = 0;
+            mixer.RevealNode(nodeId);
+        }
     }
 
     /// <summary>

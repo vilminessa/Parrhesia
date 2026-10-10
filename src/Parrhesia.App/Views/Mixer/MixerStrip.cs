@@ -3,6 +3,7 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Threading;
 using Parrhesia.App.Controls;
 using Parrhesia.App.Themes;
 using Parrhesia.Audio.Devices;
@@ -48,6 +49,29 @@ internal sealed class MixerStrip : Border
     private readonly Button _bypassButton;
     private readonly Border _handle;
     private readonly bool _advanced;
+
+    /// <summary>Индикатор состояния (U1): исполнитель плагина / «звук никуда не идёт».</summary>
+    private readonly Border _stateDot;
+
+    /// <summary>Клик по индикатору/пункту меню — показать узел на схеме.</summary>
+    public event Action<Guid>? ShowInGraphRequested;
+
+    /// <summary>Краткая подсветка карточки (U1, кросс-навигация из схемы).</summary>
+    public void FlashHighlight()
+    {
+        var previous = BorderBrush;
+        BorderBrush = ResolveBrush("Brush.Cyan", "#FF35D0C8");
+        BorderThickness = new Thickness(2);
+
+        var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1.5) };
+        timer.Tick += (_, _) =>
+        {
+            timer.Stop();
+            BorderBrush = previous;
+            BorderThickness = new Thickness(1);
+        };
+        timer.Start();
+    }
 
     /// <summary>Чипы эффекторов (id → кнопка) для синхронизации из модели.</summary>
     private readonly Dictionary<string, ToggleButton> _fxChips = [];
@@ -101,11 +125,34 @@ internal sealed class MixerStrip : Border
         };
         _nameText.MouseLeftButtonDown += OnNameClick;
 
+        // Точка состояния (U1): видна только когда есть что сказать
+        // (исполнитель плагина жив/перезапускается либо звук никуда не идёт).
+        _stateDot = new Border
+        {
+            Width = 8,
+            Height = 8,
+            CornerRadius = new CornerRadius(4),
+            Background = Brushes.Transparent,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(6, 0, 0, 0),
+            Visibility = Visibility.Collapsed,
+            Cursor = Cursors.Hand,
+        };
+        _stateDot.MouseLeftButtonDown += (_, _) => ShowInGraphRequested?.Invoke(Node.Id);
+
+        var headerGrid = new Grid();
+        headerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        headerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        Grid.SetColumn(_nameText, 0);
+        Grid.SetColumn(_stateDot, 1);
+        headerGrid.Children.Add(_nameText);
+        headerGrid.Children.Add(_stateDot);
+
         var header = new Border
         {
             Background = Brushes.Transparent,
             Padding = new Thickness(0, 7, 0, 0),
-            Child = _nameText,
+            Child = headerGrid,
         };
 
         _dbText = new TextBlock
@@ -461,6 +508,9 @@ internal sealed class MixerStrip : Border
         var rename = new MenuItem { Header = "Переименовать" };
         rename.Click += (_, _) => RenameRequested?.Invoke(this);
 
+        var showInGraph = new MenuItem { Header = "Показать на схеме" };
+        showInGraph.Click += (_, _) => ShowInGraphRequested?.Invoke(Node.Id);
+
         GroupMenuItem = new MenuItem { Header = "В группу", IsEnabled = false };
 
         UngroupMenuItem = new MenuItem { Header = "Из группы убрать", IsEnabled = false };
@@ -470,12 +520,76 @@ internal sealed class MixerStrip : Border
         delete.Click += (_, _) => DeleteRequested?.Invoke(this);
 
         menu.Items.Add(rename);
+        menu.Items.Add(showInGraph);
         menu.Items.Add(GroupMenuItem);
         menu.Items.Add(UngroupMenuItem);
         menu.Items.Add(new Separator());
         menu.Items.Add(delete);
 
         ContextMenu = menu;
+    }
+
+    /// <summary>
+    /// Статус исполнителя узла-плагина (U1): зелёная точка — жив; жёлтая —
+    /// перезапуск/ретрай; серая — не загружен. Клик — фокус на узле в схеме.
+    /// </summary>
+    public void SetPluginState(Parrhesia.Audio.Processing.PluginNodeStatus? status)
+    {
+        if (status is null)
+        {
+            _stateDot.Visibility = Visibility.Collapsed;
+            _stateDot.ToolTip = null;
+            return;
+        }
+
+        (var brush, var hint) = status switch
+        {
+            { Loaded: true, Alive: true } => (
+                ResolveBrush("Brush.Success", "#FF3DDC84"),
+                $"Исполнитель жив · pid {status.ProcessId}"),
+            { Loaded: true } => (
+                ResolveBrush("Brush.Accent", "#FFFFB020"),
+                "Перезапуск процесса…"),
+            { SecondsToRetry: > 0 } => (
+                ResolveBrush("Brush.Accent", "#FFFFB020"),
+                $"Не загружен — попытка {status.SpawnAttempts}; ретрай через {status.SecondsToRetry} с"),
+            _ => (
+                ResolveBrush("Brush.TextFaint", "#FF5C6472"),
+                $"Не загружен — попытка {status.SpawnAttempts}"),
+        };
+
+        if (status.Errors.Count > 0)
+        {
+            hint += "\n" + status.Errors[0];
+        }
+
+        _stateDot.Background = brush;
+        _stateDot.ToolTip = hint + "\n(клик — показать узел на схеме)";
+        _stateDot.Visibility = Visibility.Visible;
+    }
+
+    /// <summary>
+    /// «Звук никуда не идёт» (U1): источник захватывается, но не доходит до
+    /// работающего выхода (маршрут не пройден / приёмник без устройства).
+    /// </summary>
+    public void SetUnrouted(bool unrouted)
+    {
+        if (!unrouted)
+        {
+            if (Node.Kind != NodeKind.Plugin)
+            {
+                _stateDot.Visibility = Visibility.Collapsed;
+                _stateDot.ToolTip = null;
+            }
+
+            return;
+        }
+
+        _stateDot.Background = ResolveBrush("Brush.Accent", "#FFFFB020");
+        _stateDot.ToolTip =
+            "Звук никуда не идёт: путь этого источника не доходит до работающего выхода\n" +
+            "(клик — показать узел на схеме)";
+        _stateDot.Visibility = Visibility.Visible;
     }
 
     private void OnNameClick(object sender, MouseButtonEventArgs e)

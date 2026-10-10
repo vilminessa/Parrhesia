@@ -1256,12 +1256,19 @@ public sealed class WasapiAudioEngine : IAudioEngine
         long underruns = 0;
         long overflows = 0;
         var active = 0;
+        var sleepingNodes = new List<Guid>();
         foreach (var source in _sources)
         {
             // Спящий источник (нет потребителя — звук никуда не идёт) не
             // деградация тракта: его накопленные xrun не должны пугать в статусе.
-            if (source.Failed || source.Ring.Sleeping)
+            if (source.Failed)
             {
+                continue;
+            }
+
+            if (source.Ring.Sleeping)
+            {
+                sleepingNodes.Add(source.NodeId);
                 continue;
             }
 
@@ -1284,6 +1291,7 @@ public sealed class WasapiAudioEngine : IAudioEngine
             MonitorActive = _monitorPlayer is not null,
             SinkNames = _sinkNames,
             OutputPeriodMs = periodMs,
+            SleepingSourceNodes = [.. sleepingNodes],
         };
     }
 

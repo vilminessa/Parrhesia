@@ -413,6 +413,7 @@ public partial class MixerView : UserControl
             EffectSettingsWindow.Show(Window.GetWindow(this), s.Node, fx);
         strip.FxModeToggled += (s, expanded) =>
             AppServices.Graph.SetNodeFxExpanded(s.Node.Id, expanded);
+        strip.ShowInGraphRequested += OnShowInGraphRequested;
         return strip;
     }
 
@@ -649,6 +650,7 @@ public partial class MixerView : UserControl
         if (!status.IsRunning)
         {
             StatusText.Text = "Движок: остановлен";
+            UpdateStripStates(status);
             return;
         }
 
@@ -666,5 +668,66 @@ public partial class MixerView : UserControl
                           $"квант {status.OutputPeriodMs} мс · " +
                           $"выходы «{outputs}» · xrun под/переп. {status.UnderrunSamples}/{status.OverflowSamples}" +
                           monitor;
+
+        UpdateStripStates(status);
+    }
+
+    /// <summary>
+    /// Точки состояния на пультах (U1): жёлтая — «звук никуда не идёт»
+    /// (спящий источник), зелёная/жёлтая/серая — статус исполнителя плагина.
+    /// </summary>
+    private void UpdateStripStates(EngineStatus status)
+    {
+        var sleeping = status.SleepingSourceNodes.Count > 0
+            ? status.SleepingSourceNodes.ToHashSet()
+            : null;
+
+        foreach (var (nodeId, strip) in _strips)
+        {
+            var node = AppServices.Graph.FindNode(nodeId);
+            if (node is null)
+            {
+                continue;
+            }
+
+            if (node.Kind == NodeKind.Source)
+            {
+                strip.SetUnrouted(status.IsRunning && sleeping?.Contains(nodeId) == true);
+            }
+            else if (node.Kind == NodeKind.Plugin)
+            {
+                strip.SetPluginState(AppServices.Engine.GetPluginStatus(nodeId));
+            }
+        }
+    }
+
+    /// <summary>Кнопка «Показать на схеме» с пульта (U1): фокус на узле в редакторе схемы.</summary>
+    private void OnShowInGraphRequested(Guid nodeId) =>
+        (Window.GetWindow(this) as MainWindow)?.ShowGraphNode(nodeId);
+
+    /// <summary>Кросс-навигация (U1): «показать в микшере» — выделить пульт и прокрутить к нему.</summary>
+    public void RevealNode(Guid nodeId)
+    {
+        // Пульт может быть скрыт фильтром — снимаем фильтр и пересобираем ленту.
+        if (_filter is not null && !_strips.ContainsKey(nodeId))
+        {
+            _filter = null;
+            RebuildStrips();
+        }
+
+        if (!_strips.TryGetValue(nodeId, out var strip))
+        {
+            return;
+        }
+
+        // Прокрутка к пульту (панель в ScrollViewer).
+        var offset = strip.TranslatePoint(new Point(0, 0), StripsHost);
+        if (VisualTreeHelper.GetParent(StripsHost) is ScrollViewer scroller)
+        {
+            scroller.ScrollToVerticalOffset(Math.Max(0, offset.Y - 40));
+            scroller.ScrollToHorizontalOffset(Math.Max(0, offset.X - 40));
+        }
+
+        strip.FlashHighlight();
     }
 }

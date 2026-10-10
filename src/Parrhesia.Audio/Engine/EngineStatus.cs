@@ -36,4 +36,10 @@ public sealed record EngineStatus(
     /// квантом (устройственный минимум shared-режима, API его не опускает).
     /// </summary>
     public int OutputPeriodMs { get; init; }
+
+    /// <summary>
+    /// Узлы-источники, чьи кольца «спят» (U1): звук захватывается, но не
+    /// доходит ни до одного работающего выхода — пульт помечается в микшере.
+    /// </summary>
+    public IReadOnlyList<Guid> SleepingSourceNodes { get; init; } = [];
 }
