@@ -30,6 +30,7 @@ public sealed class ProcessBridgePlugin : IAudioPlugin
     private int _maxBlockFrames;
     private long _lastSeenBlocks;
     private int _latency;
+    private int _forcedRestart;
     private bool _ready;
     private bool _disposed;
     private long _drops;
@@ -94,6 +95,11 @@ public sealed class ProcessBridgePlugin : IAudioPlugin
     {
         get
         {
+            if (Volatile.Read(ref _forcedRestart) != 0)
+            {
+                return true;
+            }
+
             lock (_lifecycle)
             {
                 return _ready && _host is { } host && !host.ChildAlive(TimeSpan.FromSeconds(2));
@@ -111,6 +117,9 @@ public sealed class ProcessBridgePlugin : IAudioPlugin
             return state;
         }
     }
+
+    /// <summary>Принудительный рестарт: следующая сверка менеджера заменит исполнителя.</summary>
+    public void ForceRestart() => Interlocked.Exchange(ref _forcedRestart, 1);
 
     public void SetState(byte[]? state)
     {

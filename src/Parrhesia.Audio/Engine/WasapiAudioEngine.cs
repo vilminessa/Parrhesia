@@ -102,6 +102,12 @@ public sealed class WasapiAudioEngine : IAudioEngine
     public IAudioPlugin? GetSlotInstance(Guid nodeId, int slotIndex) =>
         _slotChains.GetSlotInstance(nodeId, slotIndex);
 
+    public PluginNodeStatus? GetPluginStatus(Guid nodeId) =>
+        _slotChains.GetPluginStatus(nodeId);
+
+    public void RestartPluginNode(Guid nodeId) =>
+        _slotChains.RestartPluginNode(nodeId);
+
     public void Start()
     {
         lock (_gate)

@@ -401,6 +401,46 @@ public sealed class AudioGraph
         return true;
     }
 
+    /// <summary>
+    /// Вставляет узел-обработку в разрыв маршрута (S-волна, авто-wire):
+    /// from→to разрезается на from→node и node→to; гейн/включение исходного
+    /// кабеля переезжают в первую половину. false — маршрута нет.
+    /// </summary>
+    public bool InsertNodeIntoRoute(Guid fromId, Guid toId, Guid nodeId)
+    {
+        var existing = FindRoute(fromId, toId);
+        if (existing is null)
+        {
+            return false;
+        }
+
+        var gain = existing.Gain;
+        var enabled = existing.Enabled;
+        _routes.Remove(existing);
+        Raise(GraphChangeKind.RouteRemoved, route: existing);
+
+        var firstError = AddRoute(fromId, nodeId, out var first);
+        if (firstError != RouteError.None)
+        {
+            // Откат: узел не встаёт в разрыв — кабель возвращается как был.
+            AddRoute(fromId, toId, out _);
+            return false;
+        }
+
+        first!.Gain = gain;
+        first.Enabled = enabled;
+
+        if (AddRoute(nodeId, toId, out var secondError) != RouteError.None)
+        {
+            RemoveRoute(fromId, nodeId);
+            AddRoute(fromId, toId, out _);
+            return false;
+        }
+
+        Raise(GraphChangeKind.RouteChanged, route: first);
+        return true;
+    }
+
     /// <summary>Существует ли направленный путь from → ... → to (пустой путь: from == to).</summary>
     public bool HasPath(Guid fromId, Guid toId)
     {

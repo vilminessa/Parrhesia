@@ -233,6 +233,67 @@ public class ProcessBridgePluginTests
         }
     }
 
+    [Fact]
+    public void ManagerRestartPluginNode_ReplacesExecutor_AndStatusTracksIt()
+    {
+        var dll = Path.Combine(AppContext.BaseDirectory, "test-plugin-vst3.dll");
+        if (ProcessBridgePlugin.FindAppExe() is null || !File.Exists(dll))
+        {
+            return; // вне репозитория — проба моста пропущена
+        }
+
+        var descriptor = Vst3Loader.Enumerate(dll).Single(p => p.Name == "Parrhesia Test Gain");
+        var harness = CreateHarness(new PluginSlot
+        {
+            Format = PluginFormat.Vst3,
+            Path = descriptor.Path,
+            PluginId = descriptor.PluginId,
+            Name = descriptor.Name,
+        });
+
+        try
+        {
+            var before = harness.Manager.GetPluginStatus(harness.PluginId);
+            Assert.True(before is { Loaded: true, Alive: true }, $"статус после спавна: {before}");
+            Assert.True(before!.ProcessId > 0);
+            Assert.Equal(1, before.SpawnAttempts);
+
+            // Кнопка «Перезапустить» инспектора: флаг + немедленная сверка.
+            harness.Manager.RestartPluginNode(harness.PluginId);
+
+            PluginNodeStatus? after = null;
+            var deadline = Environment.TickCount64 + 15_000;
+            while (Environment.TickCount64 < deadline)
+            {
+                var status = harness.Manager.GetPluginStatus(harness.PluginId);
+                if (status is { Loaded: true, Alive: true } && status.ProcessId != before.ProcessId)
+                {
+                    after = status;
+                    break;
+                }
+
+                Thread.Sleep(100);
+            }
+
+            Assert.True(after is not null, "рестарт через инспектор не заменил исполнителя за15 с");
+            Assert.True(after!.SpawnAttempts >= 2, $"попыток: {after.SpawnAttempts}");
+
+            // Старый исполнитель обязан умереть — сирот после рестарта нет.
+            var oldPid = before.ProcessId;
+            deadline = Environment.TickCount64 + 5_000;
+            while (ProcessAlive(oldPid) && Environment.TickCount64 < deadline)
+            {
+                Thread.Sleep(50);
+            }
+
+            Assert.False(ProcessAlive(oldPid), "старый исполнитель пережил рестарт");
+        }
+        finally
+        {
+            harness.Dispose();
+        }
+    }
+
     /// <summary>Серия source → plugin-узел → sink со слотом; менеджер уже Prepare.</summary>
     private static Harness CreateHarness(PluginSlot slot)
     {

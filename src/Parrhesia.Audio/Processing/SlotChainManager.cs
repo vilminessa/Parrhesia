@@ -417,6 +417,60 @@ public sealed class SlotChainManager : IDisposable
         }
     }
 
+    /// <summary>Статус исполнителя узла-плагина для инспектора (null — слоты не смоделированы).</summary>
+    public PluginNodeStatus? GetPluginStatus(Guid nodeId)
+    {
+        lock (_gate)
+        {
+            if (_disposed || !_states.TryGetValue(nodeId, out var state))
+            {
+                return null;
+            }
+
+            ProcessBridgePlugin? bridge = null;
+            foreach (var instance in state.Instances)
+            {
+                if (instance is ProcessBridgePlugin candidate)
+                {
+                    bridge = candidate;
+                    break;
+                }
+            }
+
+            return new PluginNodeStatus(
+                Loaded: bridge is not null,
+                Alive: bridge?.ChildAlive ?? false,
+                ProcessId: bridge?.ChildPid ?? 0,
+                Drops: bridge?.Drops ?? 0,
+                ProcessedBlocks: bridge?.ProcessedBlocks ?? 0,
+                SpawnAttempts: _spawnAttempts.GetValueOrDefault(nodeId),
+                LatencySamples: bridge?.LatencySamples ?? 0,
+                Errors: [.. state.Errors]);
+        }
+    }
+
+    /// <summary>Принудительный рестарт исполнителей узла (кнопка «Перезапустить»).</summary>
+    public void RestartPluginNode(Guid nodeId)
+    {
+        ProcessBridgePlugin[] bridges;
+        lock (_gate)
+        {
+            if (_disposed || !_states.TryGetValue(nodeId, out var state))
+            {
+                return;
+            }
+
+            bridges = [.. state.Instances.OfType<ProcessBridgePlugin>()];
+        }
+
+        foreach (var bridge in bridges)
+        {
+            bridge.ForceRestart();
+        }
+
+        QueueSync(); // тик (2с) подхватил бы и сам — сразу быстрее
+    }
+
     // ===== Внутреннее =====
 
     /// <summary>План одной итерации: слоты узла на момент снимка + прежнее состояние.</summary>

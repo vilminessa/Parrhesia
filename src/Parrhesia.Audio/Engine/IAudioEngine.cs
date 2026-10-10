@@ -54,4 +54,10 @@ public interface IAudioEngine : IDisposable
 
     /// <summary>Живой экземпляр слота шины (null — не загружен). UI-поток: редактор.</summary>
     IAudioPlugin? GetSlotInstance(Guid nodeId, int slotIndex);
+
+    /// <summary>Статус исполнителя узла-плагина (null — слоты не смоделированы). UI-поток: инспектор.</summary>
+    Processing.PluginNodeStatus? GetPluginStatus(Guid nodeId);
+
+    /// <summary>Принудительный рестарт процесса-исполнителя узла (S4: кнопка инспектора).</summary>
+    void RestartPluginNode(Guid nodeId);
 }

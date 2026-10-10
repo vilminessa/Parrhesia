@@ -4,6 +4,7 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Threading;
 using Parrhesia.App.Rendering;
 using Parrhesia.App.Views.Graph;
 using Parrhesia.Audio.Devices;
@@ -45,6 +46,9 @@ public partial class GraphView : UserControl
     private ReattachDrag? _reattachDrag;
     private NodeElement? _selectedNode;
     private Route? _selectedRoute;
+
+    /// <summary>Тик обновления статуса исполнителя узла-плагина в инспекторе (S-волна).</summary>
+    private DispatcherTimer? _pluginStatusTimer;
 
     /// <summary>Глушит реакцию на события графа во время внутренних операций Rebuild.</summary>
     private bool _suppressChanges;
@@ -778,6 +782,12 @@ public partial class GraphView : UserControl
 
     private void AddNodeAt(string kind, Point worldPosition)
     {
+        if (kind == "Plugin")
+        {
+            AddPluginNodeAt(worldPosition);
+            return;
+        }
+
         AudioNode node = kind switch
         {
             "Capture" => _graph.AddNode("Захват", NodeKind.Source),
@@ -808,6 +818,70 @@ public partial class GraphView : UserControl
         }
     }
 
+    /// <summary>
+    /// Узел-плагин: выбор в сканере (отмена — узла нет), слот сразу внутри,
+    /// затем авто-wire — врезка в выделенный кабель либо подключение к
+    /// выделенному узлу (S-волна).
+    /// </summary>
+    private void AddPluginNodeAt(Point worldPosition)
+    {
+        var picker = new PluginPickerWindow
+        {
+            Owner = Window.GetWindow(this),
+        };
+        if (picker.ShowDialog() != true || picker.Selected is not { } descriptor)
+        {
+            return;
+        }
+
+        var node = _graph.AddNode(descriptor.Name, NodeKind.Plugin);
+        _graph.AddSlot(node.Id, new PluginSlot
+        {
+            Format = descriptor.Format,
+            Path = descriptor.Path,
+            PluginId = descriptor.PluginId,
+            Name = descriptor.Name,
+        });
+        _graph.SetNodePosition(node.Id, worldPosition.X, worldPosition.Y);
+
+        AutoWireNewNode(node.Id);
+
+        if (_elements.TryGetValue(node.Id, out var element))
+        {
+            SelectNode(element);
+        }
+    }
+
+    /// <summary>
+    /// Авто-wire нового узла: выделенный кабель → врезка в разрыв (гейн и
+    /// включение сохраняются); выделенный узел → после него (источник) либо
+    /// перед ним (приёмник); ничего не выделено — узел стоит без проводов.
+    /// </summary>
+    private void AutoWireNewNode(Guid newNodeId)
+    {
+        if (_selectedRoute is { } route && _graph.Routes.Contains(route))
+        {
+            _graph.InsertNodeIntoRoute(route.FromId, route.ToId, newNodeId);
+            return;
+        }
+
+        if (_selectedNode is not { } element ||
+            _graph.FindNode(element.Node.Id) is not { } selected ||
+            selected.Id == newNodeId)
+        {
+            return;
+        }
+
+        if (selected.HasOutput)
+        {
+            _graph.AddRoute(selected.Id, newNodeId, out _);
+        }
+        else if (selected.HasInput)
+        {
+            _graph.AddRoute(newNodeId, selected.Id, out _);
+        }
+    }
+
     private Point ViewportToWorld(Point viewport) => new(
         (viewport.X - _translate.X) / _scale,
         (viewport.Y - _translate.Y) / _scale);
@@ -817,6 +891,23 @@ public partial class GraphView : UserControl
     private void OnGraphViewLoaded(object sender, RoutedEventArgs e)
     {
         _expandedView = AppServices.Settings.IsExpandedView;
+
+        // Тик инспектора узла-плагина: жив/ретраи/пропуски — раз в секунду.
+        _pluginStatusTimer = new DispatcherTimer
+        {
+            Interval = TimeSpan.FromSeconds(1),
+        };
+        _pluginStatusTimer.Tick += (_, _) =>
+        {
+            if (PluginStatusSection.Visibility == Visibility.Visible &&
+                _selectedNode is { } element &&
+                _graph.FindNode(element.Node.Id) is { Kind: NodeKind.Plugin } node)
+            {
+                UpdatePluginStatus(node.Id);
+            }
+        };
+        _pluginStatusTimer.Start();
+
         _syncingMode = true;
         try
         {
@@ -1001,10 +1092,58 @@ public partial class GraphView : UserControl
             {
                 RebuildSlotRows(node);
             }
+
+            // Статус процесса-исполнителя — только у узла-плагина.
+            var isPlugin = node.Kind == NodeKind.Plugin;
+            PluginStatusSection.Visibility = isPlugin ? Visibility.Visible : Visibility.Collapsed;
+            if (isPlugin)
+            {
+                UpdatePluginStatus(node.Id);
+            }
         }
         finally
         {
             _syncing = false;
+        }
+    }
+
+    /// <summary>
+    /// Снимок статуса исполнителя узла-плагина (тик раз в секунду, пока
+    /// секция видна): жив/перезапуск/не загружен + последняя ошибка спавна.
+    /// </summary>
+    private void UpdatePluginStatus(Guid nodeId)
+    {
+        var status = AppServices.Engine.GetPluginStatus(nodeId);
+        if (status is null)
+        {
+            PluginStatusText.Text = "Плагин не задан — «+ Эффект…» ниже";
+            PluginStatusError.Visibility = Visibility.Collapsed;
+            PluginRestartButton.IsEnabled = false;
+            return;
+        }
+
+        PluginRestartButton.IsEnabled = true;
+        PluginStatusText.Text = status switch
+        {
+            { Loaded: true, Alive: true } =>
+                $"Жив · pid {status.ProcessId} · задержка {status.LatencySamples} кадр. " +
+                $"· пропуски {status.Drops} · блоков {status.ProcessedBlocks}",
+            { Loaded: true } => "Перезапуск процесса…",
+            _ => $"Не загружен — попытка {status.SpawnAttempts} (ретрай с бэкоффом)",
+        };
+
+        var error = status.Errors.Count > 0 ? status.Errors[0] : null;
+        PluginStatusError.Text = error ?? string.Empty;
+        PluginStatusError.Visibility = error is null ? Visibility.Collapsed : Visibility.Visible;
+    }
+
+    private void OnPluginRestartClick(object sender, RoutedEventArgs e)
+    {
+        if (_selectedNode is { } element &&
+            _graph.FindNode(element.Node.Id) is { Kind: NodeKind.Plugin } node)
+        {
+            AppServices.Engine.RestartPluginNode(node.Id);
+            UpdatePluginStatus(node.Id);
         }
     }
 
