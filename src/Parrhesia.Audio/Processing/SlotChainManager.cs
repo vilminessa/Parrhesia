@@ -30,6 +30,14 @@ public sealed class SlotChainManager : IDisposable
     private readonly Dictionary<Guid, NodeState> _states = [];
     private readonly HashSet<Guid> _paused = [];
 
+    /// <summary>Бэкофф ретраев спавна исполнителей (только узлы-плагины).</summary>
+    private readonly Dictionary<Guid, RetryState> _retries = [];
+
+    /// <summary>Число попыток создания экземпляров по узлам-плагинам (диагностика/тесты).</summary>
+    private readonly Dictionary<Guid, int> _spawnAttempts = [];
+
+    private readonly CancellationTokenSource _tickCts = new();
+
     private int _sampleRate;
     private int _maxBlockFrames;
     private int _channels;
@@ -57,6 +65,28 @@ public sealed class SlotChainManager : IDisposable
         // единый механизм для всех VST3/CLAP без исключений.
         _bridgeFactory = bridgeFactory ?? ProcessBridgePlugin.Create;
         _graph.Changed += OnGraphChanged;
+
+        // Фоновый тик (S3): подхватывает смерть/зависание исполнителя
+        // (NeedsRestart) и ретраи спавна с бэкоффом — без изменений в модели
+        // graph.Changed не срабатывает, тикер коалесцируется в QueueSync.
+        _ = Task.Run(TickLoopAsync);
+    }
+
+    private async Task TickLoopAsync()
+    {
+        while (true)
+        {
+            try
+            {
+                await Task.Delay(TimeSpan.FromSeconds(2), _tickCts.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+
+            QueueSync();
+        }
     }
 
     /// <summary>Дефолтная фабрика: формат слота определяет хост (CLAP/VST3).</summary>
@@ -183,6 +213,8 @@ public sealed class SlotChainManager : IDisposable
                         CollectDropped(emptyState, emptyDropped);
                     }
 
+                    _retries.Remove(node.Id);
+                    _spawnAttempts.Remove(node.Id);
                     plan.Add(new PlanItem(node.Id, [], string.Empty, null, false, false));
                     continue;
                 }
@@ -207,6 +239,8 @@ public sealed class SlotChainManager : IDisposable
                         CollectDropped(orphan, emptyDropped);
                     }
 
+                    _retries.Remove(id);
+                    _spawnAttempts.Remove(id);
                     plan.Add(new PlanItem(id, [], string.Empty, null, false, false));
                 }
             }
@@ -222,7 +256,9 @@ public sealed class SlotChainManager : IDisposable
                 continue;
             }
 
-            if (item.Current is not null && item.Current.Identity == item.Identity)
+            if (item.Current is not null &&
+                item.Current.Identity == item.Identity &&
+                !PluginNeedsRebuild(item))
             {
                 item.Current.Enabled = item.Slots.Select(static s => s.Enabled).ToArray();
                 built.Add((item.Id, item.Current));
@@ -308,6 +344,8 @@ public sealed class SlotChainManager : IDisposable
 
     public void Dispose()
     {
+        _tickCts.Cancel();
+
         var pending = new List<IAudioPlugin?>();
         lock (_gate)
         {
@@ -367,6 +405,15 @@ public sealed class SlotChainManager : IDisposable
             }
 
             return state.Instances[slotIndex];
+        }
+    }
+
+    /// <summary>Число попыток создания экземпляров узла (в т.ч. ретраи спавна исполнителя).</summary>
+    public int GetSpawnAttempts(Guid nodeId)
+    {
+        lock (_gate)
+        {
+            return _spawnAttempts.GetValueOrDefault(nodeId);
         }
     }
 
@@ -544,6 +591,54 @@ public sealed class SlotChainManager : IDisposable
     private static string BuildIdentity(IReadOnlyList<PluginSlot> slots) =>
         string.Join('\n', slots.Select(Signature));
 
+    /// <summary>Бэкофф-состояние ретрая спавна исполнителя узла-плагина.</summary>
+    private sealed class RetryState
+    {
+        public long At;
+
+        public int Delay;
+    }
+
+    /// <summary>
+    /// S3: узел-плагин требует пересоздания экземпляров — исполнитель
+    /// умер/завис (NeedsRestart) либо спавн падал и бэкофф-интервал вышел.
+    /// </summary>
+    private bool PluginNeedsRebuild(PlanItem item)
+    {
+        if (!item.IsPluginNode || item.Current is null)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < item.Slots.Count; i++)
+        {
+            if (SlotNeedsRebuild(item, i))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>Пересоздание конкретного слота (null — спавн падал: ждём бэкофф).</summary>
+    private bool SlotNeedsRebuild(PlanItem item, int index)
+    {
+        if (!item.IsPluginNode || item.Current is null)
+        {
+            return false;
+        }
+
+        var instance = index < item.Current.Instances.Count ? item.Current.Instances[index] : null;
+        if (instance is not null)
+        {
+            return instance is ProcessBridgePlugin { NeedsRestart: true };
+        }
+
+        return !_retries.TryGetValue(item.Id, out var retry) ||
+               Environment.TickCount64 >= retry.At;
+    }
+
     private static string Signature(PluginSlot slot) =>
         $"{(int)slot.Format}|{slot.Path}|{slot.PluginId}";
 
@@ -578,15 +673,31 @@ public sealed class SlotChainManager : IDisposable
         {
             IAudioPlugin? instance = null;
             if (item.Current is not null && i < item.Current.Instances.Count &&
-                i < item.Current.Signatures.Length && item.Current.Signatures[i] == next.Signatures[i])
+                i < item.Current.Signatures.Length && item.Current.Signatures[i] == next.Signatures[i] &&
+                !SlotNeedsRebuild(item, i))
             {
                 instance = item.Current.Instances[i];
             }
             else
             {
+                // Последнее известное состояние умирающего исполнителя —
+                // переезжает в новый экземпляр (только при ТОМ ЖЕ плагине:
+                // при смене слота state чужого плагина не нужен).
+                byte[]? inherited = null;
                 if (item.Current is not null && i < item.Current.Instances.Count)
                 {
+                    if (i < item.Current.Signatures.Length &&
+                        item.Current.Signatures[i] == next.Signatures[i])
+                    {
+                        inherited = (item.Current.Instances[i] as ProcessBridgePlugin)?.TakePendingState();
+                    }
+
                     replaced.Add(item.Current.Instances[i]);
+                }
+
+                if (item.IsPluginNode)
+                {
+                    _spawnAttempts[item.Id] = _spawnAttempts.GetValueOrDefault(item.Id) + 1;
                 }
 
                 try
@@ -596,14 +707,21 @@ public sealed class SlotChainManager : IDisposable
                     instance = item.IsPluginNode
                         ? _bridgeFactory(item.Id, item.Slots[i])
                         : _factory(item.Slots[i]);
-                    if (item.Slots[i].State is not null)
+
+                    var state = item.Slots[i].State ?? inherited;
+                    if (state is not null)
                     {
-                        instance.SetState(item.Slots[i].State);
+                        instance.SetState(state);
                     }
 
                     if (_prepared)
                     {
                         instance.Prepare(_sampleRate, _maxBlockFrames, _channels);
+                    }
+
+                    if (item.IsPluginNode)
+                    {
+                        _retries.Remove(item.Id); // успех — бэкофф сброшен
                     }
 
                     if (stopwatch.ElapsedMilliseconds > 10_000)
@@ -625,6 +743,20 @@ public sealed class SlotChainManager : IDisposable
                         $"[Parrhesia.Audio][Error] слот: «{item.Slots[i].Name}» ({item.Slots[i].Path}) " +
                         $"не загрузился за {stopwatch.ElapsedMilliseconds} мс: {ex.Message}");
                     next.Errors.Add($"«{item.Slots[i].Name}» ({item.Slots[i].Path}): {ex.Message}");
+
+                    if (item.IsPluginNode)
+                    {
+                        // Ретрай спавна с бэкоффом:2с →4с →… →2мин.
+                        var delay = _retries.TryGetValue(item.Id, out var retry)
+                            ? Math.Min(retry.Delay * 2, 120_000)
+                            : 2_000;
+                        _retries[item.Id] = new RetryState
+                        {
+                            At = Environment.TickCount64 + delay,
+                            Delay = delay,
+                        };
+                    }
+
                     try
                     {
                         instance?.Dispose();

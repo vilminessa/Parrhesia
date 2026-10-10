@@ -73,8 +73,44 @@ public sealed class ProcessBridgePlugin : IAudioPlugin
         }
     }
 
-    /// <summary>Ребёнок жив по heartbeat моста.</summary>
-    public bool ChildAlive => _host is { } host && host.ChildAlive(TimeSpan.FromSeconds(2));
+    /// <summary>Ребёнок жив по heartbeat моста (под локом — мост может освобождаться).</summary>
+    public bool ChildAlive
+    {
+        get
+        {
+            lock (_lifecycle)
+            {
+                return _host is { } host && host.ChildAlive(TimeSpan.FromSeconds(2));
+            }
+        }
+    }
+
+    /// <summary>
+    /// Исполнитель умер или завис (heartbeat старше2с) — нужен рестарт.
+    /// Читается фоновым тикером SlotChainManager (под локом жизненного цикла:
+    /// TearDown обнуляет _host под этим же локом — UAF исключён).
+    /// </summary>
+    public bool NeedsRestart
+    {
+        get
+        {
+            lock (_lifecycle)
+            {
+                return _ready && _host is { } host && !host.ChildAlive(TimeSpan.FromSeconds(2));
+            }
+        }
+    }
+
+    /// <summary>Последнее известное состояние — передаётся экземпляру-замене при рестарте.</summary>
+    public byte[]? TakePendingState()
+    {
+        lock (_lifecycle)
+        {
+            var state = _pendingState;
+            _pendingState = null;
+            return state;
+        }
+    }
 
     public void SetState(byte[]? state)
     {
