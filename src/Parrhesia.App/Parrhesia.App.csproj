@@ -11,10 +11,20 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
+    <!-- TrayService (U3): иконка в трее через WinForms NotifyIcon. -->
+    <UseWindowsForms>true</UseWindowsForms>
   </PropertyGroup>
 
   <ItemGroup>
     <InternalsVisibleTo Include="Parrhesia.App.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- WinForms используется только TrayService: глобальные implicit-usings
+         SDK создают конфликты имён (Button/Point/MessageBox) с WPF. -->
+    <Using Remove="System.Windows.Forms" />
+    <Using Remove="System.Drawing" />
+    <Using Remove="System.Drawing.Imaging" />
   </ItemGroup>
 
   <ItemGroup>

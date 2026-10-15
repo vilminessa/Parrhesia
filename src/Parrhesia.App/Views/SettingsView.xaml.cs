@@ -5,6 +5,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Shapes;
+using Parrhesia.App.Settings;
 using Parrhesia.App.Themes;
 
 namespace Parrhesia.App.Views;
@@ -12,6 +13,11 @@ namespace Parrhesia.App.Views;
 /// <summary>Обзор профилей, тем интерфейса и ссылка на папку хранения.</summary>
 public partial class SettingsView : UserControl
 {
+    /// <summary>Глушит обработчики при программном наполнении (U3).</summary>
+    private bool _syncingUi;
+
+    private static readonly int[] UiScales = [100, 125, 150, 175, 200];
+
     public SettingsView()
     {
         InitializeComponent();
@@ -23,6 +29,73 @@ public partial class SettingsView : UserControl
         AppServices.Profiles.ActiveProfileChanged += OnProfilesChanged;
         RefreshList();
         RefreshThemes();
+        InitializeInterfaceSection();
+    }
+
+    /// <summary>Секция «Интерфейс» (U3): состояние из настроек и реестра автозапуска.</summary>
+    private void InitializeInterfaceSection()
+    {
+        _syncingUi = true;
+        try
+        {
+            TrayBox.IsChecked = AppServices.Settings.CloseToTray;
+            AutostartBox.IsChecked = AutostartService.IsEnabled();
+
+            ScaleCombo.ItemsSource = UiScales
+                .Select(s => s == 100 ? "100 % (обычный)" : $"{s} %")
+                .ToList();
+            var current = Math.Clamp(AppServices.Settings.UiScalePercent, 50, 300);
+            var index = System.Array.IndexOf(UiScales, current);
+            ScaleCombo.SelectedIndex = index < 0 ? 0 : index;
+        }
+        finally
+        {
+            _syncingUi = false;
+        }
+    }
+
+    private void OnTrayToggle(object sender, RoutedEventArgs e)
+    {
+        if (_syncingUi)
+        {
+            return;
+        }
+
+        AppServices.Settings.CloseToTray = TrayBox.IsChecked == true;
+        AppServices.Settings.Save();
+    }
+
+    private void OnAutostartToggle(object sender, RoutedEventArgs e)
+    {
+        if (_syncingUi)
+        {
+            return;
+        }
+
+        try
+        {
+            AutostartService.SetEnabled(AutostartBox.IsChecked == true);
+        }
+        catch (Exception ex)
+        {
+            // Реестр может быть недоступен — вернём честное состояние.
+            MessageBox.Show(
+                Window.GetWindow(this), ex.Message, "Автозапуск",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+            AutostartBox.IsChecked = AutostartService.IsEnabled();
+        }
+    }
+
+    private void OnScaleChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_syncingUi || ScaleCombo.SelectedIndex < 0)
+        {
+            return;
+        }
+
+        AppServices.Settings.UiScalePercent = UiScales[ScaleCombo.SelectedIndex];
+        AppServices.Settings.Save();
+        (Window.GetWindow(this) as MainWindow)?.ApplyUiScale();
     }
 
     private void OnUnloaded(object sender, RoutedEventArgs e)

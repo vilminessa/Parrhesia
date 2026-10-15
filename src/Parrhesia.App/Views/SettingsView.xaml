@@ -61,6 +61,51 @@
             <StackPanel x:Name="ThemeList" />
           </StackPanel>
         </Border>
+
+        <!-- Интерфейс (U3): трей, автозапуск, масштаб -->
+        <Border Background="{DynamicResource Brush.Panel}"
+                BorderBrush="{DynamicResource Brush.Stroke}"
+                BorderThickness="1"
+                CornerRadius="{DynamicResource Radius.L}"
+                Padding="18,16"
+                Margin="0,14,0,0">
+          <StackPanel>
+            <TextBlock Text="Интерфейс"
+                       FontWeight="SemiBold"
+                       FontSize="15"
+                       Foreground="{DynamicResource Brush.Text}"
+                       Margin="0,0,0,10" />
+
+            <CheckBox x:Name="TrayBox"
+                      Content="Сворачивать в трей при закрытии (иконка «Открыть/Выход»)"
+                      Foreground="{DynamicResource Brush.Text}"
+                      Checked="OnTrayToggle"
+                      Unchecked="OnTrayToggle"
+                      Margin="0,0,0,8" />
+
+            <CheckBox x:Name="AutostartBox"
+                      Content="Запускать с Windows"
+                      Foreground="{DynamicResource Brush.Text}"
+                      Checked="OnAutostartToggle"
+                      Unchecked="OnAutostartToggle"
+                      Margin="0,0,0,12" />
+
+            <Grid Margin="0,0,0,4">
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="160" />
+              </Grid.ColumnDefinitions>
+              <TextBlock Text="Масштаб интерфейса"
+                         Foreground="{DynamicResource Brush.Text}"
+                         VerticalAlignment="Center"
+                         Margin="0,0,14,0" />
+              <ComboBox x:Name="ScaleCombo"
+                        Grid.Column="1"
+                        SelectionChanged="OnScaleChanged"
+                        ToolTip="Для4K и удалённых столов:100/125/150/175/200 %" />
+            </Grid>
+          </StackPanel>
+        </Border>
       </StackPanel>
     </ScrollViewer>
   </Grid>

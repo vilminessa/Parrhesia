@@ -21,7 +21,7 @@
                   UseAeroCaptionButtons="False" />
   </WindowChrome.WindowChrome>
 
-  <Grid>
+  <Grid x:Name="Root">
     <Grid.RowDefinitions>
       <RowDefinition Height="40" />
       <RowDefinition Height="Auto" />

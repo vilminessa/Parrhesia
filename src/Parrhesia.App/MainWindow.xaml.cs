@@ -17,6 +17,66 @@ public partial class MainWindow
         Themes.ThemeManager.ThemeChanged += UpdateBackdrop;
         SelectStartupTab();
         PreviewKeyDown += OnUndoPreviewKeyDown;
+
+        // U3: масштаб интерфейса, трей при сворачивании, онбординг первого запуска.
+        ApplyUiScale();
+        Closing += OnClosing;
+        Closed += (_, _) => _tray?.Dispose();
+        Loaded += OnFirstLoad;
+    }
+
+    private TrayService? _tray;
+    private bool _forceClose;
+
+    /// <summary>Первый запуск (U3): приветственные подсказки — один раз.</summary>
+    private void OnFirstLoad(object sender, RoutedEventArgs e)
+    {
+        Loaded -= OnFirstLoad;
+        if (AppServices.Settings.OnboardingShown)
+        {
+            return;
+        }
+
+        var window = new OnboardingWindow { Owner = this };
+        window.ShowDialog();
+        if (window.Suppress)
+        {
+            AppServices.Settings.OnboardingShown = true;
+            AppServices.Settings.Save();
+        }
+    }
+
+    /// <summary>Закрытие (U3): при CloseToTray — свернуть в трей вместо выхода.</summary>
+    private void OnClosing(object? sender, System.ComponentModel.CancelEventArgs e)
+    {
+        if (_forceClose || !AppServices.Settings.CloseToTray)
+        {
+            return; // обычный выход
+        }
+
+        e.Cancel = true;
+        Hide();
+        _tray ??= new TrayService(OpenFromTray, ExitFromTray);
+    }
+
+    private void OpenFromTray()
+    {
+        Show();
+        WindowState = WindowState.Normal;
+        Activate();
+    }
+
+    private void ExitFromTray()
+    {
+        _forceClose = true;
+        Close();
+    }
+
+    /// <summary>Масштаб интерфейса (U3): настройка UiScalePercent → LayoutTransform корня.</summary>
+    public void ApplyUiScale()
+    {
+        var percent = Math.Clamp(AppServices.Settings.UiScalePercent, 50, 300);
+        Root.LayoutTransform = new System.Windows.Media.ScaleTransform(percent / 100d, percent / 100d);
     }
 
     /// <summary>Ctrl+Z (U2): возвращает последнее удаление (узел с кабелями либо кабель).</summary>

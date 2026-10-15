@@ -32,6 +32,18 @@ public sealed class AppSettings
     /// <summary>Активная тема интерфейса (id папки в themes\; см. ThemeManager).</summary>
     public string ThemeId { get; set; } = "parrhesia";
 
+    /// <summary>Закрытие окна сворачивает в трей (U3: иконка «Открыть/Выход»).</summary>
+    public bool CloseToTray { get; set; }
+
+    /// <summary>Запускать с Windows (U3: запись в HKCU…\Run).</summary>
+    public bool StartWithWindows { get; set; }
+
+    /// <summary>Масштаб интерфейса в процентах (U3:100/125/150/175/200 —4K и удалённые столы).</summary>
+    public int UiScalePercent { get; set; } = 100;
+
+    /// <summary>Приветственные подсказки первого запуска уже показывались (U3).</summary>
+    public bool OnboardingShown { get; set; }
+
     private static string FilePath =>
         Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
