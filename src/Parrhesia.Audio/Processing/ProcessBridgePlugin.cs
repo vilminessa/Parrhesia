@@ -17,7 +17,7 @@ namespace Parrhesia.Audio.Processing;
 /// </summary>
 public sealed class ProcessBridgePlugin : IAudioPlugin
 {
-    private static readonly TimeSpan SpawnTimeout = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan SpawnTimeout = TimeSpan.FromSeconds(30);
 
     private readonly Guid _nodeId;
     private readonly PluginSlot _slot;
@@ -358,8 +358,15 @@ public sealed class ProcessBridgePlugin : IAudioPlugin
     /// </summary>
     private void Spawn(int sampleRate, int maxBlockFrames, int channels)
     {
-        var exe = FindAppExe()
-            ?? throw new PluginLoadException("исполнитель Parrhesia.App.exe не найден (S-волна)");
+        // P-волна: предпочтителен консольный процесс-исполнитель (модули в
+        // духе Clear не инициализируются в GUI-процессе); App.exe — фолбэк
+        // (старые сборки/тестовые стенды).
+        var exe = FindExecutorExe()
+            ?? FindAppExe()
+            ?? throw new PluginLoadException("исполнитель (Parrhesia.Executor.exe / Parrhesia.App.exe) не найден");
+
+        System.Diagnostics.Trace.WriteLine(
+            $"[Parrhesia.Audio][Info] SLOT-SPAWN exe={Path.GetFileName(exe)} slot={_slot.Name}");
 
         _host = new PluginBridge.HostSide(_nodeId, maxBlockFrames);
         _maxBlockFrames = maxBlockFrames;
@@ -490,6 +497,42 @@ public sealed class ProcessBridgePlugin : IAudioPlugin
                 var candidate = Path.Combine(
                     dir.FullName, "src", "Parrhesia.App", "bin", configuration,
                     "net10.0-windows", "Parrhesia.App.exe");
+                if (File.Exists(candidate))
+                {
+                    return candidate;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Консольный процесс-исполнитель (P-волна): env-переопределение →
+    /// рядом с хостом (bin App'а копирует его по ProjectReference) → поиск
+    /// вверх по дереву. null — спавним App.exe (фолбэк).
+    /// </summary>
+    internal static string? FindExecutorExe()
+    {
+        var fromEnv = Environment.GetEnvironmentVariable("PARRHESIA_EXECUTOR_EXE");
+        if (!string.IsNullOrEmpty(fromEnv) && File.Exists(fromEnv))
+        {
+            return fromEnv;
+        }
+
+        var direct = Path.Combine(AppContext.BaseDirectory, "Parrhesia.Executor.exe");
+        if (File.Exists(direct))
+        {
+            return direct;
+        }
+
+        for (var dir = new DirectoryInfo(AppContext.BaseDirectory); dir is not null; dir = dir.Parent)
+        {
+            foreach (var configuration in new[] { "Debug", "Release" })
+            {
+                var candidate = Path.Combine(
+                    dir.FullName, "src", "Parrhesia.App", "bin", configuration,
+                    "net10.0-windows", "Parrhesia.Executor.exe");
                 if (File.Exists(candidate))
                 {
                     return candidate;

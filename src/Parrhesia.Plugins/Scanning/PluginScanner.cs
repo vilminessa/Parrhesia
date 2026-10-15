@@ -36,6 +36,8 @@ public sealed class PluginScanner
     public static IReadOnlyList<string> DefaultFolders(PluginFormat format)
     {
         var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+        var programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+        var programFilesX86 = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
         return format switch
         {
             PluginFormat.Clap =>
@@ -49,6 +51,14 @@ public sealed class PluginScanner
                 Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonProgramFiles), "VST3"),
                 Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonProgramFilesX86), "VST3"),
                 Path.Combine(appData, "VST3"),
+
+                // Неофициальные, но де-факто стандартные места (T-волна):
+                // FL Studio ставит в «Program Files\VST», Steinberg-плагины —
+                // в «Steinberg\VstPlugins»; без них юзер не видит свои модули.
+                Path.Combine(programFiles, "VST"),
+                Path.Combine(programFilesX86, "VST"),
+                Path.Combine(programFiles, "Steinberg", "VstPlugins"),
+                Path.Combine(programFilesX86, "Steinberg", "VstPlugins"),
             ],
             _ => [],
         };

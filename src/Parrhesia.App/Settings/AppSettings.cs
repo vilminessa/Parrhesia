@@ -44,6 +44,12 @@ public sealed class AppSettings
     /// <summary>Приветственные подсказки первого запуска уже показывались (U3).</summary>
     public bool OnboardingShown { get; set; }
 
+    /// <summary>
+    /// Дополнительные папки плагинов (T-волна): FL/Steinberg/личные каталоги,
+    /// которых нет в стандартных путях сканера.
+    /// </summary>
+    public List<string> PluginExtraFolders { get; set; } = [];
+
     private static string FilePath =>
         Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),

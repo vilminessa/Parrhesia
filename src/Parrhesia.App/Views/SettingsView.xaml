@@ -106,6 +106,42 @@
             </Grid>
           </StackPanel>
         </Border>
+
+        <!-- Папки плагинов (T): свои каталоги сверх стандартных -->
+        <Border Background="{DynamicResource Brush.Panel}"
+                BorderBrush="{DynamicResource Brush.Stroke}"
+                BorderThickness="1"
+                CornerRadius="{DynamicResource Radius.L}"
+                Padding="18,16"
+                Margin="0,14,0,0">
+          <StackPanel>
+            <TextBlock Text="Папки плагинов"
+                       FontWeight="SemiBold"
+                       FontSize="15"
+                       Foreground="{DynamicResource Brush.Text}"
+                       Margin="0,0,0,6" />
+            <TextBlock Text="Сканер ищет стандартные каталоги (Common Files\VST3, Program Files\VST, Steinberg\VstPlugins, CLAP). Свои каталоги добавь здесь — «Пересканировать» в диалоге выбора плагина подхватит."
+                       FontSize="12"
+                       TextWrapping="Wrap"
+                       Foreground="{DynamicResource Brush.TextDim}"
+                       Margin="0,0,0,10" />
+
+            <ListBox x:Name="PluginFoldersList"
+                     Height="110"
+                     Background="{DynamicResource Brush.Elevated}"
+                     BorderBrush="{DynamicResource Brush.Stroke}"
+                     BorderThickness="1"
+                     Foreground="{DynamicResource Brush.Text}" />
+
+            <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+              <Button Content="Добавить папку…"
+                      Click="OnAddPluginFolder"
+                      Margin="0,0,8,0" />
+              <Button Content="Убрать выбранную"
+                      Click="OnRemovePluginFolder" />
+            </StackPanel>
+          </StackPanel>
+        </Border>
       </StackPanel>
     </ScrollViewer>
   </Grid>

@@ -3,6 +3,9 @@
   <ItemGroup>
     <ProjectReference Include="..\Parrhesia.Core\Parrhesia.Core.csproj" />
     <ProjectReference Include="..\Parrhesia.Audio\Parrhesia.Audio.csproj" />
+    <!-- Процесс-исполнитель плагинов (P-волна): spec-режим спавнит
+         Parrhesia.Executor.exe (консольный хост) — копируется в наш bin. -->
+    <ProjectReference Include="..\Parrhesia.Executor\Parrhesia.Executor.csproj" />
   </ItemGroup>
 
   <PropertyGroup>

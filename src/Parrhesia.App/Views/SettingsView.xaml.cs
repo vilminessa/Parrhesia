@@ -30,6 +30,7 @@ public partial class SettingsView : UserControl
         RefreshList();
         RefreshThemes();
         InitializeInterfaceSection();
+        RefreshPluginFolders();
     }
 
     /// <summary>Секция «Интерфейс» (U3): состояние из настроек и реестра автозапуска.</summary>
@@ -96,6 +97,53 @@ public partial class SettingsView : UserControl
         AppServices.Settings.UiScalePercent = UiScales[ScaleCombo.SelectedIndex];
         AppServices.Settings.Save();
         (Window.GetWindow(this) as MainWindow)?.ApplyUiScale();
+    }
+
+    // ===== Папки плагинов (T): свои каталоги сверх стандартных =====
+
+    private void RefreshPluginFolders()
+    {
+        PluginFoldersList.ItemsSource = AppServices.Settings.PluginExtraFolders.ToList();
+    }
+
+    private void OnAddPluginFolder(object sender, RoutedEventArgs e)
+    {
+        var dialog = new Microsoft.Win32.OpenFolderDialog
+        {
+            Title = "Папка с плагинами",
+        };
+        if (dialog.ShowDialog(Window.GetWindow(this)) != true)
+        {
+            return;
+        }
+
+        var folder = dialog.FolderName;
+        if (string.IsNullOrWhiteSpace(folder))
+        {
+            return;
+        }
+
+        var folders = AppServices.Settings.PluginExtraFolders;
+        if (folders.Contains(folder, StringComparer.OrdinalIgnoreCase))
+        {
+            return; // уже добавлена
+        }
+
+        folders.Add(folder);
+        AppServices.Settings.Save();
+        RefreshPluginFolders();
+    }
+
+    private void OnRemovePluginFolder(object sender, RoutedEventArgs e)
+    {
+        if (PluginFoldersList.SelectedItem is not string folder)
+        {
+            return;
+        }
+
+        AppServices.Settings.PluginExtraFolders.Remove(folder);
+        AppServices.Settings.Save();
+        RefreshPluginFolders();
     }
 
     private void OnUnloaded(object sender, RoutedEventArgs e)

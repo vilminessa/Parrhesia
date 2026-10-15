@@ -127,7 +127,10 @@ public sealed class PluginPickerWindow : Window
 
         try
         {
-            var result = await Task.Run(() => new PluginScanner().Scan(useCache: useCache));
+            // Скан: стандартные папки + пользовательские (T-волна: FL/личные).
+            var folders = PluginScanner.DefaultFolders()
+                .Concat(AppServices.Settings.PluginExtraFolders);
+            var result = await Task.Run(() => new PluginScanner().Scan(folders, useCache: useCache));
 
             _all = result.Plugins
                 .OrderBy(p => p.Name, StringComparer.CurrentCultureIgnoreCase)

@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using Parrhesia.Core.Graph;
 using Parrhesia.Plugins;
@@ -31,11 +32,13 @@ public sealed class SlotChainManager : IDisposable
     private readonly HashSet<Guid> _paused = [];
 
     /// <summary>Бэкофф ретраев спавна исполнителей (только узлы-плагины).
-    /// Slow — модуль завис при загрузке (ретраи раз в минуты); иначе быстрые падения.</summary>
-    private readonly Dictionary<Guid, RetryState> _retries = [];
+    /// Slow — модуль завис при загрузке (ретраи раз в минуты); иначе быстрые падения.
+    /// ConcurrentDictionary: пишет phase B синка (вне _gate), читает тик пультов.</summary>
+    private readonly ConcurrentDictionary<Guid, RetryState> _retries = [];
 
-    /// <summary>Число попыток создания экземпляров по узлам-плагинам (диагностика/тесты).</summary>
-    private readonly Dictionary<Guid, int> _spawnAttempts = [];
+    /// <summary>Число попыток создания экземпляров по узлам-плагинам (диагностика/тесты).
+    /// ConcurrentDictionary — та же гонка-защита, что у _retries.</summary>
+    private readonly ConcurrentDictionary<Guid, int> _spawnAttempts = [];
 
     private readonly CancellationTokenSource _tickCts = new();
 
@@ -164,8 +167,8 @@ public sealed class SlotChainManager : IDisposable
                         CollectDropped(emptyState, emptyDropped);
                     }
 
-                    _retries.Remove(node.Id);
-                    _spawnAttempts.Remove(node.Id);
+                    _retries.TryRemove(node.Id, out _);
+                    _spawnAttempts.TryRemove(node.Id, out _);
                     plan.Add(new PlanItem(node.Id, [], string.Empty, null, false, false));
                     continue;
                 }
@@ -190,8 +193,8 @@ public sealed class SlotChainManager : IDisposable
                         CollectDropped(orphan, emptyDropped);
                     }
 
-                    _retries.Remove(id);
-                    _spawnAttempts.Remove(id);
+                    _retries.TryRemove(id, out _);
+                    _spawnAttempts.TryRemove(id, out _);
                     plan.Add(new PlanItem(id, [], string.Empty, null, false, false));
                 }
             }
@@ -433,7 +436,7 @@ public sealed class SlotChainManager : IDisposable
             }
 
             // T1: ручной перезапуск сбрасывает бэкофф — попытка немедленная.
-            _retries.Remove(nodeId);
+            _retries.TryRemove(nodeId, out _);
 
             if (!_states.TryGetValue(nodeId, out var state))
             {
@@ -758,7 +761,7 @@ public sealed class SlotChainManager : IDisposable
 
                 if (item.IsPluginNode)
                 {
-                    _spawnAttempts[item.Id] = _spawnAttempts.GetValueOrDefault(item.Id) + 1;
+                    _spawnAttempts.AddOrUpdate(item.Id, 1, static (_, v) => v + 1);
                 }
 
                 try
@@ -779,7 +782,7 @@ public sealed class SlotChainManager : IDisposable
 
                     if (item.IsPluginNode)
                     {
-                        _retries.Remove(item.Id); // успех — бэкофф сброшен
+                        _retries.TryRemove(item.Id, out _); // успех — бэкофф сброшен
                     }
 
                     if (stopwatch.ElapsedMilliseconds > 10_000)
