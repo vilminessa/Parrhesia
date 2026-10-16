@@ -43,6 +43,12 @@ public partial class GraphView : UserControl
     private NodeElement? _draggedNode;
     private Point _dragOffset;
 
+    // Ресайз узла за угол (U-волна: размеры персистятся в профиле).
+    private NodeElement? _resizingNode;
+    private Point _resizeStartWorld;
+    private double _resizeStartWidth;
+    private double _resizeStartHeight;
+
     private CableDrag? _cableDrag;
     private ReattachDrag? _reattachDrag;
     private NodeElement? _selectedNode;
@@ -168,6 +174,20 @@ public partial class GraphView : UserControl
         if (FindNodeAt(world) is { } node)
         {
             SelectNode(node);
+
+            if (node.HitResizeHandle(world))
+            {
+                // Угол — ресайз, а не перенос узла.
+                _resizingNode = node;
+                _resizeStartWorld = world;
+                _resizeStartWidth = node.ActualWidth;
+                _resizeStartHeight = node.ActualHeight;
+                Canvas.SetZIndex(node, 20);
+                CaptureMouse();
+                e.Handled = true;
+                return;
+            }
+
             _draggedNode = node;
             _dragOffset = new Point(world.X - node.Left, world.Y - node.Top);
             Canvas.SetZIndex(node, 20);
@@ -193,6 +213,16 @@ public partial class GraphView : UserControl
             var screen = e.GetPosition(Viewport);
             _translate.X = _panOrigin.X + (screen.X - _panStart.X);
             _translate.Y = _panOrigin.Y + (screen.Y - _panStart.Y);
+            return;
+        }
+
+        if (_resizingNode is { } resizing)
+        {
+            var resizeWorld = e.GetPosition(World);
+            resizing.SetSize(
+                _resizeStartWidth + (resizeWorld.X - _resizeStartWorld.X),
+                _resizeStartHeight + (resizeWorld.Y - _resizeStartWorld.Y));
+            _cableLayer.InvalidateVisual();
             return;
         }
 
@@ -238,6 +268,17 @@ public partial class GraphView : UserControl
         if (_draggedNode is not null)
         {
             _draggedNode = null;
+            ReleaseMouseCapture();
+        }
+
+        if (_resizingNode is { } doneResizing)
+        {
+            // Фиксация размера в модели (AppearanceChanged → автосейв профиля).
+            _graph.SetNodeGraphSize(
+                doneResizing.Node.Id,
+                doneResizing.ActualWidth,
+                doneResizing.ActualHeight);
+            _resizingNode = null;
             ReleaseMouseCapture();
         }
 
@@ -1316,22 +1357,15 @@ public partial class GraphView : UserControl
             var index = i;
             var slot = node.Slots[i];
 
-            var row = new StackPanel
-            {
-                Orientation = Orientation.Horizontal,
-                Margin = new Thickness(0, 2, 0, 0),
-            };
-
             var enable = new CheckBox
             {
                 IsChecked = slot.Enabled,
                 VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(0, 0, 6, 0),
+                Margin = new Thickness(0, 0, 8, 0),
                 ToolTip = "Слот включён (без него — проход)",
             };
             enable.Checked += (_, _) => SetSlotEnabled(node, index, true);
             enable.Unchecked += (_, _) => SetSlotEnabled(node, index, false);
-            row.Children.Add(enable);
 
             var title = new TextBlock
             {
@@ -1340,22 +1374,74 @@ public partial class GraphView : UserControl
                     : slot.Name,
                 ToolTip = slot.Path + " · " + slot.PluginId,
                 VerticalAlignment = VerticalAlignment.Center,
-                MaxWidth = 120,
+                TextWrapping = TextWrapping.Wrap,
                 TextTrimming = TextTrimming.CharacterEllipsis,
-                Margin = new Thickness(0, 0, 6, 0),
                 Opacity = slot.Enabled ? 1.0 : 0.5,
             };
-            row.Children.Add(title);
 
-            row.Children.Add(BuildSlotButton("↑", "Выше", index > 0, (_, _) => MoveSlot(node, index, -1)));
-            row.Children.Add(BuildSlotButton("↓", "Ниже", index < node.Slots.Count - 1, (_, _) => MoveSlot(node, index, +1)));
-            row.Children.Add(BuildSlotButton("✕", "Убрать", true, (_, _) => RemoveSlot(node, index)));
-            row.Children.Add(BuildSlotButton("⇩", "Сохранить пресет слота в файл", true, (_, _) => ExportSlotPreset(node, index)));
-            row.Children.Add(BuildSlotButton("⇧", "Загрузить пресет слота из файла", true, (_, _) => ImportSlotPreset(node, index)));
-            row.Children.Add(BuildSlotButton("✎", "Редактор плагина", true, (_, _) => OpenSlotEditor(node, index)));
-            row.Children.Add(BuildSlotButton("⚙", "Параметры слота", true, (_, _) => ToggleSlotParams(node, index)));
+            var header = new DockPanel { LastChildFill = true };
+            DockPanel.SetDock(enable, Dock.Left);
+            header.Children.Add(enable);
+            header.Children.Add(title);
 
-            SlotsHost.Children.Add(row);
+            // Кнопки переносятся по ширине карточки — не уходят за панель.
+            var buttons = new WrapPanel { Margin = new Thickness(0, 6, 0, 0) };
+            buttons.Children.Add(BuildSlotButton("↑", "Выше", index > 0, (_, _) => MoveSlot(node, index, -1)));
+            buttons.Children.Add(BuildSlotButton("↓", "Ниже", index < node.Slots.Count - 1, (_, _) => MoveSlot(node, index, +1)));
+            buttons.Children.Add(BuildSlotButton("✕", "Убрать", true, (_, _) => RemoveSlot(node, index)));
+            buttons.Children.Add(BuildSlotButton("⇩", "Сохранить пресет слота в файл", true, (_, _) => ExportSlotPreset(node, index)));
+            buttons.Children.Add(BuildSlotButton("⇧", "Загрузить пресет слота из файла", true, (_, _) => ImportSlotPreset(node, index)));
+            buttons.Children.Add(BuildSlotButton("✎", "Редактор плагина", true, (_, _) => OpenSlotEditor(node, index)));
+            buttons.Children.Add(BuildSlotButton("⚙", "Параметры слота", true, (_, _) => ToggleSlotParams(node, index)));
+
+            var content = new StackPanel();
+            content.Children.Add(header);
+            content.Children.Add(buttons);
+
+            var handle = new Border
+            {
+                Height = 8,
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                VerticalAlignment = VerticalAlignment.Bottom,
+                Background = Brushes.Transparent,
+                Cursor = Cursors.SizeNS,
+                ToolTip = "Тянуть вниз/вверх — высота карточки (сохраняется в профиле)",
+                Child = new TextBlock
+                {
+                    Text = "⸻",
+                    FontSize = 8,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Foreground = ResolveViewBrush("Brush.TextFaint", "#FF5C6472"),
+                },
+            };
+            WireCardHeightDrag(handle, node, index);
+
+            var contentGrid = new Grid();
+            contentGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            contentGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            Grid.SetRow(content, 0);
+            Grid.SetRow(handle, 1);
+            contentGrid.Children.Add(content);
+            contentGrid.Children.Add(handle);
+
+            var card = new Border
+            {
+                Background = ResolveViewBrush("Brush.Deep", "#FF0B0D10"),
+                BorderBrush = ResolveViewBrush("Brush.Stroke", "#FF262B33"),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(6),
+                Padding = new Thickness(9, 7, 9, 4),
+                Margin = new Thickness(0, 4, 0, 0),
+                MinHeight = 44,
+                Child = contentGrid,
+            };
+            if (slot.UiHeight is { } uiHeight && uiHeight >= 44)
+            {
+                card.Height = uiHeight;
+            }
+
+            SlotsHost.Children.Add(card);
         }
 
         // Слот, чьи параметры были открыты, мог исчезнуть/переехать.
@@ -1363,6 +1449,68 @@ public partial class GraphView : UserControl
         {
             CloseSlotParams();
         }
+    }
+
+    /// <summary>
+    /// Тянется за нижнюю кромку карточки — фиксирует высоту слота в модели
+    /// (переживает рестарт, как высота пульта в микшере).
+    /// </summary>
+    private void WireCardHeightDrag(Border handle, AudioNode node, int slotIndex)
+    {
+        var dragging = false;
+        var startHostY = 0.0;
+        var startHeight = 0.0;
+
+        handle.MouseLeftButtonDown += (_, e) =>
+        {
+            dragging = true;
+            startHostY = e.GetPosition(SlotsHost).Y;
+            if (handle.Parent is Grid cardGrid && cardGrid.Parent is Border cardBorder)
+            {
+                startHeight = double.IsNaN(cardBorder.Height) ? cardGrid.ActualHeight : cardBorder.Height;
+            }
+
+            handle.CaptureMouse();
+            e.Handled = true;
+        };
+
+        handle.MouseMove += (_, e) =>
+        {
+            if (!dragging || !handle.IsMouseCaptured || handle.Parent is not Grid grid || grid.Parent is not Border card)
+            {
+                return;
+            }
+
+            var delta = e.GetPosition(SlotsHost).Y - startHostY;
+            card.Height = Math.Clamp(startHeight + delta, 44, 640);
+        };
+
+        handle.MouseLeftButtonUp += (_, e) =>
+        {
+            if (!dragging)
+            {
+                return;
+            }
+
+            dragging = false;
+            handle.ReleaseMouseCapture();
+            if (handle.Parent is Grid grid && grid.Parent is Border card)
+            {
+                _graph.SetSlotUiHeight(node.Id, slotIndex, (int)Math.Round(card.Height));
+            }
+        };
+    }
+
+    private static Brush ResolveViewBrush(string key, string fallbackHex)
+    {
+        if (Application.Current?.TryFindResource(key) is Brush brush)
+        {
+            return brush;
+        }
+
+        var fallback = new SolidColorBrush((Color)ColorConverter.ConvertFromString(fallbackHex)!);
+        fallback.Freeze();
+        return fallback;
     }
 
     private static Button BuildSlotButton(string content, string tooltip, bool enabled, RoutedEventHandler onClick)

@@ -37,4 +37,10 @@ public sealed record PluginSlot
 
     /// <summary>Состояние плагина (state-чанк); null — ещё не сохранялось.</summary>
     public byte[]? State { get; init; }
+
+    /// <summary>
+    /// Высота карточки слота в инспекторе (px; null — по контенту).
+    /// Косметика: персистится в профиле, как и X/Y узла.
+    /// </summary>
+    public int? UiHeight { get; init; }
 }

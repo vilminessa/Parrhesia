@@ -71,6 +71,14 @@ public sealed class AudioNode
     public int? StripHeight { get; internal set; }
 
     /// <summary>
+    /// Размер узла на холсте схемы (px). Хранится как X/Y — персистится в
+    /// профиле. null — дефолт: ширина168, высота по контенту.
+    /// </summary>
+    public double? GraphWidth { get; internal set; }
+
+    public double? GraphHeight { get; internal set; }
+
+    /// <summary>
     /// Состояния эффекторов пульта по стабильным id ("eq", "comp", "gate",
     /// "denoise" — см. FxInfo). Отсутствие ключа = выключено. Контракт для
     /// волны эффектов: включение звучания поднимет NodeChanged через

@@ -731,6 +731,24 @@ public sealed class AudioGraph
         Raise(GraphChangeKind.NodeChanged, node: node);
     }
 
+    /// <summary>
+    /// Высота карточки слота в инспекторе (px; null — по контенту). Косметика:
+    /// <see cref="GraphChangeKind.AppearanceChanged"/> — звук не меняется,
+    /// автосейв сохраняет профиль.
+    /// </summary>
+    public void SetSlotUiHeight(Guid nodeId, int index, int? height)
+    {
+        var node = FindSlotNode(nodeId);
+        var slot = FindSlot(node, index);
+        if (slot.UiHeight == height)
+        {
+            return;
+        }
+
+        node.SlotsInternal[index] = slot with { UiHeight = height };
+        Raise(GraphChangeKind.AppearanceChanged, node: node);
+    }
+
     private AudioNode FindSlotNode(Guid id)
     {
         var node = FindNode(id) ?? throw new ArgumentException($"Узел {id:N} не найден.", nameof(id));
@@ -789,6 +807,33 @@ public sealed class AudioGraph
         }
 
         node.StripHeight = height;
+        Raise(GraphChangeKind.AppearanceChanged, node: node);
+    }
+
+    /// <summary>
+    /// Размер узла на холсте схемы (px; null — дефолт). Косметика:
+    /// <see cref="GraphChangeKind.AppearanceChanged"/> — автосейв сохранит профиль.
+    /// </summary>
+    public void SetNodeGraphSize(Guid id, double? width, double? height)
+    {
+        if (width is { } w && (!double.IsFinite(w) || w < 80))
+        {
+            throw new ArgumentOutOfRangeException(nameof(width), "Ширина должна быть ≥80 и конечной.");
+        }
+
+        if (height is { } h && (!double.IsFinite(h) || h < 32))
+        {
+            throw new ArgumentOutOfRangeException(nameof(height), "Высота должна быть ≥32 и конечной.");
+        }
+
+        var node = FindNode(id) ?? throw new ArgumentException($"Узел {id:N} не найден.", nameof(id));
+        if (node.GraphWidth == width && node.GraphHeight == height)
+        {
+            return;
+        }
+
+        node.GraphWidth = width;
+        node.GraphHeight = height;
         Raise(GraphChangeKind.AppearanceChanged, node: node);
     }
 

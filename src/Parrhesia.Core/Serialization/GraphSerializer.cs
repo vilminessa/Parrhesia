@@ -50,6 +50,8 @@ public static class GraphSerializer
                 X = n.X,
                 Y = n.Y,
                 StripHeight = n.StripHeight,
+                GraphWidth = n.GraphWidth,
+                GraphHeight = n.GraphHeight,
                 Fx = n.FxEnabled.Count > 0 ? n.FxEnabled : null,
                 FxExpanded = n.FxExpanded,
                 Slots = n.Slots.Count > 0
@@ -61,6 +63,7 @@ public static class GraphSerializer
                         Name = s.Name,
                         Enabled = s.Enabled,
                         State = s.State is null ? null : Convert.ToBase64String(s.State),
+                        UiHeight = s.UiHeight,
                     }).ToList()
                     : null,
             }).ToList(),
@@ -167,6 +170,8 @@ public static class GraphSerializer
             node.X = nodeDocument.X;
             node.Y = nodeDocument.Y;
             node.StripHeight = nodeDocument.StripHeight;
+            node.GraphWidth = nodeDocument.GraphWidth;
+            node.GraphHeight = nodeDocument.GraphHeight;
             node.FxEnabled = nodeDocument.Fx ?? [];
             node.FxExpanded = nodeDocument.FxExpanded;
 
@@ -211,6 +216,7 @@ public static class GraphSerializer
                         Name = string.IsNullOrEmpty(slotDocument.Name) ? slotDocument.PluginId! : slotDocument.Name,
                         Enabled = slotDocument.Enabled,
                         State = state,
+                        UiHeight = slotDocument.UiHeight,
                     });
                 }
             }
@@ -414,6 +420,11 @@ public static class GraphSerializer
         /// <summary>Высота пульта в микшере (px); null — дефолт. Косметика.</summary>
         public int? StripHeight { get; set; }
 
+        /// <summary>Размер узла на схеме (px); null — дефолт. Косметика.</summary>
+        public double? GraphWidth { get; set; }
+
+        public double? GraphHeight { get; set; }
+
         /// <summary>Состояния эффекторов пульта (id → включён); null — ничего не включено.</summary>
         public Dictionary<string, bool>? Fx { get; set; }
 
@@ -439,6 +450,9 @@ public static class GraphSerializer
 
         /// <summary>State-чанк плагина в base64.</summary>
         public string? State { get; set; }
+
+        /// <summary>Высота карточки слота в инспекторе (px); null — по контенту.</summary>
+        public int? UiHeight { get; set; }
     }
 
     private sealed class RouteDocument

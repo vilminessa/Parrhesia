@@ -25,6 +25,14 @@ internal sealed class NodeElement : Border
     public const double NodeWidth = 168;
     public const double PortVisualRadius = 5;
 
+    /// <summary>Зона угла ресайза (мировые px): тянется за правый-нижний угол.</summary>
+    public const double ResizeHandleSize = 14;
+
+    /// <summary>Минимальный размер перетаскиванием (название+шапка должны влезать).</summary>
+    public const double MinNodeWidth = 120;
+
+    public const double MinNodeHeight = 40;
+
     /// <summary>Смещение центров каналов от центра узла (порты стоят столбиком).</summary>
     public const double PortChannelOffset = 9.0;
 
@@ -73,6 +81,7 @@ internal sealed class NodeElement : Border
             FontSize = 12.5,
             FontWeight = FontWeights.SemiBold,
             TextTrimming = TextTrimming.CharacterEllipsis,
+            TextWrapping = TextWrapping.Wrap, // широкий узел переносит длинное имя
             VerticalAlignment = VerticalAlignment.Center,
             Text = node.Name,
         };
@@ -144,15 +153,43 @@ internal sealed class NodeElement : Border
         _grid = grid;
         RebuildPortColumns();
 
+        // Угловой хэндл ресайза (поверх контента; порты-колонки его не
+        // перекрывают — они по центрам сторон). Тянется GraphView-ом через
+        // HitResizeHandle/SetSize.
+        _grid.Children.Add(new Border
+        {
+            Width = ResizeHandleSize,
+            Height = ResizeHandleSize,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Bottom,
+            Margin = new Thickness(0, 0, 3, 3),
+            Background = Brushes.Transparent,
+            Cursor = Cursors.SizeNWSE,
+            ToolTip = "Тянуть за угол — изменить размер узла (размер сохраняется)",
+            Child = new TextBlock
+            {
+                Text = "◢",
+                FontSize = 9,
+                Foreground = ResolveBrush("Brush.TextFaint", "#FF5C6472"),
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+            },
+        });
+
         _root = new Border
         {
-            Width = NodeWidth,
             Background = Brushes.Transparent,
             BorderThickness = new Thickness(0),
             BorderBrush = ResolveBrush("Brush.Accent", "#FFFFB020"),
             CornerRadius = new CornerRadius(9),
             Child = grid,
         };
+
+        // Размер из модели (переживает рестарт); null — дефолт по умолчанию.
+        Width = node.GraphWidth ?? NodeWidth;
+        Height = node.GraphHeight ?? double.NaN;
+        MinWidth = MinNodeWidth;
+        MinHeight = MinNodeHeight;
 
         Child = _root;
         Background = Brushes.Transparent;
@@ -239,6 +276,20 @@ internal sealed class NodeElement : Border
         Top = y;
         Canvas.SetLeft(this, x);
         Canvas.SetTop(this, y);
+    }
+
+    /// <summary>Мировая точка попадает в угловой хэндл ресайза.</summary>
+    public bool HitResizeHandle(Point world) =>
+        ActualWidth > 0 &&
+        ActualHeight > 0 &&
+        world.X >= Left + ActualWidth - ResizeHandleSize &&
+        world.Y >= Top + ActualHeight - ResizeHandleSize;
+
+    /// <summary>Задаёт размер узла (px); порты-центры и кабели пересчитываются снаружи.</summary>
+    public void SetSize(double width, double height)
+    {
+        Width = Math.Max(MinNodeWidth, width);
+        Height = Math.Max(MinNodeHeight, height);
     }
 
     public void SetSelected(bool selected)
