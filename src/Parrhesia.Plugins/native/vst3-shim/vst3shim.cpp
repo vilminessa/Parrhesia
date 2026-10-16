@@ -25,6 +25,8 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstdarg>
+#include <cstdio>
 #include <cstring>
 #include <memory>
 #include <mutex>
@@ -193,6 +195,75 @@ void* FailPtr (const char* message)
     return nullptr;
 }
 
+// Файловая трассировка (T-диагностика Clear): %TEMP%\parrhesia-shim-{pid}.log.
+// Последняя строка лога без парной «done» = вызов, на котором висит модуль.
+// fflush после каждой строки — дамп/читатель видят хвост немедленно.
+static FILE* TraceStream ()
+{
+    static FILE* file = [] () -> FILE* {
+        char temp[MAX_PATH];
+        const DWORD len = GetTempPathA (MAX_PATH, temp);
+        if (len == 0 || len >= MAX_PATH)
+        {
+            return nullptr;
+        }
+
+        char path[MAX_PATH];
+        snprintf (path, MAX_PATH, "%sparrhesia-shim-%lu.log", temp, GetCurrentProcessId ());
+        return fopen (path, "a");
+    } ();
+
+    return file;
+}
+
+static void Trace (const char* fmt, ...)
+{
+    FILE* file = TraceStream ();
+    if (file == nullptr)
+    {
+        return;
+    }
+
+    SYSTEMTIME time;
+    GetLocalTime (&time);
+    fprintf (file, "[%02u:%02u:%02u.%03u] ", time.wHour, time.wMinute, time.wSecond, time.wMilliseconds);
+
+    va_list args;
+    va_start (args, fmt);
+    vfprintf (file, fmt, args);
+    va_end (args);
+
+    fprintf (file, "\n");
+    fflush (file);
+}
+
+} // namespace
+
+// Хук трассировки для vendor-файла SDK (module_win32.cpp): та же точка записи.
+extern "C" void Pv3ShimTrace (const char* fmt, ...)
+{
+    FILE* file = TraceStream ();
+    if (file == nullptr)
+    {
+        return;
+    }
+
+    SYSTEMTIME time;
+    GetLocalTime (&time);
+    fprintf (file, "[%02u:%02u:%02u.%03u] [sdk] ", time.wHour, time.wMinute, time.wSecond, time.wMilliseconds);
+
+    va_list args;
+    va_start (args, fmt);
+    vfprintf (file, fmt, args);
+    va_end (args);
+
+    fprintf (file, "\n");
+    fflush (file);
+}
+
+namespace
+{
+
 } // namespace
 
 extern "C"
@@ -205,18 +276,25 @@ int __cdecl Pv3Enumerate (const char* modulePath, Pv3EnumCallback callback, void
         return Fail ("Pv3Enumerate: аргумент null");
     }
 
+    Trace ("Pv3Enumerate enter: %s", modulePath);
+
     const ComGuard comGuard;
+    Trace ("Pv3Enumerate: com-guard done");
 
     std::lock_guard<std::mutex> guard (gModuleLock);
 
     std::string error;
+    Trace ("Pv3Enumerate: Module::create enter");
     auto module = VST3::Hosting::Module::create (modulePath, error);
     if (!module)
     {
+        Trace ("Pv3Enumerate: Module::create FAILED: %s", error.c_str ());
         return Fail (error.empty () ? "Не удалось загрузить модуль VST3" : error.c_str ());
     }
 
+    Trace ("Pv3Enumerate: Module::create done");
     auto& factory = module->getFactory ();
+    Trace ("Pv3Enumerate: classInfos enter");
     int reported = 0;
     for (auto& info : factory.classInfos ())
     {
@@ -226,10 +304,12 @@ int __cdecl Pv3Enumerate (const char* modulePath, Pv3EnumCallback callback, void
         }
 
         const std::string cid = info.ID ().toString ();
+        Trace ("Pv3Enumerate: class %s", cid.c_str ());
         callback (context, cid.c_str (), info.name ().c_str (), info.vendor ().c_str ());
         reported++;
     }
 
+    Trace ("Pv3Enumerate done: %d", reported);
     return reported;
 }
 
@@ -245,18 +325,25 @@ void* __cdecl Pv3Create (const char* modulePath, const char* classId)
         return FailPtr ("Pv3Create: аргумент null");
     }
 
+    Trace ("Pv3Create enter: %s [%s]", modulePath, classId);
+
     const ComGuard comGuard;
+    Trace ("Pv3Create: com-guard done");
 
     std::lock_guard<std::mutex> guard (gModuleLock);
 
     LastErrorRef ().clear ();
 
     std::string error;
+    Trace ("Pv3Create: Module::create enter");
     auto module = VST3::Hosting::Module::create (modulePath, error);
     if (!module)
     {
+        Trace ("Pv3Create: Module::create FAILED: %s", error.c_str ());
         return FailPtr (error.empty () ? "Не удалось загрузить модуль VST3" : error.c_str ());
     }
+
+    Trace ("Pv3Create: Module::create done");
 
     // UID::fromString ожидает32 hex-символа без дефисов — нормализуем.
     std::string cidNormalized (classId);
@@ -269,6 +356,7 @@ void* __cdecl Pv3Create (const char* modulePath, const char* classId)
 
     auto& factory = module->getFactory ();
     std::optional<VST3::Hosting::ClassInfo> found;
+    Trace ("Pv3Create: classInfos enter");
     for (auto& info : factory.classInfos ())
     {
         if (info.ID () == *uid)
@@ -278,22 +366,27 @@ void* __cdecl Pv3Create (const char* modulePath, const char* classId)
         }
     }
 
+    Trace ("Pv3Create: classInfos done (found=%d)", found ? 1 : 0);
     if (!found)
     {
         return FailPtr ("Класс не найден в модуле");
     }
 
+    Trace ("Pv3Create: setHostContext");
     EnsureHostContext ();
     factory.setHostContext (gHostApp.get ());
 
+    Trace ("Pv3Create: PlugProvider::initialize enter");
     auto instance = std::make_unique<Instance> ();
     instance->module = module;
     instance->provider = std::make_unique<Vst::PlugProvider> (factory, *found, true);
     if (!instance->provider->initialize ())
     {
+        Trace ("Pv3Create: PlugProvider::initialize FAILED");
         return FailPtr ("PlugProvider::initialize не прошёл (возможно, нет контроллера)");
     }
 
+    Trace ("Pv3Create: PlugProvider::initialize done");
     instance->component = instance->provider->getComponentPtr ();
     if (!instance->component)
     {
@@ -306,6 +399,7 @@ void* __cdecl Pv3Create (const char* modulePath, const char* classId)
         return FailPtr ("Компонент не поддерживает IAudioProcessor");
     }
 
+    Trace ("Pv3Create done");
     return instance.release ();
 }
 

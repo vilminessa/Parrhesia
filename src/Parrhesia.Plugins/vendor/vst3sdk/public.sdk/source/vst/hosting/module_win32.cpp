@@ -26,6 +26,11 @@
 #include <algorithm>
 #include <iostream>
 
+// Parrhesia: диагностическая трассировка (T-волна Clear) — пишет в
+// parrhesia-shim-{pid}.log (реализация в vst3shim.cpp). Правка vendor —
+// локальная/диагностическая, SDK не распространяется.
+extern "C" void Pv3ShimTrace (const char* fmt, ...);
+
 #if SMTG_CPP17
 
 #if __has_include(<filesystem>)
@@ -195,6 +200,7 @@ public:
 	//--- -----------------------------------------------------------------------
 	bool load (const std::string& inPath, std::string& errorDescription) override
 	{
+		Pv3ShimTrace ("Win32Module::load enter: %s", inPath.c_str ());
 		// filesystem::u8path is deprecated in C++20
 #if SMTG_CPP20
 		const filesystem::path tmp (inPath);
@@ -212,10 +218,12 @@ public:
 			// try old definition without package
 			mModule = loadAsDll (inPath, errorDescription);
 		}
+		Pv3ShimTrace ("Win32Module::load: module = %p", mModule);
 		if (mModule == nullptr)
 			return false;
 
 		auto factoryProc = getFunctionPointer<GetFactoryProc> ("GetPluginFactory");
+		Pv3ShimTrace ("Win32Module::load: factoryProc = %p", factoryProc);
 		if (!factoryProc)
 		{
 			errorDescription = "The dll does not export the required 'GetPluginFactory' function";
@@ -223,18 +231,22 @@ public:
 		}
 		// InitDll is optional
 		auto dllEntry = getFunctionPointer<InitModuleFunc> ("InitDll");
+		Pv3ShimTrace ("Win32Module::load: InitDll = %p", dllEntry);
 		if (dllEntry && !dllEntry ())
 		{
 			errorDescription = "Calling 'InitDll' failed";
 			return false;
 		}
+		Pv3ShimTrace ("Win32Module::load: calling GetPluginFactory()...");
 		auto f = Steinberg::U::cast<Steinberg::IPluginFactory> (owned (factoryProc ()));
+		Pv3ShimTrace ("Win32Module::load: factory = %p", f.get ());
 		if (!f)
 		{
 			errorDescription = "Calling 'GetPluginFactory' returned nullptr";
 			return false;
 		}
 		factory = PluginFactory (f);
+		Pv3ShimTrace ("Win32Module::load done");
 		return true;
 	}
 
