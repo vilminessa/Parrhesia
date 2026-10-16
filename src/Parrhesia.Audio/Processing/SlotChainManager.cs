@@ -210,6 +210,15 @@ public sealed class SlotChainManager : IDisposable
                 continue;
             }
 
+            if (_paused.Contains(item.Id))
+            {
+                // Узел на паузе: свежую сборку фаза C всё равно отвергнет —
+                // не спавним (иначе тик каждые 2 с порождал бы пару
+                // спавн→откат, пока Prepare держит паузу).
+                built.Add((item.Id, item.Current));
+                continue;
+            }
+
             if (item.Current is not null &&
                 item.Current.Identity == item.Identity &&
                 !PluginNeedsRebuild(item))
@@ -261,6 +270,28 @@ public sealed class SlotChainManager : IDisposable
                 {
                     // Узел на паузе: RT не должен трогать его экземпляры.
                     publish.Add((item.Id, []));
+
+                    // Пауза наступила ПОСЛЕ свежей сборки (Prepare успел
+                    // поставить паузу между фазами B и C): результат
+                    // отброшен — выгружаем новые экземпляры (их живой
+                    // ребёнок-исполнитель иначе остаётся сиротой на
+                    // общем канале) и снимаем устаревшее состояние: оно
+                    // указывает на уже выгруженный мост, а NeedsRestart у
+                    // выгруженного = false — слот навсегда остался бы
+                    // трупом (молчаливый обход сигнала, жёлтая точка).
+                    // После снятия паузы WithPausedChain пересоберёт узел.
+                    var pausedBuilt = built.FirstOrDefault(b => b.Id == item.Id).State;
+                    if (pausedBuilt is not null && !ReferenceEquals(pausedBuilt, item.Current))
+                    {
+                        CollectDiscarded(pausedBuilt, item.Current, dropped);
+
+                        // Состояние уходит целиком: экземпляры Current,
+                        // не попавшие в replaced (переиспользованные слоты),
+                        // иначе остались бы сиротами вне словаря.
+                        CollectDropped(item.Current, dropped);
+                        _states.Remove(item.Id);
+                    }
+
                     continue;
                 }
 
@@ -272,7 +303,7 @@ public sealed class SlotChainManager : IDisposable
                 {
                     retry = true;
                     var stale = built.FirstOrDefault(b => b.Id == item.Id).State;
-                    CollectDropped(stale, dropped);
+                    CollectDiscarded(stale, item.Current, dropped);
                     continue;
                 }
 
@@ -290,6 +321,7 @@ public sealed class SlotChainManager : IDisposable
         }
 
         Retry(emptyDropped);
+        Retry(dropped); // отброшенные свежие сборки (межфазовая гонка/пауза) — выгрузка
 
         // Латентности могли измениться — пересбор снимка с компенсацией.
         _processor.Invalidate();
@@ -696,7 +728,11 @@ public sealed class SlotChainManager : IDisposable
         var instance = index < item.Current.Instances.Count ? item.Current.Instances[index] : null;
         if (instance is not null)
         {
-            return instance is ProcessBridgePlugin { NeedsRestart: true };
+            // Выгруженный мост пересоздаётся так же, как умерший ребёнок:
+            // NeedsRestart у выгруженного = false (канал закрыт) — без этой
+            // проверки слот-труп в состоянии никогда бы не ожил.
+            return instance is ProcessBridgePlugin bridge &&
+                   (bridge.NeedsRestart || bridge.Disposed);
         }
 
         return !_retries.TryGetValue(item.Id, out var retry) ||
@@ -715,6 +751,40 @@ public sealed class SlotChainManager : IDisposable
 
         foreach (var instance in state.Instances)
         {
+            dropped.Add(instance);
+        }
+    }
+
+    /// <summary>
+    /// Экземпляры отброшенного (не опубликованного) результата сборки,
+    /// кроме переиспользованных из текущего состояния: общий экземпляр
+    /// всё ещё стоит в словаре — его выгружать нельзя.
+    /// </summary>
+    private static void CollectDiscarded(
+        NodeState? built,
+        NodeState? current,
+        List<IAudioPlugin?> dropped)
+    {
+        if (built is null)
+        {
+            return;
+        }
+
+        for (var i = 0; i < built.Instances.Count; i++)
+        {
+            var instance = built.Instances[i];
+            if (instance is null)
+            {
+                continue;
+            }
+
+            if (current is not null &&
+                i < current.Instances.Count &&
+                ReferenceEquals(current.Instances[i], instance))
+            {
+                continue; // переиспользован — остаётся в состоянии
+            }
+
             dropped.Add(instance);
         }
     }
@@ -757,6 +827,25 @@ public sealed class SlotChainManager : IDisposable
                     }
 
                     replaced.Add(item.Current.Instances[i]);
+                }
+
+                // Зависший, но физически живой ребёнок (heartbeat молчит >2с,
+                // сам процесс цел): немедленный цикл «спавн→2с→ребилд» жжёт CPU
+                // и засоряет лог — класс freqshifter-VST3 (process висит внутри
+                // модуля; каждые ~4с новый спавн). Такое пересоздаём терпеливо,
+                // как зависание при загрузке (5→10→15 мин). Зависший уже в
+                // replaced — его дожжётся отложенная выгрузка. Ручной рестарт
+                // (ForceRestartRequested) остаётся немедленным.
+                if (item.IsPluginNode &&
+                    item.Current is not null && i < item.Current.Instances.Count &&
+                    item.Current.Instances[i] is ProcessBridgePlugin hung &&
+                    hung.NeedsRestart &&
+                    !hung.ForceRestartRequested &&
+                    hung.ChildPhysicallyAlive)
+                {
+                    ScheduleRetry(item.Id, slow: true);
+                    next.Instances.Add(null);
+                    continue;
                 }
 
                 if (item.IsPluginNode)

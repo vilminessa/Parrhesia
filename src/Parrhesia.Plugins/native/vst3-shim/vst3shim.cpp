@@ -550,6 +550,18 @@ int __cdecl Pv3Prepare (void* raw, double sampleRate, int maxBlockFrames, int ch
 
     memset (&instance->context, 0, sizeof (instance->context));
     instance->context.sampleRate = sampleRate;
+
+    // Нейтральный ВАЛИДНЫЙ транспорт (VST3-контракт): нулевой tempo в
+    // processContext = деление на ноль для Sync-to-Host-плагинов —
+    // Full Bucket Frequency Shifter вис в вечном цикле LFO-синхронизации
+    // (проверено: process первого блока не возвращался ни в консоли, ни в
+    // исполнителе). kPlaying НЕ ставим — мы не проигрываем; плагины с
+    // синхронизацией в невоспроизводящем режиме идут по дефолтному темпу.
+    instance->context.tempo = 120.0;
+    instance->context.timeSigNumerator = 4;
+    instance->context.timeSigDenominator = 4;
+    instance->context.state =
+        Vst::ProcessContext::kTempoValid | Vst::ProcessContext::kTimeSigValid;
     instance->processData.processContext = &instance->context;
 
     instance->prepared = true;
@@ -621,6 +633,14 @@ int __cdecl Pv3Process (void* raw, float* interleaved, int frames)
     }
 
     instance->processData.numSamples = frames;
+
+    // Транспорт-тик: позиция растёт по блокам — sync-плагины считают
+    // фазу LFO от projectTimeSamples/projectTimeMusic (замирание на0 =
+    // «вся музыка в одном месте»; tempo валиден — деления на ноль нет).
+    instance->context.projectTimeSamples += frames;
+    instance->context.projectTimeMusic +=
+        frames * instance->context.tempo / (60.0 * instance->sampleRate);
+    instance->context.continousTimeSamples += frames;
 
     // Доставка параметров (host → component): свежий батч из SPSC-очереди.
     instance->processData.inputParameterChanges = nullptr;

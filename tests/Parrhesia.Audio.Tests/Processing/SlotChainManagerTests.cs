@@ -356,6 +356,120 @@ public class SlotChainManagerTests
         Assert.Equal(2, manager.GetSpawnAttempts(node.Id)); // попытка сразу, без5-мин ожидания
     }
 
+    [Fact]
+    public async Task PauseBetweenPhases_DiscardsFreshBuildAndRebuildsAfterUnpause()
+    {
+        // Регресс «зомби-слота» (гонка T-волны): пауза CollectStates/Prepare
+        // встала МЕЖДУ фазами B и C — свежая сборка отбрасывалась без
+        // выгрузки (живой ребёнок-исполнитель становился сиротой), а в
+        // словаре оставался уже выгруженный мост: NeedsRestart у него false,
+        // и слот навсегда молчал в обход (жёлтая точка, инспектор врал).
+        var (graph, source, node, sink) = BuildGraph();
+        using var processor = new GraphProcessor(graph);
+        processor.SetInput(source.Id, new ConstantInput(0.5f));
+        var factory = new FakeFactory();
+        using var manager = new SlotChainManager(graph, processor, bridgeFactory: (_, slot) => factory.Create(slot));
+
+        graph.AddSlot(node.Id, new PluginSlot { Path = "a.clap", PluginId = "a", Name = "A" });
+        await manager.SyncTask;
+        var first = factory.Instances[0];
+
+        // Свежая сборка «b» СПИТ в Create (dlopen-задержка) — в это окно
+        // CollectStates успевает открыть паузу узла.
+        factory.CreateDelayMs = 1500;
+        graph.RemoveSlot(node.Id, 0);
+        graph.AddSlot(node.Id, new PluginSlot { Path = "b.clap", PluginId = "b", Name = "B" });
+        var sync = manager.SyncTask;
+        var deadline = Environment.TickCount64 + 5000;
+        while (factory.CreateStarted < 2 && Environment.TickCount64 < deadline)
+        {
+            await Task.Delay(20);
+        }
+
+        Assert.Equal(2, factory.CreateStarted); // фаза B «b» уже пошла — пауза откроется впереди фазы C
+
+        first.BlockGetState = new ManualResetEventSlim(false);
+        var collect = Task.Run(() => manager.CollectStates());
+        deadline = Environment.TickCount64 + 3000;
+        while (!first.GetStateEntered && Environment.TickCount64 < deadline)
+        {
+            await Task.Delay(20);
+        }
+
+        Assert.True(first.GetStateEntered); // пауза открыта, пока Create «b» ещё спит
+
+        await sync;                         // фаза C: откат свежей сборки под паузой
+
+        first.BlockGetState.Set();          // CollectOne кончился → finally-Sync пересобирает узел
+        await collect;
+        await manager.SyncTask;
+
+        Assert.Equal(3, factory.Created);
+        await Task.Delay(1200); // отложенная выгрузка (ждём RT-покоя по таймауту)
+
+        Assert.True(
+            factory.Instances[1].Disposed,
+            "отброшенная под паузой сборка не выгружена — ребёнок-исполнитель остался бы сиротой");
+        Assert.False(factory.Instances[2].Disposed, "пересобранный после паузы экземпляр должен быть жив");
+        Assert.True(factory.Instances[0].Disposed, "старое состояние снято — его экземпляр выгружен");
+
+        // Узел ожил: цепь снова мокрит (сухая 0,5 + влажная 1,0).
+        Assert.Equal(1.5f, Process(processor, sink.Id)[0], 3);
+        Assert.Empty(manager.LastErrors);
+    }
+
+    [Fact]
+    public async Task IdentityChangedMidBuild_DiscardedBuildDisposed()
+    {
+        // Регресс: модель меняется ПОСРЕДИ фазы B (OnCreate) — фаза C
+        // отбрасывает устаревший результат. Раньше список dropped
+        // собирался и бросался на полу: свежие экземпляры (с живыми
+        // детьми-исполнителями) никогда не выгружались.
+        var (graph, source, node, sink) = BuildGraph();
+        using var processor = new GraphProcessor(graph);
+        processor.SetInput(source.Id, new ConstantInput(0.5f));
+        var factory = new FakeFactory();
+        using var manager = new SlotChainManager(graph, processor, bridgeFactory: (_, slot) => factory.Create(slot));
+
+        graph.AddSlot(node.Id, new PluginSlot { Path = "a.clap", PluginId = "a", Name = "A" });
+        await manager.SyncTask;
+
+        // Первая свежая сборка («b») при входе в Create переводит модель в «c» —
+        // план устаревает между фазами A и C.
+        var flipped = false;
+        factory.OnCreate = () =>
+        {
+            if (flipped)
+            {
+                return;
+            }
+
+            flipped = true;
+            graph.RemoveSlot(node.Id, 0);
+            graph.AddSlot(node.Id, new PluginSlot { Path = "c.clap", PluginId = "c", Name = "C" });
+        };
+
+        graph.RemoveSlot(node.Id, 0);
+        graph.AddSlot(node.Id, new PluginSlot { Path = "b.clap", PluginId = "b", Name = "B" });
+        await manager.SyncTask; // цикл SyncOnce догоняет модель до стабильности
+
+        var deadline = Environment.TickCount64 + 5000;
+        while (factory.Created < 3 && Environment.TickCount64 < deadline)
+        {
+            await Task.Delay(20);
+        }
+
+        await manager.SyncTask;
+        await Task.Delay(1200); // отложенная выгрузка
+
+        var discarded = factory.Instances.First(p => p.Name == "b.clap");
+        Assert.True(discarded.Disposed, "отброшенный по несвежести результат не выгружен — утечка живого исполнителя");
+        var alive = factory.Instances.First(p => p.Name == "c.clap");
+        Assert.False(alive.Disposed, "опубликованный экземпляр обязан быть жив");
+        Assert.Equal(1.5f, Process(processor, sink.Id)[0], 3);
+        Assert.Empty(manager.LastErrors);
+    }
+
     private static (AudioGraph Graph, AudioNode Source, AudioNode Node, AudioNode Sink) BuildGraph()
     {
         var graph = new AudioGraph();
@@ -402,8 +516,17 @@ public class SlotChainManagerTests
         /// <summary>Создавать плагин, ловящий пересечение process/getState.</summary>
         public bool Racing { get; set; }
 
+        /// <summary>Число ВХОЖДЕНИЙ в Create (в т.ч. падавшие) — ловля «сборка уже началась».</summary>
+        public int CreateStarted { get; private set; }
+
+        /// <summary>Хук в начале Create — имитация изменения модели посреди фазы B.</summary>
+        public Action? OnCreate { get; set; }
+
         public IAudioPlugin Create(PluginSlot slot)
         {
+            CreateStarted++;
+            OnCreate?.Invoke();
+
             if (CreateDelayMs > 0)
             {
                 Thread.Sleep(CreateDelayMs);
@@ -438,6 +561,12 @@ public class SlotChainManagerTests
 
         public bool OverlapDetected { get; private set; }
 
+        /// <summary>Гейт GetState — держит паузу узла (CollectOne) открытой.</summary>
+        public ManualResetEventSlim? BlockGetState { get; set; }
+
+        /// <summary>GetState вошёл (пауза открыта) — сигнал тесту.</summary>
+        public bool GetStateEntered { get; private set; }
+
         public void Prepare(int sampleRate, int maxBlockFrames, int channels)
         {
             Prepared = true;
@@ -462,6 +591,9 @@ public class SlotChainManagerTests
 
         public byte[]? GetState()
         {
+            GetStateEntered = true;
+            BlockGetState?.Wait(TimeSpan.FromSeconds(5));
+
             if (RaceWatch && Volatile.Read(ref _nodey) != 0)
             {
                 OverlapDetected = true;

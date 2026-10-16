@@ -118,6 +118,49 @@ public sealed class ProcessBridgePlugin : IAudioPlugin
         }
     }
 
+    /// <summary>
+    /// Экземпляр выгружен (TearDown прошёл) — обрабатывать больше нечем:
+    /// у моста нет ни канала, ни ребёнка. NeedsRestart у выгруженного
+    /// моста = false, поэтому слот-труп в состоянии менеджер обязан
+    /// пересоздавать по этому признаку (иначе молчаливый обход навсегда).
+    /// </summary>
+    public bool Disposed
+    {
+        get
+        {
+            lock (_lifecycle)
+            {
+                return _disposed;
+            }
+        }
+    }
+
+    /// <summary>Ребёнок физически существует (процесс не завершён) — «завис», а не упал.</summary>
+    public bool ChildPhysicallyAlive
+    {
+        get
+        {
+            lock (_lifecycle)
+            {
+                try
+                {
+                    return _child is { HasExited: false };
+                }
+                catch (InvalidOperationException)
+                {
+                    return false; // процесс не ассоциирован
+                }
+                catch (System.ComponentModel.Win32Exception)
+                {
+                    return false; // нет доступа — считаем мёртвым
+                }
+            }
+        }
+    }
+
+    /// <summary>Ручной рестарт (кнопка «Перезапустить») — обязан быть немедленным.</summary>
+    public bool ForceRestartRequested => Volatile.Read(ref _forcedRestart) != 0;
+
     /// <summary>Принудительный рестарт: следующая сверка менеджера заменит исполнителя.</summary>
     public void ForceRestart() => Interlocked.Exchange(ref _forcedRestart, 1);
 

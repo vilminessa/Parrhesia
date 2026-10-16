@@ -367,6 +367,63 @@ public class ProcessBridgePluginTests
         }
     }
 
+    [Fact]
+    public async Task DisposedInstance_RebuiltOnNextSync()
+    {
+        // Регресс «зомби-слота»: экземпляр в состоянии уже выгружен
+        // (TearDown прошёл) — NeedsRestart у него false, и менеджер раньше
+        // переиспользовал мёртвый мост: слот молчал в обход, ребёнок-исполнитель
+        // убит. Теперь выгруженный мост пересоздаётся как умерший.
+        var dll = Path.Combine(AppContext.BaseDirectory, "test-plugin.dll");
+        if (ProcessBridgePlugin.FindAppExe() is null || !File.Exists(dll))
+        {
+            return; // вне репозитория — проба моста пропущена
+        }
+
+        var harness = CreateHarness(new PluginSlot
+        {
+            Format = PluginFormat.Clap,
+            Path = dll,
+            PluginId = "com.parrhesia.test.gain",
+            Name = "Тест CLAP",
+        });
+
+        try
+        {
+            Assert.Empty(harness.Manager.LastErrors);
+            var bridge = Assert.IsType<ProcessBridgePlugin>(
+                harness.Manager.GetSlotInstance(harness.PluginId, 0));
+            Assert.True(bridge.ChildPid > 0, "исполнитель не запущен");
+            var attempts = harness.Manager.GetSpawnAttempts(harness.PluginId);
+
+            bridge.Dispose(); // ребёнок убит, мост в состоянии трупа
+
+            harness.Manager.Sync();
+
+            var next = harness.Manager.GetSlotInstance(harness.PluginId, 0);
+            Assert.NotNull(next);
+            Assert.True(
+                !ReferenceEquals(bridge, next),
+                "выгруженный мост переиспользован — слот-зомби");
+            Assert.True(
+                harness.Manager.GetSpawnAttempts(harness.PluginId) > attempts,
+                "пересоздание не пошло в попытки спавна");
+
+            var fresh = Assert.IsType<ProcessBridgePlugin>(next);
+            var deadline = Environment.TickCount64 + 10_000;
+            while (Environment.TickCount64 < deadline && !fresh.ChildAlive)
+            {
+                Thread.Sleep(50);
+            }
+
+            Assert.True(fresh.ChildAlive, "новый ребёнок не ожил");
+        }
+        finally
+        {
+            harness.Dispose();
+        }
+    }
+
     /// <summary>Серия source → plugin-узел → sink со слотом; менеджер уже Prepare.</summary>
     private static Harness CreateHarness(PluginSlot slot)
     {
