@@ -62,12 +62,29 @@ internal sealed class EditorHostWindow : Window
         }
 
         _opened = true;
+
+        // Плагин может сам запросить размер (VST3 resizeView) — перестраиваем окно.
+        _editor.ViewResize = OnPluginViewResize;
         var (width, height) = _editor.PreferredSize;
         if (width > 0 && height > 0)
         {
-            Width = width + 26;
-            Height = height + 66;
+            ApplyPluginSize(width, height);
         }
+    }
+
+    /// <summary>resizeView из нативного потока плагина — уводим в UI-поток окна.</summary>
+    private void OnPluginViewResize(int width, int height) =>
+        Dispatcher.BeginInvoke(new Action(() => ApplyPluginSize(width, height)));
+
+    private void ApplyPluginSize(int width, int height)
+    {
+        if (width <= 0 || height <= 0)
+        {
+            return;
+        }
+
+        Width = width + 26;
+        Height = height + 66;
     }
 
     private void OnClosed(object? sender, EventArgs e)
@@ -77,6 +94,7 @@ internal sealed class EditorHostWindow : Window
             return;
         }
 
+        _editor.ViewResize = null;
         try
         {
             if (_sync is null)

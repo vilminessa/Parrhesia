@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using Parrhesia.Core.Graph;
 using Parrhesia.Plugins;
+using Parrhesia.Plugins.Bridge;
 
 namespace Parrhesia.Audio.Processing;
 
@@ -856,7 +857,10 @@ public sealed class SlotChainManager : IDisposable
                 try
                 {
                     // S5: слоты всегда исполняются в отдельном процессе.
-                    instance = _bridgeFactory(item.Id, item.Slots[i]);
+                    // Имя моста — НА СЛОТ (секция/кик/пайп/spec): узел с
+                    // несколькими слотами не должен делить ресурсы между детьми.
+                    instance = _bridgeFactory(
+                        PluginBridge.SlotBridgeId(item.Id, i), item.Slots[i]);
 
                     var state = item.Slots[i].State ?? inherited;
                     if (state is not null)

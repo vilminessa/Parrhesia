@@ -41,6 +41,8 @@ internal static unsafe class Vst3Native
         EditorOpenPtr = Marshal.GetDelegateForFunctionPointer<EditorOpenFn>(Export(module, "Pv3EditorOpen"));
         EditorGetSizePtr = Marshal.GetDelegateForFunctionPointer<EditorGetSizeFn>(Export(module, "Pv3EditorGetSize"));
         EditorClosePtr = Marshal.GetDelegateForFunctionPointer<EditorCloseFn>(Export(module, "Pv3EditorClose"));
+        EditorSetResizeCallbackPtr = Marshal.GetDelegateForFunctionPointer<EditorSetResizeCallbackFn>(
+            Export(module, "Pv3EditorSetResizeCallback"));
         ParamCountPtr = Marshal.GetDelegateForFunctionPointer<ParamsCountFn>(Export(module, "Pv3ParamCount"));
         ParamInfoPtr = Marshal.GetDelegateForFunctionPointer<ParamsInfoFn>(Export(module, "Pv3GetParamInfo"));
         ParamValueGetPtr = Marshal.GetDelegateForFunctionPointer<ParamsValueGetFn>(Export(module, "Pv3ParamValueGet"));
@@ -92,6 +94,12 @@ internal static unsafe class Vst3Native
     internal delegate void EditorCloseFn(IntPtr instance);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    internal delegate int EditorResizeCallback(IntPtr context, int width, int height);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    internal delegate void EditorSetResizeCallbackFn(IntPtr callback, IntPtr context);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     internal delegate int ParamsCountFn(IntPtr instance);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
@@ -106,6 +114,7 @@ internal static unsafe class Vst3Native
     private static readonly EditorOpenFn EditorOpenPtr;
     private static readonly EditorGetSizeFn EditorGetSizePtr;
     private static readonly EditorCloseFn EditorClosePtr;
+    private static readonly EditorSetResizeCallbackFn EditorSetResizeCallbackPtr;
     private static readonly ParamsCountFn ParamCountPtr;
     private static readonly ParamsInfoFn ParamInfoPtr;
     private static readonly ParamsValueGetFn ParamValueGetPtr;
@@ -251,6 +260,12 @@ internal static unsafe class Vst3Native
 
     public static int EditorOpen(IntPtr instance, IntPtr parentHwnd) =>
         EditorOpenPtr(instance, parentHwnd);
+
+    /// <summary>Ставит колбэк resizeView (IPlugFrame хоста); null — фолбэк MoveWindow в шиме.</summary>
+    public static void EditorSetResizeCallback(EditorResizeCallback? callback, IntPtr context) =>
+        EditorSetResizeCallbackPtr(
+            callback is null ? IntPtr.Zero : Marshal.GetFunctionPointerForDelegate(callback),
+            context);
 
     public static int EditorGetSize(IntPtr instance, out int width, out int height) =>
         EditorGetSizePtr(instance, out width, out height);

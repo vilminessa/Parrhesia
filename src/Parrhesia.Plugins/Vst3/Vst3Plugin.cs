@@ -13,6 +13,13 @@ internal sealed class Vst3Plugin : IAudioPlugin, IPluginEditor, IPluginParameter
     private bool _editorOpen;
     private PluginParameter[]? _paramCache;
 
+    // resizeView плагина (IPlugFrame хоста): нативный колбэк → событие окна хоста.
+    // Один редактор на процесс — статического thunk достаточно; контекст — GCHandle на экземпляр.
+    private static readonly Vst3Native.EditorResizeCallback ResizeThunk = OnNativeViewResize;
+
+    private Action<int, int>? _viewResize;
+    private GCHandle _resizeContext;
+
     private Vst3Plugin(string classId)
     {
         Name = classId;
@@ -150,6 +157,10 @@ internal sealed class Vst3Plugin : IAudioPlugin, IPluginEditor, IPluginParameter
             return false;
         }
 
+        // Регистрируем managed-приёмник resizeView: окно хоста подстроит размер.
+        _resizeContext = GCHandle.Alloc(this, GCHandleType.Normal);
+        Vst3Native.EditorSetResizeCallback(ResizeThunk, GCHandle.ToIntPtr(_resizeContext));
+
         _editorOpen = true;
         return true;
     }
@@ -162,10 +173,40 @@ internal sealed class Vst3Plugin : IAudioPlugin, IPluginEditor, IPluginParameter
         }
 
         _editorOpen = false;
+        Vst3Native.EditorSetResizeCallback(null, IntPtr.Zero);
+        if (_resizeContext.IsAllocated)
+        {
+            _resizeContext.Free();
+        }
+
         if (_instance != IntPtr.Zero)
         {
             Vst3Native.EditorClose(_instance);
         }
+    }
+
+    private static int OnNativeViewResize(IntPtr context, int width, int height)
+    {
+        // Вызов ИЗ нативного потока плагина — обработчик (окно) обязан увести в UI.
+        try
+        {
+            if (GCHandle.FromIntPtr(context).Target is Vst3Plugin plugin)
+            {
+                plugin._viewResize?.Invoke(width, height);
+            }
+        }
+        catch
+        {
+            // Колбэк чужого кода не должен убивать процесс.
+        }
+
+        return 0;
+    }
+
+    Action<int, int>? IPluginEditor.ViewResize
+    {
+        get => _viewResize;
+        set => _viewResize = value;
     }
 
     public (int Width, int Height) PreferredSize

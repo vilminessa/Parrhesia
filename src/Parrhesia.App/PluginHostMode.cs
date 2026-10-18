@@ -25,6 +25,12 @@ namespace Parrhesia.App;
 internal static class PluginHostMode
 {
     /// <summary>
+    /// Имя слота из spec (заголовок окна редактора): у Vst3Plugin.Name лежит
+    /// classId — в UI не показываем CID.
+    /// </summary>
+    private static string? _specName;
+
+    /// <summary>
     /// Bench-режим: синхронный цикл «кик → вход → ×2 → выход» (не возвращается;
     /// завершает процесс убийство родителем). Код0 — штатно (теоретически).
     /// </summary>
@@ -201,7 +207,10 @@ internal static class PluginHostMode
         {
             try
             {
-                new PluginEditorWindow(editor, plugin.Name, gate).Show();
+                new PluginEditorWindow(
+                    editor,
+                    string.IsNullOrWhiteSpace(_specName) ? plugin.Name : _specName,
+                    gate).Show();
             }
             catch (Exception ex)
             {
@@ -234,6 +243,7 @@ internal static class PluginHostMode
             ?? throw new PluginLoadException($"пустой spec-файл ({specPath})");
 
         File.Delete(specPath); // прочитан — не мусорим во временном каталоге
+        _specName = spec.Name;
 
         IAudioPlugin plugin = spec.Format switch
         {
