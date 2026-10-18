@@ -1,5 +1,7 @@
 using System.IO.MemoryMappedFiles;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
+using System.Text;
 using Microsoft.Win32;
 
 namespace Parrhesia.Plugins.Bridge;
@@ -55,6 +57,25 @@ public static class PluginBridge
     public static string SharedName(Guid nodeId) => $"Local\\ParrhesiaBridge-{nodeId:N}";
 
     public static string KickName(Guid nodeId) => $"Local\\ParrhesiaBridge-{nodeId:N}-kick";
+
+    /// <summary>
+    /// Идентификатор моста слота. Узел может нести несколько слотов, а все
+    /// имена ресурсов (секция, кик, пайп, spec-файл) строятся от одного Guid —
+    /// без разделения два исполнителя делят секцию/кик и конкурируют за один
+    /// пайп (второй сервер не поднимается). Слот 0 остаётся «узловым»
+    /// (одиночный слот — прежние имена и логи), остальные — детерминированно
+    /// производные от (узел, индекс).
+    /// </summary>
+    public static Guid SlotBridgeId(Guid nodeId, int slotIndex)
+    {
+        if (slotIndex <= 0)
+        {
+            return nodeId;
+        }
+
+        var digest = SHA256.HashData(Encoding.UTF8.GetBytes($"{nodeId:N}:{slotIndex}"));
+        return new Guid(digest.AsSpan(0, 16));
+    }
 
     /// <summary>Сторона хоста (владеет секцией; создаётся ДО запуска ребёнка).</summary>
     public sealed unsafe class HostSide : IDisposable

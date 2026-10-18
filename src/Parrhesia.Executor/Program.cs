@@ -93,6 +93,12 @@ public static class Program
     /// </summary>
     private static string? _logPath;
 
+    /// <summary>
+    /// Имя слота из spec (для заголовка окна редактора): у Vst3Plugin.Name
+    /// лежит classId — в UI не показываем CID.
+    /// </summary>
+    private static string? _specName;
+
     private static void InstallLogging(Guid nodeId)
     {
         try
@@ -245,7 +251,10 @@ public static class Program
         {
             try
             {
-                new EditorHostWindow(editor, plugin.Name, gate).Show();
+                new EditorHostWindow(
+                    editor,
+                    string.IsNullOrWhiteSpace(_specName) ? plugin.Name : _specName,
+                    gate).Show();
             }
             catch (Exception ex)
             {
@@ -278,6 +287,7 @@ public static class Program
             ?? throw new PluginLoadException($"пустой spec-файл ({specPath})");
 
         File.Delete(specPath); // прочитан — не мусорим во временном каталоге
+        _specName = spec.Name;
 
         IAudioPlugin plugin = spec.Format switch
         {

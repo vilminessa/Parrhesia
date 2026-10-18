@@ -83,4 +83,10 @@ extern "C"
 
     /// removed() + release() (идемпотентно).
     PV3 void __cdecl Pv3EditorClose(void* instance);
+
+    /// Колбэк resizeView плагина: width/height px; возврат0 — ок. Контекст — managed GCHandle.
+    typedef int (__cdecl* Pv3EditorResizeCallback)(void* context, int width, int height);
+
+    /// Ставит managed-колбэк resizeView (null — фолбэк MoveWindow на дочернее окно хоста).
+    PV3 void __cdecl Pv3EditorSetResizeCallback(Pv3EditorResizeCallback callback, void* context);
 }

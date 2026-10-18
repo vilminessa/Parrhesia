@@ -22,6 +22,7 @@
 #include <pluginterfaces/vst/ivsteditcontroller.h>
 #include <pluginterfaces/vst/ivstprocesscontext.h>
 #include <pluginterfaces/gui/iplugview.h>
+#include <pluginterfaces/base/funknownimpl.h>
 
 #include <algorithm>
 #include <atomic>
@@ -123,10 +124,17 @@ struct Instance
     Vst::ParameterChanges inChanges {32}; // host → component на ближайший process
 };
 
+// VST3-спека: kResultOk И kResultTrue равнозначны («успех») — FabFilter и
+// другие возвращают kResultTrue; сравнение только с kResultOk = ложный отказ.
+bool Succeeded (tresult result)
+{
+    return result == kResultOk || result == kResultTrue;
+}
+
 Vst::IAudioProcessor* QueryProcessor (Vst::IComponent* component)
 {
     void* object = nullptr;
-    if (component->queryInterface (Vst::IAudioProcessor::iid, &object) != kResultOk || object == nullptr)
+    if (!Succeeded (component->queryInterface (Vst::IAudioProcessor::iid, &object)) || object == nullptr)
     {
         return nullptr;
     }
@@ -161,7 +169,7 @@ struct ControllerGuard
 
         void* object = nullptr;
         if (instance->component &&
-            instance->component->queryInterface (Vst::IEditController::iid, &object) == kResultOk &&
+            Succeeded (instance->component->queryInterface (Vst::IEditController::iid, &object)) &&
             object != nullptr)
         {
             controller = static_cast<Vst::IEditController*> (object);
@@ -236,6 +244,84 @@ static void Trace (const char* fmt, ...)
     fprintf (file, "\n");
     fflush (file);
 }
+
+// ===== Редактор: IPlugFrame хоста (спека требует setFrame ДО attached) =====
+
+using Pv3EditorResizeCallback = int (__cdecl*) (void* context, int width, int height);
+
+static Pv3EditorResizeCallback gResizeCallback = nullptr;
+static void* gResizeContext = nullptr;
+static HWND gChildHwnd = nullptr; // дочернее окно хоста (фолбэк MoveWindow)
+
+/// <summary>
+/// IPlugFrame хоста: singleton на процесс (в исполнителе один плагин —
+/// по одному редактору). resizeView прокидывается в managed-окно хоста
+/// (Pv3EditorSetResizeCallback) либо двигает дочернее окно напрямую.
+/// </summary>
+class HostPlugFrame final : public IPlugFrame
+{
+public:
+    static HostPlugFrame* Get ()
+    {
+        static HostPlugFrame frame;
+        return &frame;
+    }
+
+    tresult PLUGIN_API queryInterface (const TUID _iid, void** obj) override
+    {
+        if (obj == nullptr)
+        {
+            return kResultFalse;
+        }
+
+        if (FUnknownPrivate::iidEqual (_iid, IPlugFrame::iid) ||
+            FUnknownPrivate::iidEqual (_iid, FUnknown::iid))
+        {
+            *obj = static_cast<IPlugFrame*> (this);
+            addRef ();
+            return kResultOk;
+        }
+
+        *obj = nullptr;
+        return kResultFalse;
+    }
+
+    uint32 PLUGIN_API addRef () override { return ++mRef; }
+
+    uint32 PLUGIN_API release () override
+    {
+        // Singleton: у ссылок не уничтожаем.
+        const uint32 left = --mRef;
+        return left == 0 ? 1 : left;
+    }
+
+    tresult PLUGIN_API resizeView (IPlugView*, ViewRect* newSize) override
+    {
+        if (newSize == nullptr)
+        {
+            return kResultFalse;
+        }
+
+        const int width = newSize->right - newSize->left;
+        const int height = newSize->bottom - newSize->top;
+        Trace ("HostPlugFrame::resizeView %dx%d", width, height);
+
+        if (gResizeCallback != nullptr)
+        {
+            return gResizeCallback (gResizeContext, width, height) == 0 ? kResultOk : kResultFalse;
+        }
+
+        if (gChildHwnd != nullptr && width > 0 && height > 0)
+        {
+            MoveWindow (gChildHwnd, 0, 0, width, height, TRUE);
+        }
+
+        return kResultOk;
+    }
+
+private:
+    std::atomic<uint32> mRef {1};
+};
 
 } // namespace
 
@@ -476,7 +562,7 @@ int __cdecl Pv3Prepare (void* raw, double sampleRate, int maxBlockFrames, int ch
 
     if (instance->prepared)
     {
-        if (instance->processor->setProcessing (false) != kResultOk)
+        if (!Succeeded (instance->processor->setProcessing (false)))
         {
             return Fail ("setProcessing(false) не прошёл");
         }
@@ -488,12 +574,16 @@ int __cdecl Pv3Prepare (void* raw, double sampleRate, int maxBlockFrames, int ch
 
     instance->component->setIoMode (Vst::kSimple);
 
-    // Нужен стерео main in/out — контракт IAudioPlugin.
+    // Нужен стерео main in/out — контракт IAudioPlugin. setBusArrangements по
+    // VST3-спеке ОПЦИОНАЛЕН: kResultFalse («не поддерживаю твою комбинацию» —
+    // так делают FabFilter и многие современные модули) обязывает хоста
+    // продолжить с дефолтной шиной через getBusInfo/activateBus ниже, а не
+    // валить подготовку.
     Vst::SpeakerArrangement stereo = Vst::SpeakerArr::kStereo;
-    if (instance->processor->setBusArrangements (&stereo, 1, &stereo, 1) != kResultOk)
-    {
-        return Fail ("Плагин не принимает стерео-шину main in/out");
-    }
+    const tresult busResult = instance->processor->setBusArrangements (&stereo, 1, &stereo, 1);
+    Trace (
+        "Pv3Prepare: setBusArrangements(stereo in/out) = %d (отказ не фатален — идём по дефолтной шине)",
+        static_cast<int> (busResult));
 
     const auto activateMain = [instance] (Vst::BusDirection direction) {
         if (instance->component->getBusCount (Vst::kAudio, direction) > 0)
@@ -505,12 +595,12 @@ int __cdecl Pv3Prepare (void* raw, double sampleRate, int maxBlockFrames, int ch
     activateMain (Vst::kOutput);
 
     Vst::ProcessSetup setup {Vst::kRealtime, Vst::kSample32, maxBlockFrames};
-    if (instance->processor->setupProcessing (setup) != kResultOk)
+    if (!Succeeded (instance->processor->setupProcessing (setup)))
     {
         return Fail ("setupProcessing не прошёл");
     }
 
-    if (instance->component->setActive (true) != kResultOk)
+    if (!Succeeded (instance->component->setActive (true)))
     {
         return Fail ("setActive(true) не прошёл");
     }
@@ -518,7 +608,7 @@ int __cdecl Pv3Prepare (void* raw, double sampleRate, int maxBlockFrames, int ch
     // Спецификация: kNotImplemented от setProcessing допустим (так делает
     // база SingleComponentEffect) — хост обязан его принимать.
     const tresult processingResult = instance->processor->setProcessing (true);
-    if (processingResult != kResultOk && processingResult != kNotImplemented)
+    if (!Succeeded (processingResult) && processingResult != kNotImplemented)
     {
         instance->component->setActive (false);
         return Fail ("setProcessing(true) не прошёл");
@@ -669,7 +759,7 @@ int __cdecl Pv3Process (void* raw, float* interleaved, int frames)
     }
 
     const tresult result = instance->processor->process (instance->processData);
-    if (result != kResultOk && result != kResultTrue)
+    if (!Succeeded (result))
     {
         return Fail ("IAudioProcessor::process вернул ошибку");
     }
@@ -713,7 +803,7 @@ int __cdecl Pv3GetState (void* raw, unsigned char* buffer, int capacity)
     // Формат: [u32 compLen][component state][u32 ctrlLen][controller state].
     // Контроллер обязателен по VST3-спецификации (параметры живут в нём).
     MemoryStream componentStream;
-    if (instance->component->getState (&componentStream) != kResultOk)
+    if (!Succeeded (instance->component->getState (&componentStream)))
     {
         return Fail ("IComponent::getState не прошёл");
     }
@@ -722,7 +812,7 @@ int __cdecl Pv3GetState (void* raw, unsigned char* buffer, int capacity)
     uint32_t controllerLength = 0;
     IPtr<Vst::IEditController> controller =
         instance->provider ? instance->provider->getControllerPtr () : nullptr;
-    if (controller && controller->getState (&controllerStream) == kResultOk)
+    if (controller && Succeeded (controller->getState (&controllerStream)))
     {
         controllerLength = static_cast<uint32_t> (controllerStream.getSize ());
     }
@@ -801,7 +891,7 @@ int __cdecl Pv3SetState (void* raw, const unsigned char* buffer, int length)
 
     MemoryStream componentStream (
         const_cast<unsigned char*> (componentData), static_cast<int32> (componentLength));
-    if (instance->component->setState (&componentStream) != kResultOk)
+    if (!Succeeded (instance->component->setState (&componentStream)))
     {
         return Fail ("IComponent::setState не прошёл");
     }
@@ -859,7 +949,7 @@ int __cdecl Pv3GetParamInfo (void* raw, int index, Pv3ParamInfo* out)
     }
 
     Vst::ParameterInfo info {};
-    if (controller.controller->getParameterInfo (index, info) != kResultOk)
+    if (!Succeeded (controller.controller->getParameterInfo (index, info)))
     {
         return Fail ("Pv3ParamInfo: индекс вне диапазона");
     }
@@ -966,33 +1056,64 @@ int __cdecl Pv3EditorOpen (void* raw, void* parentHwnd)
     }
 
     LastErrorRef ().clear ();
+    Trace ("Pv3EditorOpen: hwnd=%p", parentHwnd);
 
-    void* controllerObject = nullptr;
-    if (instance->component->queryInterface (Vst::IEditController::iid, &controllerObject) != kResultOk ||
-        controllerObject == nullptr)
+    // Контроллер: у раздельных компонентов (FabFilter и др.) queryInterface
+    // компонента отвечает kResultFalse — SDK-провайдер уже создал контроллера
+    // при initialize(withController=true). Берём провайдерского (сырой указатель,
+    // владение у провайдера), иначе — двойной компонент через queryInterface.
+    Vst::IEditController* controller = instance->provider ? instance->provider->getControllerPtr () : nullptr;
+    bool controllerOwned = false; // COM-контроллер из queryInterface обязаны release()
+    if (controller == nullptr)
     {
-        return Fail ("Компонент не предоставляет IEditController");
+        void* controllerObject = nullptr;
+        const tresult controllerResult =
+            instance->component->queryInterface (Vst::IEditController::iid, &controllerObject);
+        Trace ("Pv3EditorOpen: queryInterface(IEditController) = %d (провайдерского контроллера нет)",
+            static_cast<int> (controllerResult));
+        if (!Succeeded (controllerResult) || controllerObject == nullptr)
+        {
+            return Fail ("Нет IEditController (ни у провайдера, ни у компонента)");
+        }
+
+        controller = static_cast<Vst::IEditController*> (controllerObject);
+        controllerOwned = true;
     }
 
-    auto* controller = static_cast<Vst::IEditController*> (controllerObject);
+    Trace ("Pv3EditorOpen: controller=%p", controller);
     IPlugView* view = controller->createView (Vst::ViewType::kEditor);
-    controller->release (); // view от контроллера не зависит (ref=1 у вызывающего)
+    if (controllerOwned)
+    {
+        controller->release (); // view от COM-контроллера не зависит (ref=1 у вызывающего)
+    }
+
+    Trace ("Pv3EditorOpen: createView(kEditor) = %p", view);
     if (view == nullptr)
     {
         return Fail ("IEditController::createView вернул nullptr");
     }
 
-    if (view->isPlatformTypeSupported (kPlatformTypeHWND) != kResultOk)
+    const tresult platformResult = view->isPlatformTypeSupported (kPlatformTypeHWND);
+    Trace ("Pv3EditorOpen: isPlatformTypeSupported(HWND) = %d", static_cast<int> (platformResult));
+    if (!Succeeded (platformResult))
     {
         view->release ();
         return Fail ("Редактор не поддерживает HWND");
     }
 
+    // IPlugFrame: по спеке хост обязан установить frame ДО attached — многие
+    // плагины (FabFilter, u-he) отказывают в attached без него; resizeView
+    // плагина прокидывается в managed-окно хоста (или MoveWindow-фолбэк).
+    gChildHwnd = static_cast<HWND> (parentHwnd);
+    const tresult frameResult = view->setFrame (HostPlugFrame::Get ());
+    Trace ("Pv3EditorOpen: setFrame(IPlugFrame) = %d", static_cast<int> (frameResult));
+
     const tresult attachedResult = view->attached (parentHwnd, kPlatformTypeHWND);
-    if (attachedResult != kResultOk && attachedResult != kResultTrue)
+    Trace ("Pv3EditorOpen: attached(HWND) = %d", static_cast<int> (attachedResult));
+    if (!Succeeded (attachedResult))
     {
         view->release ();
-        return Fail ("IPlugView::attached не прошёл");
+        return Fail ("attached не прошёл (см. трейс)");
     }
 
     instance->view = view;
@@ -1015,7 +1136,7 @@ int __cdecl Pv3EditorGetSize (void* raw, int* width, int* height)
     }
 
     ViewRect rect {};
-    if (instance->view->getSize (&rect) != kResultOk)
+    if (!Succeeded (instance->view->getSize (&rect)))
     {
         return Fail ("IPlugView::getSize не прошёл");
     }
@@ -1038,6 +1159,13 @@ void __cdecl Pv3EditorClose (void* raw)
     instance->view->removed ();
     instance->view->release ();
     instance->view = nullptr;
+    gChildHwnd = nullptr;
+}
+
+void __cdecl Pv3EditorSetResizeCallback (Pv3EditorResizeCallback callback, void* context)
+{
+    gResizeCallback = callback;
+    gResizeContext = context;
 }
 
 } // extern "C"

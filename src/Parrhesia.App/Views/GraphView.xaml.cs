@@ -1872,6 +1872,25 @@ public partial class GraphView : UserControl
 
         var slot = node.Slots[index];
         var instance = AppServices.Engine.GetSlotInstance(node.Id, index);
+
+        // Мост (S5: слот живёт в отдельном процессе) открывает редактор там же
+        // через NodeControl — путь без IPluginEditor (иначе «формат не поддерживает»).
+        if (instance is ProcessBridgePlugin bridge)
+        {
+            var response = bridge.OpenEditor();
+            if (!response.Ok)
+            {
+                MessageBox.Show(
+                    Window.GetWindow(this),
+                    response.Error ?? "Не удалось открыть редактор.",
+                    "Редактор",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Information);
+            }
+
+            return;
+        }
+
         if (instance is not Parrhesia.Plugins.IPluginEditor editor)
         {
             MessageBox.Show(

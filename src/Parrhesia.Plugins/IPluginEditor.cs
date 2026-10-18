@@ -23,4 +23,15 @@ public interface IPluginEditor
 
     /// <summary>Желаемый размер контента; измеряется после Open (0×0 — неизвестно).</summary>
     (int Width, int Height) PreferredSize { get; }
+
+    /// <summary>
+    /// Плагин запросил смену размера в ходе работы (VST3 IPlugFrame::resizeView) —
+    /// хост обязан перестроить окно. По умолчанию игнорируется (реализации
+    /// переопределяют через явную реализацию интерфейса).
+    /// </summary>
+    Action<int, int>? ViewResize
+    {
+        get => null;
+        set { }
+    }
 }
