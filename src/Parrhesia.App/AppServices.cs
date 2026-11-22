@@ -34,6 +34,11 @@ public static class AppServices
         Profiles = new ProfileService(Graph);
         Settings = AppSettings.Load();
 
+        // Ф4: восстановление имён кабелей подписывается ДО движка — порядок
+        // обработчиков DevicesChanged = порядок подписки: сначала имена
+        // возвращаются, потом движок стартует/рестартует и резолвит привязки.
+        Devices.DevicesChanged += OnDevicesChanged;
+
         if (Profiles.Count == 0)
         {
             // Первый запуск: стартовая схема становится профилем «Основной».
@@ -57,6 +62,10 @@ public static class AppServices
             SaveActiveProfile();
         };
         Graph.Changed += OnGraphChanged;
+
+        // Ф4: стартовые узлы без привязки → кабели (однократно, пока драйвер
+        // виден; изменения уйдут в автосейв через тик выше).
+        AutoBindStartNodes();
     }
 
     /// <summary>Снимок state плагинов в модель + запись активного профиля.</summary>
@@ -81,6 +90,7 @@ public static class AppServices
     public static void Shutdown()
     {
         Graph.Changed -= OnGraphChanged;
+        Devices.DevicesChanged -= OnDevicesChanged;
         _autosaveTimer?.Stop();
         SaveActiveProfile();
         Engine?.Dispose();
@@ -93,9 +103,51 @@ public static class AppServices
         _autosaveTimer?.Start();
     }
 
+    /// <summary>Ф4: устройства сменились (в т.ч. rebind драйвера) — вернуть имена кабелей.</summary>
+    private static void OnDevicesChanged(object? sender, EventArgs e)
+    {
+        try
+        {
+            CableNameRestorer.Restore(Settings);
+        }
+        catch (Exception ex)
+        {
+            Trace.WriteLine("[Parrhesia] Восстановление имён кабелей: " + ex.Message);
+        }
+    }
+
+    /// <summary>Свои endpoint'ы (кабели) для авто-биндинга; пусто — драйвера нет.</summary>
+    private static List<LaneEndpoint> GetLanes()
+    {
+        try
+        {
+            return LaneCatalog.Get(
+                Devices.GetDevices(DeviceFlow.Capture),
+                Devices.GetDevices(DeviceFlow.Render));
+        }
+        catch
+        {
+            return [];
+        }
+    }
+
+    /// <summary>
+    /// Ф4: существующие стартовые узлы БЕЗ привязки → кабели (однократно при
+    /// старте); контракт и защита от повтора — в LaneAutoBind.BindUnbound.
+    /// </summary>
+    private static void AutoBindStartNodes()
+    {
+        var bound = LaneAutoBind.BindUnbound(Graph, GetLanes());
+        if (bound > 0)
+        {
+            Trace.WriteLine($"[Parrhesia] Ф4: стартовые узлы привязаны к кабелям ({bound})");
+        }
+    }
+
     /// <summary>
     /// Стартовая схема первого запуска: микрофон → основная шина → наушники.
-    /// Остальные источники без привязок — виртуальные endpoint'ы появятся в Ф4.
+    /// Ф4: «Браузер» и «Discord (вирт.)» сразу привязываются к кабелям,
+    /// если драйвер установлен (без драйвера остаются без привязки).
     /// </summary>
     private static void BuildSessionGraph(AudioGraph graph)
     {
@@ -109,6 +161,21 @@ public static class AppServices
 
         graph.SetNodeDevice(mic.Id, DeviceSpec.DefaultCapture);
         graph.SetNodeDevice(headphones.Id, DeviceSpec.DefaultRender);
+
+        // Ф4: стартовые узлы сразу на кабелях (драйвер есть → «вход приложений»
+        // для браузера и виртуальный микрофон для Discord).
+        var lanes = GetLanes();
+        var browserDevice = LaneAutoBind.SourceDeviceId(lanes);
+        if (browserDevice is not null)
+        {
+            graph.SetNodeDevice(browser.Id, browserDevice);
+        }
+
+        var discordDevice = LaneAutoBind.SinkDeviceId(lanes);
+        if (discordDevice is not null)
+        {
+            graph.SetNodeDevice(discord.Id, discordDevice);
+        }
 
         graph.AddRoute(mic.Id, main.Id, out _);
         graph.AddRoute(capture.Id, main.Id, out _);

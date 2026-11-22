@@ -151,4 +151,26 @@ public class CablePlannerTests
         Assert.Equal(CableRowState.Applied, row.State);
         Assert.Equal("Parrhesia In1", row.InName);
     }
+
+    [Fact]
+    public void BuildRows_ActivityJoinedIntoRow()
+    {
+        // Ф4: строка активности из счётчиков фида (без activity — пусто).
+        var actual = new[]
+        {
+            Cable(@"ROOT\VirtualAudioDriver", "0000", "Parrhesia In1", "Parrhesia Out1"),
+        };
+        var activity = new Dictionary<string, CableActivity>
+        {
+            [actual[0].InstanceId] = new("вход: идёт", "выход: через Parrhesia (фид)"),
+        };
+
+        var withActivity = CablePlanner.BuildRows(actual, [], activity);
+        Assert.Equal(
+            "вход: идёт · выход: через Parrhesia (фид)",
+            Assert.Single(withActivity).Activity);
+
+        var withoutActivity = CablePlanner.BuildRows(actual, []);
+        Assert.Equal(string.Empty, Assert.Single(withoutActivity).Activity);
+    }
 }

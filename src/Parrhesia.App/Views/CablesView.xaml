@@ -107,6 +107,10 @@
             <DataTemplate>
               <Border Style="{StaticResource CableRowBorder}">
                 <Grid>
+                  <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                  </Grid.RowDefinitions>
                   <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="44" />
                     <ColumnDefinition Width="*" />
@@ -200,6 +204,23 @@
                           Tag="{Binding}"
                           ToolTip="Удалить кабель (после «Применить» — запрос администратора)"
                           Click="OnDeleteClick" />
+                  <!-- Активность кабеля (Ф4) -->
+                  <TextBlock Grid.Row="1"
+                             Grid.ColumnSpan="6"
+                             Text="{Binding Activity}"
+                             FontSize="11"
+                             Foreground="{DynamicResource Brush.TextFaint}"
+                             Margin="0,4,0,0">
+                    <TextBlock.Style>
+                      <Style TargetType="TextBlock">
+                        <Style.Triggers>
+                          <DataTrigger Binding="{Binding Activity}" Value="">
+                            <Setter Property="Visibility" Value="Collapsed" />
+                          </DataTrigger>
+                        </Style.Triggers>
+                      </Style>
+                    </TextBlock.Style>
+                  </TextBlock>
                 </Grid>
               </Border>
             </DataTemplate>

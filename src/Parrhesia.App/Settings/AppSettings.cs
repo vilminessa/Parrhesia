@@ -29,6 +29,14 @@ public sealed class AppSettings
     /// </summary>
     public List<CableOp> CablePendingOps { get; set; } = [];
 
+    /// <summary>
+    /// Ф4: кастомные имена кабелей по HWID (ключ — "ROOT\VirtualAudioDriver"
+    /// или "ROOT\ParrhesiaLaneN"). Имя endpoint'а хранится только в нём самом
+    /// и теряется при rebind драйвера — восстанавливаем из этого словаря
+    /// (см. CableNamePolicy), пока имя системное/авто-имя лана.
+    /// </summary>
+    public Dictionary<string, CableSideNames> CableNames { get; set; } = [];
+
     /// <summary>Активная тема интерфейса (id папки в themes\; см. ThemeManager).</summary>
     public string ThemeId { get; set; } = "parrhesia";
 
@@ -90,4 +98,12 @@ public sealed class AppSettings
             // Настройки не критичны для работы.
         }
     }
+}
+
+/// <summary>Кастомные имена сторон одного кабеля (Ф4: персист имён).</summary>
+public sealed class CableSideNames
+{
+    public string In { get; set; } = string.Empty;
+
+    public string Out { get; set; } = string.Empty;
 }

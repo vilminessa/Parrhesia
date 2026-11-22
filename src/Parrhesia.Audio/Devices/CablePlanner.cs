@@ -61,6 +61,11 @@ public enum CableRowState
     PendingRename,
 }
 
+/// <summary>Активность кабеля (Ф4): что видно по счётчикам драйвера.</summary>
+/// <param name="Input">Состояние входа: «вход: идёт» / «вход: простой» / «—».</param>
+/// <param name="Output">Состояние выхода: через фид Parrhesia или прямой кабель.</param>
+public sealed record CableActivity(string Input, string Output);
+
 /// <summary>Строка списка кабелей (для UI).</summary>
 public sealed class CableRow
 {
@@ -79,6 +84,9 @@ public sealed class CableRow
     public string OutName { get; init; } = string.Empty;
 
     public CableRowState State { get; init; }
+
+    /// <summary>Строка активности (Ф4; пусто — нет данных/не установлен).</summary>
+    public string Activity { get; init; } = string.Empty;
 
     /// <summary>Строка-подсказка бейджа (пусто — Applied).</summary>
     public string Badge =>
@@ -203,7 +211,8 @@ public static class CablePlanner
     /// </summary>
     public static List<CableRow> BuildRows(
         IReadOnlyList<CableActual> actual,
-        IReadOnlyList<CableOp> ops)
+        IReadOnlyList<CableOp> ops,
+        IReadOnlyDictionary<string, CableActivity>? activity = null)
     {
         var removeSet = new HashSet<string>(
             ops.Where(o => o.Op == CableOp.OpRemove).Select(o => o.Hwid),
@@ -257,6 +266,10 @@ public static class CablePlanner
                 OutId = a.OutId,
                 OutName = outName,
                 State = state,
+                Activity = activity is not null &&
+                           activity.TryGetValue(a.InstanceId, out var act)
+                    ? act.Input + " · " + act.Output
+                    : string.Empty,
             });
         }
 

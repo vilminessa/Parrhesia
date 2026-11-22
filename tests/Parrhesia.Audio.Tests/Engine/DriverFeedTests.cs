@@ -62,4 +62,22 @@ public class DriverFeedTests
         var dst = new byte[8]; // мало: нужно16
         Assert.Throws<ArgumentException>(() => DriverFeed.ConvertBlock(src, dst));
     }
+
+    // ===== Ф4: пути/суффиксы фидов по devnode'ам (активность ланов) =====
+
+    [Fact]
+    public void SuffixForRoot_ReplacesSeparatorsLikeDriver()
+    {
+        // Ровно так же имя строит драйвер (GetInstanceIdSuffix в common.cpp).
+        Assert.Equal("ROOT_MEDIA_0000", DriverFeed.SuffixForRoot(@"ROOT\MEDIA\0000"));
+        Assert.Equal("ROOT_ParrhesiaLane7", DriverFeed.SuffixForRoot(@"ROOT\ParrhesiaLane7"));
+    }
+
+    [Fact]
+    public void TryReadStatsShared_UnknownRoot_FailsWithoutThrow()
+    {
+        // Несуществующий фид — false, без исключений (UI-тик не должен падать).
+        Assert.False(DriverFeed.TryReadStatsShared(@"ROOT\MEDIA\9999", out _));
+        Assert.False(DriverFeed.TryReadStatsShared(string.Empty, out _));
+    }
 }

@@ -47,7 +47,7 @@ public static class EndpointPolicy
     private const uint StgmReadWrite = 1;
 
     /// <summary>Диагностика последнего отказа (для тестов/логов).</summary>
-    internal static string? LastError { get; private set; }
+    public static string? LastError { get; private set; }
 
     /// <summary>Снимает суффикс « (…)» с отображаемого имени (любое имя
     /// устройства — конфигурация драйвера может менять суффикс).</summary>
