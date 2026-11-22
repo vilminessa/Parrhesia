@@ -19,6 +19,26 @@ public class PluginBridgeTests
     public PluginBridgeTests(ITestOutputHelper output) => _output = output;
 
     [Fact]
+    public void SlotBridgeId_Slot0IsNode_OthersDistinctAndDeterministic()
+    {
+        // I-волна: имена ресурсов моста (секция/кик/пайп/spec) на СЛОТ —
+        // без разделения два исполнителя узла делили бы один пайп и секцию.
+        var node = Guid.NewGuid();
+
+        Assert.Equal(node, PluginBridge.SlotBridgeId(node, 0));  // одиночный слот — прежние имена
+        Assert.Equal(node, PluginBridge.SlotBridgeId(node, -1)); // фолбэк на узел
+
+        var first = PluginBridge.SlotBridgeId(node, 1);
+        var second = PluginBridge.SlotBridgeId(node, 2);
+        Assert.NotEqual(node, first);
+        Assert.NotEqual(node, second);
+        Assert.NotEqual(first, second);
+
+        Assert.Equal(first, PluginBridge.SlotBridgeId(node, 1));            // детерминированно
+        Assert.NotEqual(first, PluginBridge.SlotBridgeId(Guid.NewGuid(), 1)); // другой узел — другой ключ
+    }
+
+    [Fact]
     public void HostChild_RoundTrip_AppliesGain_NeverBlocks()
     {
         var exe = FindAppExe();

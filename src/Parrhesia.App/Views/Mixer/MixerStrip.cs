@@ -558,6 +558,27 @@ internal sealed class MixerStrip : Border
                 $"Не загружен — попытка {status.SpawnAttempts}"),
         };
 
+        // I-волна: узел с несколькими процессами — строка на каждый слот.
+        if (status.Slots.Count > 1)
+        {
+            foreach (var slot in status.Slots)
+            {
+                var line = slot switch
+                {
+                    { Loaded: true, Alive: true } =>
+                        $"[{slot.Index + 1}] {slot.Name} · жив · pid {slot.ProcessId}",
+                    { Loaded: true } =>
+                        $"[{slot.Index + 1}] {slot.Name} · перезапуск…",
+                    { SecondsToRetry: > 0 } =>
+                        $"[{slot.Index + 1}] {slot.Name} · ретрай через {slot.SecondsToRetry} с",
+                    _ =>
+                        $"[{slot.Index + 1}] {slot.Name} · не загружен (попытка {slot.SpawnAttempts})",
+                };
+
+                hint += "\n" + line;
+            }
+        }
+
         if (status.Errors.Count > 0)
         {
             hint += "\n" + status.Errors[0];

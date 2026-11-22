@@ -171,12 +171,30 @@ public partial class DiagnosticsView : UserControl
         foreach (var node in plugins)
         {
             var plugin = AppServices.Engine.GetPluginStatus(node.Id);
-            builder.AppendLine(plugin is null
-                ? $"  «{node.Name}»: слоты не смоделированы"
-                : $"  «{node.Name}»: загружен={plugin.Loaded} жив={plugin.Alive} pid={plugin.ProcessId} " +
-                  $"попыток={plugin.SpawnAttempts} ретрай через {plugin.SecondsToRetry} с " +
-                  $"пропуски={plugin.Drops} блоков={plugin.ProcessedBlocks}" +
-                  (plugin.Errors.Count > 0 ? $"\n      ошибка: {plugin.Errors[0]}" : string.Empty));
+            if (plugin is null)
+            {
+                builder.AppendLine($"  «{node.Name}»: слоты не смоделированы");
+                continue;
+            }
+
+            builder.AppendLine(
+                $"  «{node.Name}»: загружен={plugin.Loaded} жив={plugin.Alive} pid={plugin.ProcessId} " +
+                $"попыток={plugin.SpawnAttempts} ретрай через {plugin.SecondsToRetry} с " +
+                $"пропуски={plugin.Drops} блоков={plugin.ProcessedBlocks}" +
+                (plugin.Errors.Count > 0 ? $"\n      ошибка: {plugin.Errors[0]}" : string.Empty));
+
+            // I-волна: несколько процессов — строка на каждый слот.
+            if (plugin.Slots.Count > 1)
+            {
+                foreach (var slot in plugin.Slots)
+                {
+                    builder.AppendLine(
+                        $"    [{slot.Index}] «{slot.Name}»: жив={slot.Alive} pid={slot.ProcessId} " +
+                        $"попыток={slot.SpawnAttempts} ретрай через {slot.SecondsToRetry} с " +
+                        $"пропуски={slot.Drops}" +
+                        (slot.Error is null ? string.Empty : $" ошибка: {slot.Error}"));
+                }
+            }
         }
 
         builder.AppendLine();

@@ -15,7 +15,7 @@ namespace Parrhesia.Audio.Processing;
 /// готовый выход; если ребёнок не успел — блок проходит «сухим» (dry),
 /// пропуск виден по <see cref="Drops"/>.
 /// </summary>
-public sealed class ProcessBridgePlugin : IAudioPlugin
+public sealed class ProcessBridgePlugin : IAudioPlugin, IPluginProcessInfo
 {
     private static readonly TimeSpan SpawnTimeout = TimeSpan.FromSeconds(30);
 
@@ -73,6 +73,9 @@ public sealed class ProcessBridgePlugin : IAudioPlugin
             }
         }
     }
+
+    /// <summary>Наблюдаемость процесса (I-волна): тот же pid, имя члена интерфейса.</summary>
+    int IPluginProcessInfo.ProcessId => ChildPid;
 
     /// <summary>Ребёнок жив по heartbeat моста (под локом — мост может освобождаться).</summary>
     public bool ChildAlive
