@@ -4,8 +4,10 @@ using System.IO;
 using System.Text;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Threading;
 using Parrhesia.App.Settings;
 using Parrhesia.Audio.Devices;
+using Parrhesia.Audio.Engine;
 
 namespace Parrhesia.App.Views;
 
@@ -14,11 +16,24 @@ namespace Parrhesia.App.Views;
 /// (добавить/удалить/переименовать — оранжевые) и применение одним
 /// запросом администратора. Перезагрузка — только если Windows
 /// вернула reboot=True (fallback-баннер).
+/// Ф4: тик активности (счётчики фида каждого лана) и персист кастомных
+/// имён по HWID (переживают rebind драйвера).
 /// </summary>
 public partial class CablesView : UserControl
 {
+    /// <summary>Порог «вход: идёт»: ~0.3 с активного потока48к/32б/2к за тик.</summary>
+    private const ulong ActivityBytesPerTick = 115_200;
+
     private List<CableActual> _actual = [];
     private bool _rebootHint;
+
+    /// <summary>Активность по InstanceId (тик1с) — уходит в строки списка.</summary>
+    private Dictionary<string, CableActivity> _activity = [];
+
+    /// <summary>Прошлый LoopBytes по InstanceId — дельта за тик.</summary>
+    private readonly Dictionary<string, ulong> _prevLoop = [];
+
+    private DispatcherTimer? _activityTimer;
 
     public CablesView()
     {
@@ -30,12 +45,17 @@ public partial class CablesView : UserControl
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
         AppServices.Devices.DevicesChanged += OnDevicesChanged;
+        _activityTimer ??= new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+        _activityTimer.Tick += OnActivityTick;
+        _activityTimer.Start();
         Refresh();
     }
 
     private void OnUnloaded(object sender, RoutedEventArgs e)
     {
         AppServices.Devices.DevicesChanged -= OnDevicesChanged;
+        _activityTimer!.Tick -= OnActivityTick;
+        _activityTimer.Stop();
     }
 
     private void OnDevicesChanged(object? sender, EventArgs e) =>
@@ -64,7 +84,7 @@ public partial class CablesView : UserControl
             Settings.Save();
         }
 
-        CableList.ItemsSource = CablePlanner.BuildRows(_actual, Settings.CablePendingOps);
+        CableList.ItemsSource = CablePlanner.BuildRows(_actual, Settings.CablePendingOps, _activity);
 
         var pending = Settings.CablePendingOps.Count;
         HeaderText.Text = pending == 0
@@ -86,6 +106,57 @@ public partial class CablesView : UserControl
     }
 
     // ---------- правки (очередь) ----------
+
+    /// <summary>
+    /// Ф4: тик активности — читает счётчики фида КАЖДОГО лана (read-only,
+    /// кабель не замирает): дельта LoopBytes = вход играет/простой;
+    /// Writers>0 = выход идёт через фид Parrhesia, иначе — прямой кабель.
+    /// </summary>
+    /// <summary>Одноразовый лог первого тика — видно, что счётчики ланов читаются.</summary>
+    private bool _activityLogged;
+
+    private void OnActivityTick(object? sender, EventArgs e)
+    {
+        if (_actual.Count == 0)
+        {
+            return;
+        }
+
+        foreach (var cable in _actual)
+        {
+            if (cable.InstanceId.Length == 0)
+            {
+                continue;
+            }
+
+            if (!DriverFeed.TryReadStatsShared(cable.InstanceId, out var stats))
+            {
+                _activity[cable.InstanceId] = new CableActivity("вход: —", "выход: —");
+                continue;
+            }
+
+            var hasBase = _prevLoop.TryGetValue(cable.InstanceId, out var prev);
+            _prevLoop[cable.InstanceId] = stats.LoopBytes;
+            var delta = hasBase && stats.LoopBytes >= prev ? stats.LoopBytes - prev : 0;
+            var input = !hasBase
+                ? "вход: …"
+                : delta >= ActivityBytesPerTick ? "вход: идёт" : "вход: простой";
+            var output = stats.Writers > 0
+                ? "выход: через Parrhesia (фид)"
+                : "выход: кабель (прямой)";
+            _activity[cable.InstanceId] = new CableActivity(input, output);
+
+            if (!_activityLogged)
+            {
+                _activityLogged = true;
+                Trace.WriteLine(
+                    $"[Parrhesia] Ф4-активность ({cable.Hwid}): {input} · {output} " +
+                    $"(LoopBytes={stats.LoopBytes}, Writers={stats.Writers})");
+            }
+        }
+
+        Refresh();
+    }
 
     private void OnAddClick(object sender, RoutedEventArgs e)
     {
@@ -201,6 +272,22 @@ public partial class CablesView : UserControl
             installed.SelectMany(a => new[] { a.InId, a.OutId }),
             StringComparer.OrdinalIgnoreCase);
 
+        // Ф4: endpoint → (hwid, сторона) — для сохранения кастомных имён.
+        var endpointMap = new Dictionary<string, (string Hwid, bool In)>(
+            StringComparer.OrdinalIgnoreCase);
+        foreach (var a in _actual)
+        {
+            if (a.InId.Length > 0)
+            {
+                endpointMap[a.InId] = (a.Hwid, true);
+            }
+
+            if (a.OutId.Length > 0)
+            {
+                endpointMap[a.OutId] = (a.Hwid, false);
+            }
+        }
+
         var remaining = new List<CableOp>();
         var deviceOps = new List<CableOp>();
         foreach (var op in ops)
@@ -213,7 +300,11 @@ public partial class CablesView : UserControl
                 }
 
                 // Переименование — non-admin, in-process (EndpointPolicy).
-                if (!EndpointPolicy.TryRename(op.EndpointId, op.NewName))
+                if (EndpointPolicy.TryRename(op.EndpointId, op.NewName))
+                {
+                    RememberCableName(endpointMap, op);
+                }
+                else
                 {
                     remaining.Add(op);
                 }
@@ -241,10 +332,54 @@ public partial class CablesView : UserControl
             _rebootHint = true;
         }
 
+        // Ф4: кабель удалён — его кастомное имя больше не восстанавливаем
+        // (повторное добавление получит авто-имя лана).
+        var namesChanged = false;
+        foreach (var op in deviceOps)
+        {
+            if (op.Op == CableOp.OpRemove && Settings.CableNames.Remove(op.Hwid))
+            {
+                namesChanged = true;
+            }
+        }
+
+        if (namesChanged)
+        {
+            Settings.Save();
+        }
+
         Settings.CablePendingOps = remaining;
         Settings.Save();
         Refresh();
         _ = PostApplyRefreshAsync();
+    }
+
+    /// <summary>Ф4: кастомное имя кабеля в settings.json — переживает rebind драйвера.</summary>
+    private void RememberCableName(
+        Dictionary<string, (string Hwid, bool In)> endpointMap,
+        CableOp op)
+    {
+        if (!endpointMap.TryGetValue(op.EndpointId, out var key))
+        {
+            return;
+        }
+
+        if (!Settings.CableNames.TryGetValue(key.Hwid, out var names))
+        {
+            names = new CableSideNames();
+            Settings.CableNames[key.Hwid] = names;
+        }
+
+        if (key.In)
+        {
+            names.In = op.NewName;
+        }
+        else
+        {
+            names.Out = op.NewName;
+        }
+
+        Settings.Save();
     }
 
     /// <summary>

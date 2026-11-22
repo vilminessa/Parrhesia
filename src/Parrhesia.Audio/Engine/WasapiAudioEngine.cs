@@ -577,7 +577,13 @@ public sealed class WasapiAudioEngine : IAudioEngine
             var builder = new WasapiRecorderBuilder()
                 .WithDevice(device)
                 .WithEventSync()
-                .WithLowLatency(true)
+                // WithLowLatency(required): для обычного захвата прежнее
+                // поведение (требование — как было); loopback с IAudioClient3
+                // несовместим, и required=true превращало отказ в исключение
+                // и ОТКЛЮЧЕНИЕ источника (закрытый вопрос E-волны, воспроизведён
+                // на Ф4-цепочке «вход приложений») — для него не-обязательный
+                // запрос: preferLowLatency остаётся, отказ → стандартный shared.
+                .WithLowLatency(!spec.Loopback)
                 .WithBufferLength(CaptureBufferMs)
                 .WithMmcssThreadPriority("Pro Audio");
             // WithFormat НЕ передаём: low-latency shared capture требует
@@ -641,7 +647,12 @@ public sealed class WasapiAudioEngine : IAudioEngine
                 EngineLogLevel.Info,
                 $"Источник «{node.Name}»: {recorder.WaveFormat.SampleRate} Гц, {recorder.WaveFormat.Channels} к " +
                 $"({(spec.Loopback ? "loopback" : "захват")}, {node.DeviceId})" +
-                (adapter is null ? string.Empty : " → ресемплер включён"));
+                (adapter is null ? string.Empty : " → ресемплер включён") +
+                (recorder.LowLatencyActive
+                    ? string.Empty
+                    : string.IsNullOrEmpty(recorder.LowLatencyUnavailableReason)
+                        ? " · low-latency недоступен"
+                        : $" · low-latency недоступен ({recorder.LowLatencyUnavailableReason})"));
         }
     }
 
@@ -746,7 +757,9 @@ public sealed class WasapiAudioEngine : IAudioEngine
             var builder = new WasapiRecorderBuilder()
                 .WithDevice(binding.Device)
                 .WithEventSync()
-                .WithLowLatency(true)
+                // Фолбэк обязан открыться В ЛЮБОМ случае: без требования
+                // low-latency (см. комментарий в OpenSources).
+                .WithLowLatency()
                 .WithBufferLength(CaptureBufferMs)
                 .WithMmcssThreadPriority("Pro Audio");
             if (binding.Loopback)

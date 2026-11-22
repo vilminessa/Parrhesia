@@ -191,6 +191,9 @@ public sealed class DriverFeed : IDisposable
         }
     }
 
+    /// <summary>Suffix фида конкретного devnode'а (как строит драйвер).</summary>
+    public static string SuffixForRoot(string rootInstanceId) => rootInstanceId.Replace('\\', '_');
+
     /// <summary>
     /// Внешний read-only снимок статистики фида (M-волна): открывает фид
     /// ТОЛЬКО на чтение (GENERIC_READ) — драйвер не считает такой хэндл
@@ -206,55 +209,81 @@ public sealed class DriverFeed : IDisposable
 
         foreach (var path in candidates)
         {
-            var handle = NativeMethods.CreateFileW(
-                path,
-                NativeMethods.GenericRead,
-                (uint)(FileShare.ReadWrite | FileShare.Read),
-                IntPtr.Zero,
-                FileMode.Open,
-                0,
-                IntPtr.Zero);
-            if (handle.IsInvalid)
+            if (TryReadStatsAt(path, out stats))
             {
-                handle.Dispose();
-                continue;
-            }
-
-            try
-            {
-                var size = Marshal.SizeOf<ParrhesiaFeedStats>();
-                var buffer = Marshal.AllocHGlobal(size);
-                try
-                {
-                    var ok = NativeMethods.DeviceIoControl(
-                        handle,
-                        IoctlGetStats,
-                        IntPtr.Zero,
-                        0,
-                        buffer,
-                        (uint)size,
-                        out var returned,
-                        IntPtr.Zero);
-                    if (!ok || returned < size)
-                    {
-                        continue;
-                    }
-
-                    stats = Marshal.PtrToStructure<ParrhesiaFeedStats>(buffer);
-                    return true;
-                }
-                finally
-                {
-                    Marshal.FreeHGlobal(buffer);
-                }
-            }
-            finally
-            {
-                handle.Dispose();
+                return true;
             }
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Счётчики фида КОНКРЕТНОГО лана (Ф4: активность в «Кабелях»):
+    /// тот же IOCTL, путь инстанса по devnode-id; legacy-фолбэка нет —
+    /// показатель именно этого лана. false — фид не открылся.
+    /// </summary>
+    public static bool TryReadStatsShared(string rootInstanceId, out ParrhesiaFeedStats stats)
+    {
+        stats = default;
+        if (string.IsNullOrWhiteSpace(rootInstanceId))
+        {
+            return false;
+        }
+
+        return TryReadStatsAt(PathFor(SuffixForRoot(rootInstanceId)), out stats);
+    }
+
+    /// <summary>Один IOCTL_PFEED_GET_STATS по готовому пути; false — отказ.</summary>
+    private static bool TryReadStatsAt(string path, out ParrhesiaFeedStats stats)
+    {
+        stats = default;
+        var handle = NativeMethods.CreateFileW(
+            path,
+            NativeMethods.GenericRead,
+            (uint)(FileShare.ReadWrite | FileShare.Read),
+            IntPtr.Zero,
+            FileMode.Open,
+            0,
+            IntPtr.Zero);
+        if (handle.IsInvalid)
+        {
+            handle.Dispose();
+            return false;
+        }
+
+        try
+        {
+            var size = Marshal.SizeOf<ParrhesiaFeedStats>();
+            var buffer = Marshal.AllocHGlobal(size);
+            try
+            {
+                var ok = NativeMethods.DeviceIoControl(
+                    handle,
+                    IoctlGetStats,
+                    IntPtr.Zero,
+                    0,
+                    buffer,
+                    (uint)size,
+                    out var returned,
+                    IntPtr.Zero);
+                if (!ok || returned < size)
+                {
+                    return false;
+                }
+
+                stats = Marshal.PtrToStructure<ParrhesiaFeedStats>(buffer);
+                return true;
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(buffer);
+            }
+        }
+        finally
+        {
+            handle.Dispose();
+        }
     }
 
     /// <summary>

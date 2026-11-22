@@ -217,6 +217,14 @@
                       SelectionChanged="OnNodeDeviceChanged"
                       ToolTip="Устройство этого узла: источник захвата или вывод" />
 
+            <!-- Ф4: подсказка по кабельной привязке (вход приложений / вирт. микрофон) -->
+            <TextBlock x:Name="NodeDeviceHint"
+                       FontSize="11"
+                       Foreground="{DynamicResource Brush.TextFaint}"
+                       TextWrapping="Wrap"
+                       Visibility="Collapsed"
+                       Margin="0,4,0,0" />
+
             <TextBlock Text="Гейн"
                        FontSize="11"
                        Foreground="{DynamicResource Brush.TextFaint}"

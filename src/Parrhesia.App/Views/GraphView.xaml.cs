@@ -2211,6 +2211,7 @@ public partial class GraphView : UserControl
             }
 
             _deviceNodeId = node.Id;
+            UpdateNodeDeviceHint(node);
             return;
         }
 
@@ -2260,38 +2261,38 @@ public partial class GraphView : UserControl
             }
         }
 
+        UpdateNodeDeviceHint(node);
         NodeDeviceBox.IsEnabled = true;
     }
 
     private List<DeviceChoice> BuildDeviceChoices(AudioNode node)
     {
-        var choices = new List<DeviceChoice> { new("(не привязан)", null) };
+        // Ф4: свои endpoint'ы (кабели) — отдельным блоком с подписями;
+        // имена/PnP читаются здесь же, в фоне (COM+cfgapi не для UI-потока).
+        var capture = AppServices.Devices.GetDevices(DeviceFlow.Capture);
+        var render = AppServices.Devices.GetDevices(DeviceFlow.Render);
+        _lanes = LaneCatalog.Get(capture, render);
+        return NodeDeviceChoices.Build(node.Kind, capture, render, _lanes);
+    }
 
-        if (node.Kind == NodeKind.Source)
-        {
-            choices.Add(new("По умолчанию (захват)", DeviceSpec.DefaultCapture));
-            choices.Add(new("Loopback: по умолчанию", DeviceSpec.DefaultLoopback));
-            foreach (var device in AppServices.Devices.GetDevices(DeviceFlow.Capture))
-            {
-                choices.Add(new(device.Name, device.Id));
-            }
+    /// <summary>Каталог ланов, собранный при последнем построении списков (Ф4).</summary>
+    private List<LaneEndpoint> _lanes = [];
 
-            foreach (var device in AppServices.Devices.GetDevices(DeviceFlow.Render))
-            {
-                choices.Add(new("Loopback: " + device.Name, "loopback:" + device.Id));
-            }
-        }
-        else
+    /// <summary>Подсказка под полем привязки: вход приложений / вирт. микрофон (Ф4).</summary>
+    private void UpdateNodeDeviceHint(AudioNode? node)
+    {
+        if (node is null || node.Kind is NodeKind.Bus or NodeKind.Plugin)
         {
-            choices.Add(new("По умолчанию (вывод)", DeviceSpec.DefaultRender));
-            choices.Add(new("Parrhesia Out (виртуальный)", DeviceSpec.VirtualParrhesia));
-            foreach (var device in AppServices.Devices.GetDevices(DeviceFlow.Render))
-            {
-                choices.Add(new(device.Name, device.Id));
-            }
+            NodeDeviceHint.Visibility = Visibility.Collapsed;
+            return;
         }
 
-        return choices;
+        var text = NodeDeviceChoices.Hint(node.DeviceId, _lanes);
+        NodeDeviceHint.Text = text is null ? string.Empty : text;
+        NodeDeviceHint.Visibility = text is null ? Visibility.Collapsed : Visibility.Visible;
+        Trace.WriteLine(
+            $"[Parrhesia] Ф4-hint: узел «{node.Name}» device={node.DeviceId ?? "—"} " +
+            $"lanes={_lanes.Count} hint={(text is null ? "нет" : "есть")}");
     }
 
     private static void UpdateGainText(TextBlock target, float db) =>
@@ -2440,6 +2441,7 @@ public partial class GraphView : UserControl
             node.DeviceId != choice.Value)
         {
             _graph.SetNodeDevice(node.Id, choice.Value);
+            UpdateNodeDeviceHint(node);
         }
     }
 

@@ -30,3 +30,4 @@ src/Parrhesia.Plugins/native/vst3-shim/out/
 # Артефакты сборки инсталлятора (Ф5)
 /publish/
 /dist/
+app.log
