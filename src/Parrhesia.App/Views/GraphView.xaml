@@ -295,16 +295,18 @@
                          TextWrapping="Wrap"
                          Visibility="Collapsed"
                          Margin="0,0,0,6" />
+              <!-- По-слотовые строки статуса (I-волна): процесс на каждый слот -->
+              <StackPanel x:Name="PluginStatusSlotsHost" />
               <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
                 <Button x:Name="PluginRestartButton"
                         Content="Перезапустить"
                         Click="OnPluginRestartClick"
                         Margin="0,0,8,0"
-                        ToolTip="Убить и заново поднять процесс-исполнитель этого узла" />
+                        ToolTip="Убить и заново поднять процессы-исполнители этого узла (все слоты)" />
                 <Button x:Name="PluginEditorButton"
                         Content="Редактор…"
                         Click="OnPluginEditorClick"
-                        ToolTip="Открыть окно редактора плагина — в его процессе" />
+                        ToolTip="Открыть окно редактора плагина — в его процессе (при нескольких слотах — выбор слота)" />
               </StackPanel>
             </StackPanel>
 

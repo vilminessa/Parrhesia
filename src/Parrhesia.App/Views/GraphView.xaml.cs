@@ -5,6 +5,7 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
+using Ellipse = System.Windows.Shapes.Ellipse;
 using Parrhesia.App.Rendering;
 using Parrhesia.App.Views.Graph;
 using Parrhesia.Audio.Devices;
@@ -1201,6 +1202,8 @@ public partial class GraphView : UserControl
     /// <summary>
     /// Снимок статуса исполнителя узла-плагина (тик раз в секунду, пока
     /// секция видна): жив/перезапуск/не загружен + последняя ошибка спавна.
+    /// I-волна: при нескольких слотах — агрегат «N процессов» + строка на
+    /// каждый процесс и точка состояния на его карточке.
     /// </summary>
     private void UpdatePluginStatus(Guid nodeId)
     {
@@ -1211,16 +1214,44 @@ public partial class GraphView : UserControl
             PluginStatusError.Visibility = Visibility.Collapsed;
             PluginRestartButton.IsEnabled = false;
             PluginEditorButton.IsEnabled = false;
+            PluginStatusSlotsHost.Children.Clear();
+            foreach (var dot in _slotDots)
+            {
+                dot.Visibility = Visibility.Collapsed;
+            }
+
             return;
         }
 
         PluginRestartButton.IsEnabled = true;
         PluginEditorButton.IsEnabled = status.Loaded;
+
+        var loadedCount = 0;
+        var aliveCount = 0;
+        foreach (var slot in status.Slots)
+        {
+            if (slot.Loaded)
+            {
+                loadedCount++;
+            }
+
+            if (slot.Alive)
+            {
+                aliveCount++;
+            }
+        }
+
+        var multi = status.Slots.Count > 1;
         PluginStatusText.Text = status switch
         {
+            { Loaded: true, Alive: true } when multi =>
+                $"{status.Slots.Count} процесса · {aliveCount}/{loadedCount} живы · " +
+                $"задержка {status.LatencySamples} кадр. · пропуски {status.Drops} · блоков {status.ProcessedBlocks}",
             { Loaded: true, Alive: true } =>
                 $"Жив · pid {status.ProcessId} · задержка {status.LatencySamples} кадр. " +
                 $"· пропуски {status.Drops} · блоков {status.ProcessedBlocks}",
+            { Loaded: true } when multi =>
+                $"Перезапуск процессов… ({aliveCount}/{loadedCount} живы)",
             { Loaded: true } => "Перезапуск процесса…",
             { SecondsToRetry: > 0 } =>
                 $"Не загружен — попытка {status.SpawnAttempts}; ретрай через {status.SecondsToRetry} с",
@@ -1230,6 +1261,109 @@ public partial class GraphView : UserControl
         var error = status.Errors.Count > 0 ? status.Errors[0] : null;
         PluginStatusError.Text = error ?? string.Empty;
         PluginStatusError.Visibility = error is null ? Visibility.Collapsed : Visibility.Visible;
+
+        PluginStatusSlotsHost.Children.Clear();
+        foreach (var slot in status.Slots)
+        {
+            PluginStatusSlotsHost.Children.Add(BuildSlotStatusRow(nodeId, slot));
+            UpdateSlotDot(slot);
+        }
+
+        // Статус отстаёт от карточек (слот удалили) — лишние точки гасим.
+        for (var i = status.Slots.Count; i < _slotDots.Count; i++)
+        {
+            _slotDots[i].Visibility = Visibility.Collapsed;
+        }
+    }
+
+    /// <summary>Точки состояния на карточках слотов (индексы = позиции в модели).</summary>
+    private readonly List<Ellipse> _slotDots = [];
+
+    /// <summary>Одна строка статуса слота: точка + подпись + «⟳» (I-волна).</summary>
+    private Grid BuildSlotStatusRow(Guid nodeId, SlotStatus slot)
+    {
+        var grid = new Grid { Margin = new Thickness(0, 0, 0, 3) };
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+        var dot = new Ellipse
+        {
+            Width = 8,
+            Height = 8,
+            Fill = SlotStatusBrush(slot),
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 6, 0),
+        };
+        Grid.SetColumn(dot, 0);
+
+        var text = new TextBlock
+        {
+            Text = SlotStatusText(slot),
+            FontSize = 11,
+            Foreground = ResolveViewBrush("Brush.Text", "#FFE6E9EF"),
+            TextWrapping = TextWrapping.Wrap,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        Grid.SetColumn(text, 1);
+
+        var restart = BuildSlotButton(
+            "⟳",
+            $"Перезапустить исполнитель слота «{slot.Name}»",
+            true,
+            (_, _) =>
+            {
+                AppServices.Engine.RestartPluginSlot(nodeId, slot.Index);
+                UpdatePluginStatus(nodeId);
+                Toast.Show($"«{slot.Name}»: исполнитель перезапускается…");
+            });
+        Grid.SetColumn(restart, 3);
+
+        grid.Children.Add(dot);
+        grid.Children.Add(text);
+        grid.Children.Add(restart);
+
+        if (slot.Error is not null)
+        {
+            grid.ToolTip = slot.Error;
+        }
+
+        return grid;
+    }
+
+    /// <summary>Цвет точки слота: зелёный — жив; жёлтый — перезапуск/ретрай; серый — не загружен.</summary>
+    private static Brush SlotStatusBrush(SlotStatus slot) => slot switch
+    {
+        { Loaded: true, Alive: true } => ResolveViewBrush("Brush.Success", "#FF3DDC84"),
+        { Loaded: true } => ResolveViewBrush("Brush.Accent", "#FFFFB020"),
+        { SecondsToRetry: > 0 } => ResolveViewBrush("Brush.Accent", "#FFFFB020"),
+        _ => ResolveViewBrush("Brush.TextFaint", "#FF5C6472"),
+    };
+
+    /// <summary>Подпись состояния слота (строка инспектора и тултип точки).</summary>
+    private static string SlotStatusText(SlotStatus slot) => slot switch
+    {
+        { Loaded: true, Alive: true } =>
+            $"{slot.Name} · жив · pid {slot.ProcessId} · пропуски {slot.Drops}",
+        { Loaded: true } => $"{slot.Name} · перезапуск процесса…",
+        { SecondsToRetry: > 0 } =>
+            $"{slot.Name} · не загружен — попытка {slot.SpawnAttempts}; ретрай через {slot.SecondsToRetry} с",
+        _ => $"{slot.Name} · не загружен — попытка {slot.SpawnAttempts}",
+    };
+
+    /// <summary>Точка состояния на карточке слота (I-волна).</summary>
+    private void UpdateSlotDot(SlotStatus slot)
+    {
+        if (slot.Index < 0 || slot.Index >= _slotDots.Count)
+        {
+            return;
+        }
+
+        var dot = _slotDots[slot.Index];
+        dot.Visibility = Visibility.Visible;
+        dot.Fill = SlotStatusBrush(slot);
+        dot.ToolTip = slot.Error is null ? SlotStatusText(slot) : $"{SlotStatusText(slot)}\n{slot.Error}";
     }
 
     /// <summary>
@@ -1320,25 +1454,34 @@ public partial class GraphView : UserControl
 
     /// <summary>
     /// Окно редактора открывается в ПРОЦЕССЕ-исполнителе (S4b) — хост только
-    /// шлёт команду по control-каналу и не блокируется.
+    /// шлёт команду по control-каналу и не блокируется. I-волна: узел с
+    /// несколькими слотами — кнопка показывает ВЫБОР слота (раньше жёстко
+    /// открывала слот 0 — редактор соседнего процесса).
     /// </summary>
     private void OnPluginEditorClick(object sender, RoutedEventArgs e)
     {
-        if (_selectedNode is { } element &&
-            _graph.FindNode(element.Node.Id) is { Kind: NodeKind.Plugin } node &&
-            AppServices.Engine.GetSlotInstance(node.Id, 0) is ProcessBridgePlugin bridge)
+        if (_selectedNode is not { } element ||
+            _graph.FindNode(element.Node.Id) is not { Kind: NodeKind.Plugin } node)
         {
-            var response = bridge.OpenEditor();
-            if (!response.Ok)
-            {
-                MessageBox.Show(
-                    Window.GetWindow(this),
-                    response.Error ?? "Не удалось открыть редактор.",
-                    "Редактор",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Information);
-            }
+            return;
         }
+
+        if (node.Slots.Count > 1)
+        {
+            var menu = new ContextMenu { Placement = PlacementMode.MousePoint };
+            for (var i = 0; i < node.Slots.Count; i++)
+            {
+                var index = i;
+                var item = new MenuItem { Header = $"Редактор: {SlotTitle(node.Slots[index])}" };
+                item.Click += (_, _) => OpenSlotEditor(node, index); // OpenSlotEditor сам следит за границами
+                menu.Items.Add(item);
+            }
+
+            menu.IsOpen = true;
+            return;
+        }
+
+        OpenSlotEditor(node, 0);
     }
 
     // ===== Слоты-вставки эффектов =====
@@ -1352,6 +1495,7 @@ public partial class GraphView : UserControl
         }
 
         SlotsHost.Children.Clear();
+        _slotDots.Clear();
         for (var i = 0; i < node.Slots.Count; i++)
         {
             var index = i;
@@ -1369,9 +1513,7 @@ public partial class GraphView : UserControl
 
             var title = new TextBlock
             {
-                Text = string.IsNullOrEmpty(slot.Name)
-                    ? System.IO.Path.GetFileNameWithoutExtension(slot.Path)
-                    : slot.Name,
+                Text = SlotTitle(slot),
                 ToolTip = slot.Path + " · " + slot.PluginId,
                 VerticalAlignment = VerticalAlignment.Center,
                 TextWrapping = TextWrapping.Wrap,
@@ -1379,9 +1521,22 @@ public partial class GraphView : UserControl
                 Opacity = slot.Enabled ? 1.0 : 0.5,
             };
 
+            // Точка состояния процесса слота (I-волна): цвет/тултип ставит тик статуса.
+            var dot = new Ellipse
+            {
+                Width = 8,
+                Height = 8,
+                Fill = ResolveViewBrush("Brush.TextFaint", "#FF5C6472"),
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 0, 6, 0),
+                Visibility = Visibility.Collapsed,
+            };
+            _slotDots.Add(dot);
+
             var header = new DockPanel { LastChildFill = true };
             DockPanel.SetDock(enable, Dock.Left);
             header.Children.Add(enable);
+            header.Children.Add(dot);
             header.Children.Add(title);
 
             // Кнопки переносятся по ширине карточки — не уходят за панель.
@@ -1440,6 +1595,20 @@ public partial class GraphView : UserControl
             {
                 card.Height = uiHeight;
             }
+
+            // Контекстное меню карточки: рестарт ЕГО процесса (I-волна).
+            // Правый клик гасится здесь — иначе всплытие до корня GraphView
+            // ушло бы в HandleContextMenu (меню холста/узла).
+            card.ContextMenu = BuildSlotContextMenu(node, index);
+            card.MouseRightButtonDown += (_, e) =>
+            {
+                e.Handled = true;
+                if (card.ContextMenu is { } menu && !menu.IsOpen)
+                {
+                    menu.Placement = PlacementMode.MousePoint;
+                    menu.IsOpen = true;
+                }
+            };
 
             SlotsHost.Children.Add(card);
         }
@@ -1528,6 +1697,34 @@ public partial class GraphView : UserControl
         };
         button.Click += onClick;
         return button;
+    }
+
+    /// <summary>Отображаемое имя слота: Name либо имя файла модуля.</summary>
+    private static string SlotTitle(PluginSlot slot) =>
+        string.IsNullOrEmpty(slot.Name)
+            ? System.IO.Path.GetFileNameWithoutExtension(slot.Path)
+            : slot.Name;
+
+    /// <summary>Контекстное меню карточки слота: рестарт ЕГО процесса (I-волна).</summary>
+    private ContextMenu BuildSlotContextMenu(AudioNode node, int index)
+    {
+        var menu = new ContextMenu { Placement = PlacementMode.MousePoint };
+
+        var restart = new MenuItem { Header = "Перезапустить исполнитель слота" };
+        restart.Click += (_, _) =>
+        {
+            if (index >= node.Slots.Count)
+            {
+                return; // слот удалили, пока меню было открыто
+            }
+
+            AppServices.Engine.RestartPluginSlot(node.Id, index);
+            UpdatePluginStatus(node.Id);
+            Toast.Show($"«{node.Slots[index].Name}»: исполнитель перезапускается…");
+        };
+
+        menu.Items.Add(restart);
+        return menu;
     }
 
     // ===== Пресеты слотов (U2): экспорт/импорт state в файл .parrfx =====

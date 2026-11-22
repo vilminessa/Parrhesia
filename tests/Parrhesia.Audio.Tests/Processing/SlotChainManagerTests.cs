@@ -470,6 +470,184 @@ public class SlotChainManagerTests
         Assert.Empty(manager.LastErrors);
     }
 
+    // ===== I-волна: слотовая гранулярность =====
+
+    [Fact]
+    public async Task MultiSlot_MixedFailures_KeepIndependentBackoff()
+    {
+        // Регресс I-волны: бэкоффи слотов жили в одном RetryState узла —
+        // быстрое падение соседа B перетирало slow-бэкофф зависшего A
+        // (и наоборот). Теперь слоты независимы: A ждёт 5 мин, B — секунды.
+        var (graph, _, node, _) = BuildGraph();
+        using var processor = new GraphProcessor(graph);
+        using var manager = new SlotChainManager(graph, processor, bridgeFactory: (_, slot) =>
+            slot.Path.StartsWith("вис")
+                ? throw new PluginSpawnTimeoutException("завис")
+                : throw new PluginLoadException("битый"));
+
+        graph.AddSlot(node.Id, new PluginSlot { Path = "вис.vst3", PluginId = "v", Name = "Вис" });
+        await manager.SyncTask;
+        graph.AddSlot(node.Id, new PluginSlot { Path = "битый.vst3", PluginId = "b", Name = "Битый" });
+        await manager.SyncTask;
+
+        var status = manager.GetPluginStatus(node.Id);
+        Assert.True(status is { Loaded: false });
+        Assert.Equal(2, status!.Slots.Count);
+        Assert.InRange(status.Slots[0].SecondsToRetry, 250, 300); // slow: 5 мин
+        Assert.InRange(status.Slots[1].SecondsToRetry, 0, 2);     // fast: 2 с
+        Assert.Equal(2, status.SpawnAttempts);                    // попытка по разу на слот
+        Assert.Equal(1, manager.GetSpawnAttempts(node.Id, 0));
+        Assert.Equal(1, manager.GetSpawnAttempts(node.Id, 1));
+    }
+
+    [Fact]
+    public async Task MultiSlot_SiblingSuccessDoesNotResetHangBackoff()
+    {
+        // Регресс I-волны (burn-цикл freqshifter): успех слота B сбрасывал
+        // `_retries` УЗЛА целиком — slow-бэкофф зависшего A стирался, и A
+        // респаунился каждые ~2 с. Успех сбрасывает бэкофф только своего слота.
+        var (graph, _, node, _) = BuildGraph();
+        using var processor = new GraphProcessor(graph);
+        var factory = new FakeFactory();
+        using var manager = new SlotChainManager(graph, processor, bridgeFactory: (_, slot) =>
+            slot.Path.StartsWith("вис")
+                ? throw new PluginSpawnTimeoutException("завис")
+                : factory.Create(slot));
+
+        graph.AddSlot(node.Id, new PluginSlot { Path = "вис.vst3", PluginId = "v", Name = "Вис" });
+        await manager.SyncTask;
+        graph.AddSlot(node.Id, new PluginSlot { Path = "ok.clap", PluginId = "ok", Name = "Ок" });
+        await manager.SyncTask;
+
+        var status = manager.GetPluginStatus(node.Id);
+        Assert.True(status is { Loaded: true }, "здоровый слот B обязан быть загружен");
+        Assert.True(
+            status!.Slots[0].SecondsToRetry > 200,
+            $"slow-бэкофф зависшего слота сброшен успехом соседа: {status.Slots[0].SecondsToRetry} с");
+        Assert.Equal(1, factory.Created);
+        Assert.Equal(1, manager.GetSpawnAttempts(node.Id, 1));
+    }
+
+    [Fact]
+    public async Task MultiSlot_HealthySiblingNotRecreated()
+    {
+        // Гард: пересборка узла из-за упавшего слота не должна пересоздавать
+        // здорового соседа (сигнатура та же, бэкофф его не касается).
+        var (graph, _, node, _) = BuildGraph();
+        using var processor = new GraphProcessor(graph);
+        var factory = new FakeFactory();
+        using var manager = new SlotChainManager(graph, processor, bridgeFactory: (_, slot) =>
+            slot.Path.StartsWith("битый")
+                ? throw new PluginLoadException("битый")
+                : factory.Create(slot));
+
+        graph.AddSlot(node.Id, new PluginSlot { Path = "ok.clap", PluginId = "ok", Name = "Ок" });
+        await manager.SyncTask;
+        graph.AddSlot(node.Id, new PluginSlot { Path = "битый.vst3", PluginId = "b", Name = "Битый" });
+        await manager.SyncTask;
+
+        var healthy = factory.Instances[0];
+        for (var i = 0; i < 5; i++)
+        {
+            manager.QueueSync();
+            await manager.SyncTask;
+            await Task.Delay(30);
+        }
+
+        Assert.Equal(1, factory.Created); // здоровый слот не пересоздавался
+        Assert.Same(healthy, factory.Instances[0]);
+        Assert.False(healthy.Disposed);
+        Assert.Equal(1, manager.GetSpawnAttempts(node.Id, 0));
+        Assert.Equal(1, manager.GetSpawnAttempts(node.Id, 1)); // бэкофф держит попытки
+        Assert.Equal(2, manager.GetSpawnAttempts(node.Id));    // агрегат = сумма по слотам
+    }
+
+    [Fact]
+    public async Task MultiSlot_StatusListsBothProcesses()
+    {
+        // I-волна: статус узла с двумя процессами — по-слотовой снимок
+        // (раньше GetPluginStatus брал первый мост и врал про узел).
+        var (graph, _, node, _) = BuildGraph();
+        using var processor = new GraphProcessor(graph);
+        var factory = new FakeFactory();
+        using var manager = new SlotChainManager(graph, processor, bridgeFactory: (_, slot) => factory.Create(slot));
+
+        graph.AddSlot(node.Id, new PluginSlot { Path = "a.clap", PluginId = "a", Name = "A" });
+        await manager.SyncTask;
+        graph.AddSlot(node.Id, new PluginSlot { Path = "b.clap", PluginId = "b", Name = "B" });
+        await manager.SyncTask;
+
+        factory.Instances[0].ProcessId = 111;
+        factory.Instances[1].ProcessId = 222;
+
+        var status = manager.GetPluginStatus(node.Id);
+        Assert.True(status is { Loaded: true, Alive: true });
+        Assert.Equal(2, status!.Slots.Count);
+        Assert.Equal("A", status.Slots[0].Name);
+        Assert.Equal("B", status.Slots[1].Name);
+        Assert.True(status.Slots[0].Alive);
+        Assert.True(status.Slots[1].Alive);
+        Assert.Equal(111, status.Slots[0].ProcessId);
+        Assert.Equal(222, status.Slots[1].ProcessId);
+        Assert.Equal(111, status.ProcessId); // агрегат — первый ненулевой pid
+        Assert.Equal(2, status.SpawnAttempts);
+    }
+
+    [Fact]
+    public async Task MultiSlot_ErrorAttributedToItsSlot()
+    {
+        // Ошибка падения слота приписана ЕМУ (SlotErrors выровнен с Instances),
+        // а не теряется в общем списке.
+        var (graph, _, node, _) = BuildGraph();
+        using var processor = new GraphProcessor(graph);
+        var factory = new FakeFactory();
+        using var manager = new SlotChainManager(graph, processor, bridgeFactory: (_, slot) =>
+            slot.Path.StartsWith("битый")
+                ? throw new PluginLoadException("нет модуля")
+                : factory.Create(slot));
+
+        graph.AddSlot(node.Id, new PluginSlot { Path = "битый.vst3", PluginId = "b", Name = "Битый" });
+        await manager.SyncTask;
+        graph.AddSlot(node.Id, new PluginSlot { Path = "ok.clap", PluginId = "ok", Name = "Ок" });
+        await manager.SyncTask;
+
+        var status = manager.GetPluginStatus(node.Id);
+        Assert.NotNull(status);
+        Assert.Equal("нет модуля", status!.Slots[0].Error);
+        Assert.Null(status.Slots[1].Error);
+        Assert.Single(status.Errors);
+        Assert.Contains("Битый", status.Errors[0]);
+    }
+
+    [Fact]
+    public async Task MultiSlot_RestartSlotOnlyTouchesThatSlot()
+    {
+        // Кнопка «⟳» слота: немедленная попытка ТОЛЬКО у выбранного слота,
+        // бэкофф соседа не сбрасывается и его счётчик попыток не растёт.
+        var (graph, _, node, _) = BuildGraph();
+        using var processor = new GraphProcessor(graph);
+        using var manager = new SlotChainManager(graph, processor, bridgeFactory: (_, _) =>
+            throw new PluginSpawnTimeoutException("завис"));
+
+        graph.AddSlot(node.Id, new PluginSlot { Path = "a.vst3", PluginId = "a", Name = "A" });
+        await manager.SyncTask;
+        graph.AddSlot(node.Id, new PluginSlot { Path = "b.vst3", PluginId = "b", Name = "B" });
+        await manager.SyncTask;
+        Assert.Equal(1, manager.GetSpawnAttempts(node.Id, 0));
+        Assert.Equal(1, manager.GetSpawnAttempts(node.Id, 1));
+
+        manager.RestartPluginSlot(node.Id, 0);
+
+        var deadline = Environment.TickCount64 + 3000;
+        while (Environment.TickCount64 < deadline && manager.GetSpawnAttempts(node.Id, 0) < 2)
+        {
+            await Task.Delay(50);
+        }
+
+        Assert.Equal(2, manager.GetSpawnAttempts(node.Id, 0)); // немедленная попытка
+        Assert.Equal(1, manager.GetSpawnAttempts(node.Id, 1)); // сосед в своём бэкоффе
+    }
+
     private static (AudioGraph Graph, AudioNode Source, AudioNode Node, AudioNode Sink) BuildGraph()
     {
         var graph = new AudioGraph();
@@ -544,7 +722,7 @@ public class SlotChainManagerTests
         }
     }
 
-    private sealed class FakePlugin(string path) : IAudioPlugin
+    private sealed class FakePlugin(string path) : IAudioPlugin, IPluginProcessInfo
     {
         private int _nodey;
 
@@ -555,6 +733,13 @@ public class SlotChainManagerTests
         public int SampleRate { get; private set; }
         public int MaxBlock { get; private set; }
         public byte[]? State { get; set; }
+
+        // IPluginProcessInfo (I-волна): по-слотовой статус без реальных процессов.
+        public int ProcessId { get; set; }
+        public bool ChildAlive => !Disposed;
+        public long Drops => 0;
+        public long ProcessedBlocks => 0;
+        public bool NeedsRestart => false;
 
         /// <summary>Включает «гонку-ловушку»: GetState фиксирует пересечение с Process.</summary>
         public bool RaceWatch { get; set; }

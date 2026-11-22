@@ -58,6 +58,9 @@ public interface IAudioEngine : IDisposable
     /// <summary>Статус исполнителя узла-плагина (null — слоты не смоделированы). UI-поток: инспектор.</summary>
     Processing.PluginNodeStatus? GetPluginStatus(Guid nodeId);
 
-    /// <summary>Принудительный рестарт процесса-исполнителя узла (S4: кнопка инспектора).</summary>
+    /// <summary>Принудительный рестарт процесса-исполнителя узла (S4: кнопка инспектора; все слоты).</summary>
     void RestartPluginNode(Guid nodeId);
+
+    /// <summary>Принудительный рестарт одного слота (I-волна: меню карточки, «⟳»).</summary>
+    void RestartPluginSlot(Guid nodeId, int slotIndex);
 }

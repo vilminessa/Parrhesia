@@ -33,13 +33,16 @@ public sealed class SlotChainManager : IDisposable
     private readonly HashSet<Guid> _paused = [];
 
     /// <summary>Бэкофф ретраев спавна исполнителей (только узлы-плагины).
+    /// I-волна: ключ — СЛОТ (узел, индекс): бэкофф одного слота не должен
+    /// сбрасываться успехом соседа и перетираться его падением.
     /// Slow — модуль завис при загрузке (ретраи раз в минуты); иначе быстрые падения.
     /// ConcurrentDictionary: пишет phase B синка (вне _gate), читает тик пультов.</summary>
-    private readonly ConcurrentDictionary<Guid, RetryState> _retries = [];
+    private readonly ConcurrentDictionary<(Guid NodeId, int Index), RetryState> _retries = [];
 
-    /// <summary>Число попыток создания экземпляров по узлам-плагинам (диагностика/тесты).
+    /// <summary>Число попыток создания экземпляров по слотам узлов-плагинов
+    /// (диагностика/тесты; агрегат по узлу — сумма по слотам).
     /// ConcurrentDictionary — та же гонка-защита, что у _retries.</summary>
-    private readonly ConcurrentDictionary<Guid, int> _spawnAttempts = [];
+    private readonly ConcurrentDictionary<(Guid NodeId, int Index), int> _spawnAttempts = [];
 
     private readonly CancellationTokenSource _tickCts = new();
 
@@ -168,13 +171,17 @@ public sealed class SlotChainManager : IDisposable
                         CollectDropped(emptyState, emptyDropped);
                     }
 
-                    _retries.TryRemove(node.Id, out _);
-                    _spawnAttempts.TryRemove(node.Id, out _);
+                    ClearNodeKeys(node.Id);
                     plan.Add(new PlanItem(node.Id, [], string.Empty, null, false, false));
                     continue;
                 }
 
                 _states.TryGetValue(node.Id, out var current);
+
+                // Слоты могли удалить/переставить: хвостовые ключи бэкоффа
+                // ушли бы в никуда и жили бы вечно.
+                PruneSlotKeys(node.Id, slots.Count);
+
                 plan.Add(new PlanItem(
                     node.Id,
                     [.. slots],
@@ -194,8 +201,7 @@ public sealed class SlotChainManager : IDisposable
                         CollectDropped(orphan, emptyDropped);
                     }
 
-                    _retries.TryRemove(id, out _);
-                    _spawnAttempts.TryRemove(id, out _);
+                    ClearNodeKeys(id);
                     plan.Add(new PlanItem(id, [], string.Empty, null, false, false));
                 }
             }
@@ -409,16 +415,32 @@ public sealed class SlotChainManager : IDisposable
         }
     }
 
-    /// <summary>Число попыток создания экземпляров узла (в т.ч. ретраи спавна исполнителя).</summary>
+    /// <summary>Число попыток создания экземпляров узла (сумма по слотам,
+    /// в т.ч. ретраи спавна исполнителя).</summary>
     public int GetSpawnAttempts(Guid nodeId)
     {
-        lock (_gate)
+        var total = 0;
+        foreach (var (key, attempts) in _spawnAttempts)
         {
-            return _spawnAttempts.GetValueOrDefault(nodeId);
+            if (key.NodeId == nodeId)
+            {
+                total += attempts;
+            }
         }
+
+        return total;
     }
 
-    /// <summary>Статус исполнителя узла-плагина для инспектора (null — слоты не смоделированы).</summary>
+    /// <summary>Число попыток создания экземпляров конкретного слота (I-волна).</summary>
+    public int GetSpawnAttempts(Guid nodeId, int slotIndex) =>
+        _spawnAttempts.GetValueOrDefault((nodeId, slotIndex));
+
+    /// <summary>
+    /// Статус исполнителя узла-плагина для инспектора (null — слоты не
+    /// смоделированы). I-волна: собирается ПО СЛОТАМ — узел с несколькими
+    /// процессами отдаёт состояние каждого (свой pid/пропуски/ретрай), а
+    /// агрегаты сверху честны для пульта и диагностики.
+    /// </summary>
     public PluginNodeStatus? GetPluginStatus(Guid nodeId)
     {
         lock (_gate)
@@ -428,32 +450,91 @@ public sealed class SlotChainManager : IDisposable
                 return null;
             }
 
-            ProcessBridgePlugin? bridge = null;
-            foreach (var instance in state.Instances)
-            {
-                if (instance is ProcessBridgePlugin candidate)
-                {
-                    bridge = candidate;
-                    break;
-                }
-            }
+            var node = _graph.FindNode(nodeId);
+            var slotCount = Math.Max(node?.Slots.Count ?? 0, state.Instances.Count);
+            var slots = new List<SlotStatus>(slotCount);
 
-            var secondsToRetry =0;
-            if (_retries.TryGetValue(nodeId, out var retry))
+            var anyLoaded = false;
+            var allLoadedAlive = true;
+            var pid = 0;
+            var drops = 0L;
+            var blocks = 0L;
+            var attempts = 0;
+            var latency = 0;
+            var secondsToRetry = 0;
+            var errors = new List<string>();
+
+            for (var i = 0; i < slotCount; i++)
             {
-                secondsToRetry = (int)Math.Max(0, (retry.At - Environment.TickCount64 + 999) / 1000);
+                var instance = i < state.Instances.Count ? state.Instances[i] : null;
+                var info = instance as IPluginProcessInfo;
+                var name = node is not null && i < node.Slots.Count
+                    ? node.Slots[i].Name
+                    : $"слот {i + 1}";
+
+                var slotAttempts = _spawnAttempts.GetValueOrDefault((nodeId, i));
+                attempts += slotAttempts;
+
+                var retrySeconds = 0;
+                if (_retries.TryGetValue((nodeId, i), out var retry))
+                {
+                    retrySeconds = (int)Math.Max(0, (retry.At - Environment.TickCount64 + 999) / 1000);
+                }
+
+                if (retrySeconds > 0 && (secondsToRetry == 0 || retrySeconds < secondsToRetry))
+                {
+                    secondsToRetry = retrySeconds;
+                }
+
+                var error = i < state.SlotErrors.Length ? state.SlotErrors[i] : null;
+                if (error is not null)
+                {
+                    // Тот же формат, что в LastErrors: «Имя» (путь): причина.
+                    var path = node is not null && i < node.Slots.Count ? node.Slots[i].Path : null;
+                    errors.Add(path is null ? $"«{name}»: {error}" : $"«{name}» ({path}): {error}");
+                }
+
+                var slotLoaded = info is not null;
+                var slotAlive = slotLoaded && info!.ChildAlive;
+                if (slotLoaded)
+                {
+                    anyLoaded = true;
+                    allLoadedAlive &= slotAlive;
+                    if (pid == 0)
+                    {
+                        pid = info!.ProcessId;
+                    }
+                }
+
+                drops += info?.Drops ?? 0;
+                blocks += info?.ProcessedBlocks ?? 0;
+                latency = Math.Max(latency, info?.LatencySamples ?? 0);
+
+                slots.Add(new SlotStatus(
+                    Index: i,
+                    Name: name,
+                    Loaded: slotLoaded,
+                    Alive: slotAlive,
+                    ProcessId: info?.ProcessId ?? 0,
+                    Drops: info?.Drops ?? 0,
+                    ProcessedBlocks: info?.ProcessedBlocks ?? 0,
+                    LatencySamples: info?.LatencySamples ?? 0,
+                    SpawnAttempts: slotAttempts,
+                    SecondsToRetry: retrySeconds,
+                    Error: error));
             }
 
             return new PluginNodeStatus(
-                Loaded: bridge is not null,
-                Alive: bridge?.ChildAlive ?? false,
-                ProcessId: bridge?.ChildPid ?? 0,
-                Drops: bridge?.Drops ?? 0,
-                ProcessedBlocks: bridge?.ProcessedBlocks ?? 0,
-                SpawnAttempts: _spawnAttempts.GetValueOrDefault(nodeId),
-                LatencySamples: bridge?.LatencySamples ?? 0,
-                Errors: [.. state.Errors],
-                SecondsToRetry: secondsToRetry);
+                Loaded: anyLoaded,
+                Alive: anyLoaded && allLoadedAlive,
+                ProcessId: pid,
+                Drops: drops,
+                ProcessedBlocks: blocks,
+                SpawnAttempts: attempts,
+                LatencySamples: latency,
+                Errors: errors,
+                SecondsToRetry: secondsToRetry,
+                Slots: slots);
         }
     }
 
@@ -469,7 +550,7 @@ public sealed class SlotChainManager : IDisposable
             }
 
             // T1: ручной перезапуск сбрасывает бэкофф — попытка немедленная.
-            _retries.TryRemove(nodeId, out _);
+            ClearNodeRetries(nodeId);
 
             if (!_states.TryGetValue(nodeId, out var state))
             {
@@ -485,6 +566,33 @@ public sealed class SlotChainManager : IDisposable
         }
 
         QueueSync(); // тик (2с) подхватил бы и сам — сразу быстрее
+    }
+
+    /// <summary>
+    /// Принудительный рестарт ОДНОГО слота (I-волна: контекстное меню карточки,
+    /// «⟳» в строке статуса): сброс бэкоффа ЭТОГО слота + немедленная попытка;
+    /// соседние слоты не трогаются и их процессы живут.
+    /// </summary>
+    public void RestartPluginSlot(Guid nodeId, int slotIndex)
+    {
+        IAudioPlugin? instance;
+        lock (_gate)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _retries.TryRemove((nodeId, slotIndex), out _);
+
+            instance = _states.TryGetValue(nodeId, out var state) &&
+                       slotIndex >= 0 && slotIndex < state.Instances.Count
+                ? state.Instances[slotIndex]
+                : null;
+        }
+
+        (instance as ProcessBridgePlugin)?.ForceRestart();
+        QueueSync(); // немедленная сверка, без ожидания тика в2с
     }
 
     // ===== Внутреннее =====
@@ -505,6 +613,9 @@ public sealed class SlotChainManager : IDisposable
         public bool[] Enabled = [];
         public List<IAudioPlugin?> Instances = [];
         public List<string> Errors = [];
+
+        /// <summary>Последняя ошибка каждого слота, выровнена с Instances (I-волна).</summary>
+        public string?[] SlotErrors = [];
     }
 
     private void OnGraphChanged(object? sender, GraphChange e) => QueueSync();
@@ -673,27 +784,64 @@ public sealed class SlotChainManager : IDisposable
     }
 
     /// <summary>
-    /// Планирует ретрай спавна (T1: умный бэкофф). Быстрое падение —2→4→…→60с;
+    /// Планирует ретрай спавна СЛОТА (T1: умный бэкофф; I-волна: ключ слота —
+    /// бэкоффи соседних слотов независимы). Быстрое падение —2→4→…→60с;
     /// зависание модуля —5→10→…→15мин (бесконечные быстрые ретраи висящего
     /// модуля (класс Clear) только жгут CPU и захламляют лог).
     /// </summary>
-    private void ScheduleRetry(Guid nodeId, bool slow)
+    private void ScheduleRetry(Guid nodeId, int slotIndex, bool slow)
     {
         const int fastFirst = 2_000;
         const int fastCap = 60_000;
         const int slowFirst = 300_000; //5 мин
         const int slowCap = 900_000;   //15 мин
 
+        var key = (nodeId, slotIndex);
         var now = Environment.TickCount64;
-        if (_retries.TryGetValue(nodeId, out var previous) && previous.Slow == slow)
+        if (_retries.TryGetValue(key, out var previous) && previous.Slow == slow)
         {
             var grown = Math.Min(previous.Delay * 2, slow ? slowCap : fastCap);
-            _retries[nodeId] = new RetryState { At = now + grown, Delay = grown, Slow = slow };
+            _retries[key] = new RetryState { At = now + grown, Delay = grown, Slow = slow };
             return;
         }
 
         var delay = slow ? slowFirst : fastFirst;
-        _retries[nodeId] = new RetryState { At = now + delay, Delay = delay, Slow = slow };
+        _retries[key] = new RetryState { At = now + delay, Delay = delay, Slow = slow };
+    }
+
+    /// <summary>Сносит все ключи бэкоффа узла (рестарт: попытки НЕ трогаем —
+    /// счётчик диагностики должен копиться).</summary>
+    private void ClearNodeRetries(Guid nodeId)
+    {
+        foreach (var key in _retries.Keys.Where(k => k.NodeId == nodeId).ToList())
+        {
+            _retries.TryRemove(key, out _);
+        }
+    }
+
+    /// <summary>Сносит все ключи бэкоффа и попыток узла (узел удалён/осиротел).</summary>
+    private void ClearNodeKeys(Guid nodeId)
+    {
+        ClearNodeRetries(nodeId);
+
+        foreach (var key in _spawnAttempts.Keys.Where(k => k.NodeId == nodeId).ToList())
+        {
+            _spawnAttempts.TryRemove(key, out _);
+        }
+    }
+
+    /// <summary>Сносит ключи слотов с индексами ≥ count (слоты удалили/переставили).</summary>
+    private void PruneSlotKeys(Guid nodeId, int count)
+    {
+        foreach (var key in _retries.Keys.Where(k => k.NodeId == nodeId && k.Index >= count).ToList())
+        {
+            _retries.TryRemove(key, out _);
+        }
+
+        foreach (var key in _spawnAttempts.Keys.Where(k => k.NodeId == nodeId && k.Index >= count).ToList())
+        {
+            _spawnAttempts.TryRemove(key, out _);
+        }
     }
 
     /// <summary>
@@ -736,7 +884,9 @@ public sealed class SlotChainManager : IDisposable
                    (bridge.NeedsRestart || bridge.Disposed);
         }
 
-        return !_retries.TryGetValue(item.Id, out var retry) ||
+        // Бэкофф СВОЕГО слота: чужой (зависший сосед) не должен ни
+        // блокировать эту попытку, ни сбрасываться ею (I-волна).
+        return !_retries.TryGetValue((item.Id, index), out var retry) ||
                Environment.TickCount64 >= retry.At;
     }
 
@@ -798,6 +948,7 @@ public sealed class SlotChainManager : IDisposable
             Identity = item.Identity,
             Signatures = item.Slots.Select(Signature).ToArray(),
             Enabled = item.Slots.Select(static s => s.Enabled).ToArray(),
+            SlotErrors = new string?[item.Slots.Count],
         };
 
         // Несовпавшие старые экземпляры (включая хвост удалённых слотов) —
@@ -812,6 +963,9 @@ public sealed class SlotChainManager : IDisposable
                 !SlotNeedsRebuild(item, i))
             {
                 instance = item.Current.Instances[i];
+                next.SlotErrors[i] = i < item.Current.SlotErrors.Length
+                    ? item.Current.SlotErrors[i]
+                    : null;
             }
             else
             {
@@ -844,14 +998,14 @@ public sealed class SlotChainManager : IDisposable
                     !hung.ForceRestartRequested &&
                     hung.ChildPhysicallyAlive)
                 {
-                    ScheduleRetry(item.Id, slow: true);
+                    ScheduleRetry(item.Id, i, slow: true);
                     next.Instances.Add(null);
                     continue;
                 }
 
                 if (item.IsPluginNode)
                 {
-                    _spawnAttempts.AddOrUpdate(item.Id, 1, static (_, v) => v + 1);
+                    _spawnAttempts.AddOrUpdate((item.Id, i), 1, static (_, v) => v + 1);
                 }
 
                 try
@@ -875,7 +1029,10 @@ public sealed class SlotChainManager : IDisposable
 
                     if (item.IsPluginNode)
                     {
-                        _retries.TryRemove(item.Id, out _); // успех — бэкофф сброшен
+                        // I-волна: успех СВОЕГО слота сбрасывает бэкофф ТОЛЬКО
+                        // его — иначе успешный сосед разрушал slow-бэкофф
+                        // зависшего слота (респаун каждые2 с — класс burn).
+                        _retries.TryRemove((item.Id, i), out _);
                     }
 
                     if (stopwatch.ElapsedMilliseconds > 10_000)
@@ -897,12 +1054,14 @@ public sealed class SlotChainManager : IDisposable
                         $"[Parrhesia.Audio][Error] слот: «{item.Slots[i].Name}» ({item.Slots[i].Path}) " +
                         $"не загрузился за {stopwatch.ElapsedMilliseconds} мс: {ex.Message}");
                     next.Errors.Add($"«{item.Slots[i].Name}» ({item.Slots[i].Path}): {ex.Message}");
+                    next.SlotErrors[i] = ex.Message;
 
                     if (item.IsPluginNode)
                     {
                         // T1: зависание (spawn-timeout) ретраится терпеливо,
-                        // быстрое падение — агрессивно.
-                        ScheduleRetry(item.Id, ex is PluginSpawnTimeoutException);
+                        // быстрое падение — агрессивно. Ключ — слот: падение
+                        // одного не перетирает бэкофф соседа (I-волна).
+                        ScheduleRetry(item.Id, i, ex is PluginSpawnTimeoutException);
                     }
 
                     try
